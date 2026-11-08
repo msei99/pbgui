@@ -9,7 +9,8 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_vast_controls_from_real_menu_preserve_shell_and_guide():
+@pytest.mark.parametrize('unconfirmed', [False, True, 'process_pending'])
+def test_vast_controls_from_real_menu_preserve_shell_and_guide(unconfirmed):
     """Follow the real PBv8 menu into the full Optimize template with isolated API responses."""
     import mimetypes
     from urllib.parse import urlsplit
@@ -17,6 +18,10 @@ def test_vast_controls_from_real_menu_preserve_shell_and_guide():
     calls, errors = [], []
     job = dict(id='a'*32, config_name='isolated-test', status='running', has_log=True,
                workers=4, iterations=100, rental_state='none', created_at=1, uploaded=True, collect_available=True)
+    if unconfirmed:
+        job.update(status='collecting', stop_requested=True, stop_unconfirmed=unconfirmed is True,
+                   stop_process_pending=unconfirmed == 'process_pending',
+                   error='Stop not confirmed. Use End rental.')
     template = (ROOT / 'frontend/v7_optimize.html').read_text()
     for key, value in {
         'API_BASE':'/api/optimize-v8', 'BASE_PREFIX':'', 'LIMITS_META':'{}',
@@ -71,18 +76,24 @@ def test_vast_controls_from_real_menu_preserve_shell_and_guide():
             page.wait_for_url('**/api/optimize-v8/main_page')
             page.locator('.sb-section[data-panel="queue"]').click()
             page.locator('#queue-tbody [title="Open log"]').click()
-            assert page.locator('#stop-job').is_enabled()
             assert page.locator('#recover-job').is_disabled()
-            page.locator('#stop-job').click()
-            assert page.locator('#pbgui-dialog-title').inner_text() == 'Stop optimizer?'
-            page.locator('#pbgui-dialog-cancel').click()
-            page.wait_for_function("!document.getElementById('stop-job').disabled")
-            assert page.locator('#collect-job').is_enabled()
+            if unconfirmed:
+                assert page.locator('#stop-job').is_disabled()
+                assert page.locator('#stop-job').inner_text() == ('Stop acknowledged; waiting for exit' if unconfirmed == 'process_pending' else 'Stop not confirmed')
+                assert page.locator('#collect-job').is_disabled()
+            else:
+                assert page.locator('#stop-job').is_enabled()
+                page.locator('#stop-job').click()
+                assert page.locator('#pbgui-dialog-title').inner_text() == 'Stop optimizer?'
+                page.locator('#pbgui-dialog-cancel').click()
+                page.wait_for_function("!document.getElementById('stop-job').disabled")
+                assert page.locator('#collect-job').is_enabled()
             assert page.locator('#stop-job').evaluate("node=>node.nextElementSibling.id") == 'collect-job'
-            page.locator('#collect-job').click()
-            page.wait_for_function("document.getElementById('queue-message').textContent.includes('Pareto results collected')")
-            assert sum(method == 'POST' and url.endswith('/collect') for method, url in calls) == 1
-            assert any('/app/js/vast.js?v=181' in url for _, url in calls)
+            if not unconfirmed:
+                page.locator('#collect-job').click()
+                page.wait_for_function("document.getElementById('queue-message').textContent.includes('Pareto results collected')")
+            assert sum(method == 'POST' and url.endswith('/collect') for method, url in calls) == int(not unconfirmed)
+            assert any('/app/js/vast.js?v=183' in url for _, url in calls)
             location_before = page.url
             page.locator('#pbgui-guide-btn').click()
             page.wait_for_function("document.getElementById('pbgui-shared-help-ovl')?.getAttribute('aria-hidden')==='false'")

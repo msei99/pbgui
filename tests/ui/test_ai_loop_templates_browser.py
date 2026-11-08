@@ -276,6 +276,12 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
         assert 'Holdout: 2025-09-02 → 2025-12-31' in text
         assert 'drawdown ≤25%' in text
         assert 'no GPU scoring formula is prescribed' in text
+        assert 'Every new trial receives a fresh random controller-owned seed' in text
+        assert 'Never choose, tune or evaluate seeds' in text
+        assert 'Replicate, Confirm, shorter screening runs, longer confirmation runs' in text
+        assert 'Every run must use exactly the user-configured work budget' in text
+        assert 'Never change GPU/performance settings, including population size' in text
+        assert 'repeated seeds when useful' not in text
         assert 'arithmetic mean of adg_strategy_eq' not in text
         reviewed = json.loads(text.split('PBGUI_LOOP_WINDOWS_V1:')[1].split('\n')[0])
         assert 'objective' not in reviewed

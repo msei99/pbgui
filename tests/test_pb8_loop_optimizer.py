@@ -1453,11 +1453,13 @@ def test_native_proxy_limit_reads_actual_log_counter(record,tmp_path,monkeypatch
         monkeypatch.setattr(opt,'_read_json',lambda path:source)
         monkeypatch.setattr(opt,'_queue_status',lambda data:('running',123))
         monkeypatch.setattr(opt,'_launch_config_file',lambda name:tmp_path / 'missing-launch.json')
-        monkeypatch.setattr(opt,'_read_runner_state',lambda name:{'started_at':1000})
+        monkeypatch.setattr(opt,'_read_runner_state',lambda name:{'started_at':1000, 'completed_at':1020})
     job={'kind':'optimizer','backend':{'id':filename,'execution':execution}}
     state=LoopBackend(tmp_path,store).poll(row,job)
     assert state['proxy_evaluations']==42
     assert state['source']['started_at']==1000
+    if execution == 'gpu':
+        assert state['source']['completed_at'] == 1020
 
 
 def test_inherited_config_values_resolve_search_bounds_and_fixed_overrides():

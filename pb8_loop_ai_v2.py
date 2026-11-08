@@ -12,7 +12,8 @@ import time
 import aiohttp
 
 from pb8_loop_evidence import (EvidenceStore, LoopAIPause, BootstrapWithoutAdvice, TOOL_SCHEMA,
-                               TOOL_DESCRIPTION, encode, sha, select_findings, required_content)
+                               TOOL_DESCRIPTION, encode, sha, select_findings, required_content,
+                               decision_snapshot_stale)
 from pb8_loop_ai_policy import DecisionLedger, check_context, evidence_session
 from pb8_loop_config_contract import variant_config_schema, validate_variant_config
 from pb8_loop_dialog import OpenCodeDialog, read_sse, IncompleteResponse, StreamingUnavailable, NativeToolsUnavailable
@@ -32,9 +33,25 @@ def validate_snapshot_budget(record, snapshot, metadata):
     """A resume must actually fit the selected provider before changing runtime state."""
     from pb8_loop_ai import instructions_for_run
     profile = metadata['loop_profile']
+    if decision_snapshot_stale(snapshot):
+        # Resume checks the same projection the controller will freeze in a new
+        # snapshot. Never rewrite a signed historical snapshot in place.
+        data = snapshot['data']
+        if data.get('stage') == 'evaluate' and record.get('optimizer_research_version') == 1:
+            from pb8_loop_bounds import diagnose
+            evidence = data.get('evidence') or {}
+            data = {**data, 'evidence': {**evidence, 'boundary_diagnostics':
+                    diagnose(record, evidence.get('winner_options') or {}, evidence.get('optimizer_research'))}}
+        if data.get('stage') in {'bootstrap', 'evaluate'} and record.get('optimizer_research_version') == 1:
+            from pb8_loop_research import patch_contract, source_inputs
+            references, _ = source_inputs(record)
+            data = {**data, 'optimizer_sources': references,
+                    'optimizer_patch_contract': patch_contract(record, references,
+                            (data.get('evidence') or {}).get('optimizer_research'))}
+        snapshot = {**snapshot, 'data': data, 'required': required_content(data)}
     session = evidence_session(None, snapshot, profile, native=record['settings']['provider'] in {'chatgpt', 'claude-code'})
     output = min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768))
-    instructions = instructions_for_run(record)['text'] + PROTOCOL
+    instructions = decision_instructions(record)
     payload = initial_payload(record['settings'], metadata, profile, instructions, snapshot['required'], output)
     check_context(payload, profile, output, codex=record['settings']['provider'] in {'chatgpt', 'claude-code'},
                   required_pages=len(session.required_pages), initial=True)
@@ -45,9 +62,55 @@ The only permitted tool is loop_evidence(path, offset), a read-only exact eviden
 completion_reason=gpu_replaced is an authorized infrastructure interruption, not failed
 strategy evaluation or successful optimizer completion. Actual backend_status, errors,
 results and attempt charges remain binding. A successor reference proves no results by itself.
-The initial request contains every current mandatory goal/safety value and bounded compact findings.
+The initial request contains pinned goal/safety rules and stage-specific mandatory evidence.
+For selection, exact individual candidate values are delivered through bounded queries, not all at once.
+Selection initial context contains a whole-population overview, NOT every candidate.
+Use loop_evidence with /selection/rank/{metric}/{reducer}/{min|max} and offset=0
+for exact global rankings, optionally append /goals_met for proxy hard-target screening.
+reducer=value ranks the labeled aggregate; mean/min/max/std/median rank the native statistics.
+Escape metric path segments as JSON pointers (~ to ~0, / to ~1).
+/selection/metrics lists available metric names, /selection/rows traverses ALL candidates,
+and /selection/id/{candidate_id} reads a specific candidate. Follow next_offset until null.
+/selection/sources lists every optimizer source and its candidate count. Append
+/source/{optimizer_job} to a rank path (after /goals_met, if used) to compare
+representatives of different trials instead of only one source's global leaders.
+Query results are bounded pages across the ENTIRE dataset, not an arbitrary shortlist.
+Read the chosen candidates' exact goals, safety values and reducers before selection.
+requires_detail_read means use details_path through loop_evidence before deciding.
+These are optimizer proxy observations, never independent CPU qualification.
+Full original details remain readable under /data/evidence/candidates/{index}.
+You need not load every candidate or every page: choose informative global rankings,
+compare uncertainty and allocate the bounded CPU validation budget. Never claim exhaustive
+candidate inspection from a subset of reads. After compaction, recover /required first,
+then reread the exact chosen candidate records if their measurements were lost.
+context_references and *_reference hold exact read paths for configurations, trial history,
+job details and other growing state. Read relevant details on demand; do not try to load
+every referenced collection into context. The initial summary size is independent of population.
+Research evaluation uses the same bounded-evidence principle. /evaluation/options pages
+ALL qualified independent CPU winner options; /evaluation/id/{operation} reads one option.
+/evaluation/rank/{metric}/{mean|min|max|median}/{min|max} ranks ALL options using exact
+CPU per-report values, not optimizer proxy aggregates. /evaluation/metrics lists metrics
+finite in every report; choose compatible common evaluation criteria and explain them.
+/evaluation/research pages all measured optimizer groups; /evaluation/research_rank/{index}/{min|max}
+ranks all groups by the mean of their already recorded criterion at index 0-5.
+/evaluation/research_metrics exposes training metric availability and coverage for research.
+The summary identifies the incumbent/baseline. Read exact contenders and relevant group
+evidence before deciding. Follow next_offset; no model-side traversal of every row is required.
+decision_brief supplies exact aggregate leader/reference values and research leaders under
+the previously explained criteria. These supplied facts need no duplicate tool read.
+It is a bounded preview, not a shortlist restriction or a newly chosen evaluation method;
+use ranking/detail queries when changing criteria or investigating other options/settings.
+For adaptive evaluation return evaluation_criteria and either explicit candidate_assessments
+for every option OR candidate_assessment_policy={scope:"all_training_candidates",reason:"..."}.
+The latter compresses repeated prose only: the controller recomputes EVERY option with the
+same exact criteria and finite-value checks. Winner identity, hard limits, search hypotheses,
+scoring choices, round requirements, seed policy and budgets remain unchanged.
+Read the referenced initial_config before returning any complete next variant. Never invent
+values hidden behind a reference. Report partial inspection and uncertainty honestly.
 Historical full records are NOT included automatically; use /history/index and referenced paths if needed.
-/required reads the complete mandatory initial package; follow next_offset until complete.
+The complete mandatory package is already in this initial message. Do not reread /required
+unless context compaction or an explicit missing-page notice requires recovery. For recovery,
+/required exposes that same package; follow next_offset until complete.
 An optional_evidence_budget_reserved tool result is a normal read limit, not a failed
 experiment. Do not repeat optional requests. If required_reads is nonempty, recover those
 /required pages first. Otherwise finish the complete JSON decision from evidence already
@@ -132,8 +195,9 @@ order yourself using the complete supplied GPU catalog, without a fixed shortlis
 Several optimize.scoring entries are simultaneous Pareto objectives, not a weighted sum.
 For example, maximize adg_strategy_eq while minimizing drawdown_worst_strategy_eq;
 this illustrates syntax/tradeoffs, not a prescribed pair or goal.
-Bounds-only tests and repeated scorings/seeds are allowed when justified, including
-controlled comparisons. Explain hypotheses and record actual CPU training outcomes,
+Bounds-only tests and controlled comparisons of changed settings are allowed.
+Versioned research must use the fixed user budget and may never repeat unchanged settings.
+Explain hypotheses and record actual CPU training outcomes,
 failures and uncertainty. A single small increase is not proof of robust progress.
 Do not claim exhaustive coverage when budgets leave variants untested.
 Maximum TWE is a hard upper ceiling per active side, not a fixed parameter value.
@@ -151,12 +215,22 @@ advice. Never wait for them, request them, or use them to adapt the search.
 '''
 
 
+def decision_instructions(record):
+    """Apply versioned research rules after legacy/broad instructions for every provider."""
+    from pb8_loop_ai import instructions_for_run
+    from pb8_loop_research import enabled, PROTOCOL as RESEARCH_PROTOCOL
+    from pb8_loop_native import enabled as native_training, PROTOCOL as NATIVE_PROTOCOL
+    return (instructions_for_run(record)['text'] + PROTOCOL + (RESEARCH_PROTOCOL if enabled(record) else '')
+            + (NATIVE_PROTOCOL if native_training(record) else ''))
+
+
 def validate_decision(record, stage, evidence, text):
     """Validate before commit; optional finding length never invalidates a winner."""
     from pb8_loop_ai import parse_object, validate_rubric
     from pb8_loop_store import validate_change
     from pb8_loop_exploration import evaluated_stagnation, validate_exploration
     decision = parse_object(text)
+    from pb8_loop_research import enabled as research_enabled, experiment_plan, validate_assessment
     for key in ('knowledge', 'knowledge_hypothesis'):
         if key in decision and not isinstance(decision[key], str):
             raise ValueError(key + ' must be text')
@@ -172,6 +246,8 @@ def validate_decision(record, stage, evidence, text):
                 not isinstance(decision.get('reason'), str) or not decision['reason'].strip()):
             raise ValueError('Explain candidate count, Pareto coverage and CPU budget allocation in reason')
     elif stage == 'evaluate':
+        if research_enabled(record):
+            validate_assessment(record, evidence.get('observations') or [], decision.get('optimizer_assessment'), allow_uncached=True)
         if (evidence.get('evaluation_policy') or {}).get('mode') == 'adaptive':
             from ai_loop_evaluation import evaluation_comparison
             if decision.get('evaluation_criteria') is None:
@@ -193,11 +269,29 @@ def validate_decision(record, stage, evidence, text):
         variants = decision.get('variants')
         if needs_variant and (not isinstance(variants, list) or not 1 <= len(variants) <= remaining):
             raise ValueError('Return complete next variants within the remaining allowance')
-        for variant in ([] if at_round_limit else variants or []):
+        for index, variant in enumerate([] if at_round_limit else variants or []):
             if not isinstance(variant, dict):
                 raise ValueError('Variant must be an object')
+            if research_enabled(record):
+                from pb8_loop_research import resolve_variant
+                variant = resolve_variant(record, variant)
+                variants[index] = variant
             validate_variant_config(record, variant.get('config'))
+            if research_enabled(record):
+                if not isinstance(variant.get('experiment'), dict) or not isinstance(variant.get('reason'), str) or not variant['reason'].strip():
+                    raise ValueError('Research variants require an explicit experiment plan and hypothesis in reason')
+                experiment_plan(record, variant.get('config') or {},
+                                variant.get('overrides', record['initial_overrides']), variant.get('experiment'))
             validate_change(record, variant.get('config'), variant.get('overrides', record['initial_overrides']))
+            if research_enabled(record) and stage == 'evaluate':
+                from pb8_loop_bounds import diagnose, validate_response
+                diagnosis = evidence.get('boundary_diagnostics')
+                if diagnosis is None:
+                    diagnosis = diagnose(record, evidence.get('winner_options') or {}, evidence.get('optimizer_research'))
+                validate_response(record, diagnosis, variant,
+                                  stagnation_after=evaluated_stagnation(record, decision['winner_operation']))
+                from pb8_loop_planning import planning_context, validate_plan
+                validate_plan(record, variant, planning_context(record, evidence.get('optimizer_research')))
             if stage == 'evaluate' and needs_variant:
                 changes = validate_exploration(record, variant['config'],
                                               stagnation_after=evaluated_stagnation(record, decision['winner_operation']))
@@ -210,6 +304,7 @@ def validate_decision(record, stage, evidence, text):
 async def run_decision(ai, record, stage, evidence):
     """Freeze input once and retain its ledger through retry/resume without history growth."""
     from pb8_loop_ai import instructions_for_run
+    from pb8_loop_research import enabled as research_enabled, evidence as research_evidence
     from pb8_loop_controller import owned_thread
     from pb8_loop_store import apply_run_limit, cloud_loop_metric_contract
     from pb8_loop_exploration import exploration_policy
@@ -234,6 +329,11 @@ async def run_decision(ai, record, stage, evidence):
         reset_at = (await owned_thread(ai.store.knowledge, record['owner'])).get('learning_reset_at', 0)
         if reset_at:
             evidence['learning_reset_at'] = reset_at
+    if research_enabled(record) and 'optimizer_research' not in evidence:
+        evidence['optimizer_research'] = research_evidence(record, evidence.get('observations') or [])
+    if research_enabled(record) and stage == 'evaluate':
+        from pb8_loop_bounds import diagnose
+        evidence['boundary_diagnostics'] = diagnose(record, evidence.get('winner_options') or {}, evidence['optimizer_research'])
     request_evidence_digest = sha(evidence)
     if stage == 'evaluate' or bound_plan(settings) is not None:
         evidence['exploration_policy'] = exploration_policy(record)
@@ -243,15 +343,16 @@ async def run_decision(ai, record, stage, evidence):
                         'settings': settings, 'rubric': record['rubric'],
                         'initial_config': record['initial_config'], 'initial_overrides': record['initial_overrides'],
                         'training_exclusions': record.get('training_exclusions', record.get('holdouts', [])),
-                        'instructions': instructions_for_run(record)['text'] + PROTOCOL,
+                        'instructions': decision_instructions(record),
                         'passivbot_manual': manual_summary(manual)})
-    await owned_thread(ai.store.update, record['owner'], record['id'], lambda row: row.update(ai_model_profile=copy.deepcopy(profile)))
+    await owned_thread(ai.store.update_ai_fields, record['owner'], record['id'], {'ai_model_profile'},
+                       lambda row: row.update(ai_model_profile=copy.deepcopy(profile)))
     fallback_fresh = False
     evidence_store = EvidenceStore(ai.store)
     snapshot = None
     if record.get('ai_snapshot_id') and record.get('ai_snapshot_stage') == stage and record.get('ai_snapshot_round') == record['round']:
         previous = await owned_thread(evidence_store.load, record['owner'], record['ai_snapshot_id'])
-        if previous['data'].get('input_digest') == input_digest:
+        if previous['data'].get('input_digest') == input_digest and not decision_snapshot_stale(previous):
             snapshot = previous
     if snapshot is None:
         knowledge = await owned_thread(evidence_store.findings, record)
@@ -280,6 +381,13 @@ async def run_decision(ai, record, stage, evidence):
                     'Preserve the reviewed HSL policy; choose compatible metrics rather than enabling HSL.'}
         if stage in {'bootstrap', 'evaluate'}:
             content['variant_config_schema'] = variant_config_schema(record)
+            if research_enabled(record):
+                from pb8_loop_research import source_inputs, patch_contract
+                references, archives = await owned_thread(source_inputs, record)
+                content['optimizer_sources'] = references
+                content['optimizer_patch_contract'] = patch_contract(record, references, evidence.get('optimizer_research'))
+                history.extend(archives)
+
         if settings['execution'] in {'gpu', 'vast'}:
             content['optimizer_metric_policy'] = cloud_loop_metric_contract()
         if stage == 'bootstrap':
@@ -307,10 +415,11 @@ async def run_decision(ai, record, stage, evidence):
                 raise LoopAIPause('evidence_recovery', 'Loop changed before evidence binding')
             row.update(ai_snapshot_id=snapshot['id'], ai_snapshot_stage=stage, ai_snapshot_round=record['round'],
                        knowledge_summary={key: package[key] for key in ('eligible', 'included', 'omitted', 'excluded')})
-        await owned_thread(ai.store.update, record['owner'], record['id'], bind)
+        await owned_thread(ai.store.update_ai_fields, record['owner'], record['id'],
+                           {'ai_snapshot_id', 'ai_snapshot_stage', 'ai_snapshot_round', 'knowledge_summary'}, bind)
     session = evidence_session(evidence_store, snapshot, profile, native=settings['provider'] in {'chatgpt', 'claude-code'})
     fallback_fresh = fallback_fresh or bool(snapshot['data'].get('historical_sources', {}).get('fallback_fresh'))
-    instructions = instructions_for_run(record)['text'] + PROTOCOL
+    instructions = decision_instructions(record)
     output = min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768))
     check_context(initial_payload(settings, metadata, profile, instructions, snapshot['required'], output),
                   profile, output, codex=settings['provider'] in {'chatgpt', 'claude-code'}, required_pages=len(session.required_pages), initial=True)
@@ -341,7 +450,8 @@ async def run_decision(ai, record, stage, evidence):
             row['ai_evidence_status'] = {'snapshot': snapshot['id'], 'tool_calls': session.total_calls,
                                          'dialogs': session.dialog + 1, 'required_pages': len(session.required_pages),
                                          'optional_read_budget_notices': session.total_budget_notices}
-        await owned_thread(ai.store.update, record['owner'], record['id'], complete)
+        await owned_thread(ai.store.update_ai_fields, record['owner'], record['id'],
+                           {'pending_ai', 'ai_retry', 'last_ai_decision', 'ai_model_profile', 'ai_evidence_status'}, complete)
         latest = await owned_thread(ai.store.read, record['owner'], record['id'])
         protected = {latest.get('ai_snapshot_id')}
         for key in ('pending_ai', 'interrupted_ai'):
@@ -361,7 +471,10 @@ async def run_decision(ai, record, stage, evidence):
         explicit = settings.get('decision_timeout_seconds') is not None
         raise LoopAIPause('ai_timeout' if explicit else 'loop_deadline', 'The decision reached its authorized time boundary') from exc
     finally:
-        _ACTIVE.reset(token)
+        try:
+            await owned_thread(session.close)
+        finally:
+            _ACTIVE.reset(token)
 
 
 async def provider_request(ai, record, metadata, content, output_tokens):
@@ -508,7 +621,12 @@ async def codex_dialog(ai, record, content, output_tokens, active):
                 args = json.loads(args) if isinstance(args, str) else args
                 from pb8_loop_controller import owned_thread
                 previous = len(session.seen)
+                read_started = time.monotonic()
                 value = await owned_thread(session.read, args, params.get('callId'))
+                reads = runtime.loop_request_diagnostics.setdefault('evidence_reads', [])
+                if len(reads) < 128:
+                    reads.append({'path': args.get('path'), 'offset': args.get('offset'),
+                                  'seconds': round(time.monotonic() - read_started, 4)})
                 if len(session.seen) > previous:
                     runtime.notifications.put_nowait({'method': 'loop/evidenceProgress', 'params': {
                         'threadId': thread, 'turnId': runtime.active_turn_id}})
@@ -558,7 +676,7 @@ async def codex_dialog(ai, record, content, output_tokens, active):
                         raise
                     finally:
                         diagnostics['ended_at'] = time.time()
-                        await owned_thread(ai.store.update, record['owner'], record['id'], lambda row: row.update(
+                        await owned_thread(ai.store.update_ai_fields, record['owner'], record['id'], {'last_ai_request'}, lambda row: row.update(
                             last_ai_request={'id': call_id, 'stage': active['session'].snapshot['phase'], **diagnostics}))
                     await owned_thread(ledger.settle, call_id, {})
                     observed = runtime.context_usage.get(thread) or {}

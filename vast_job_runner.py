@@ -687,31 +687,144 @@ def _finalize_collected_results_locked(store: JobStore, identifier: str, *, chec
     return store.update(identifier, **outcome, collection_incomplete=False, collection_error=None, stop_finalization_pending=False)
 
 
+STOP_RETRY_SECONDS = 180
+STOP_PROBE_SECONDS = 30
+STOP_UNCONFIRMED_ERROR = ('Stop not confirmed. The GPU may still be running and billed. '
+                          'Use End rental to terminate the rental; verified snapshots are retained.')
+STOP_EXIT_PENDING_ERROR = ('Stop acknowledged, but process exit is not confirmed. The GPU may still be billed. '
+                           'Use End rental to terminate the rental; verified partial results are retained.')
+
+
+def publish_stopping_snapshot(connection, store, identifier, intent):
+    """Publish one bounded partial snapshot without declaring the GPU reusable."""
+    with advisory_file_lock(store.directory(identifier) / '.state-lock'):
+        state = store.read(identifier)
+        if state.get('stop_partial_published') or state.get('stop_partial_finished') or state.get('final_collected'):
+            return
+        state = store.update(identifier, stop_partial_attempted=True,
+                             stop_partial_collection_at=state.get('stop_partial_collection_at') or time.time())
+    deadline = min(state['stop_partial_collection_at'] + 180, intent['deadline'] - 15)
+
+    def remaining():
+        """Transfer and publication consume one persisted allowance."""
+        seconds = deadline - time.time()
+        if seconds <= 0:
+            raise VastError('Partial Stop collection deadline reached')
+        return seconds
+
+    try:
+        # Finalize-before-Snapshot protects a concurrent full-result publisher.
+        with bounded_lock(store.directory(identifier) / '.finalize-lock', check=remaining), snapshot(store, identifier, check=remaining):
+            current = store.read(identifier)
+            if current.get('final_collected') or current.get('stop_partial_published') or current.get('stop_partial_finished'):
+                return
+            connection.collect(False, timeout=remaining(), ignore_quota=True)
+            sources = store.directory(identifier) / 'partial-results/optimize_results'
+            if sources.is_dir():
+                imported = import_results(store, identifier, partial=True, check=remaining)
+                store.update(identifier, **imported, stop_partial_published=True)
+            store.update(identifier, collection_incomplete=True, collection_error=None, stop_partial_finished=True)
+    except Exception as exc:
+        _log(SERVICE, 'Partial Stop snapshot incomplete: ' + type(exc).__name__, level='WARNING')
+        # Preserve a concurrent final publication and every previous artifact.
+        with advisory_file_lock(store.directory(identifier) / '.state-lock'):
+            if not store.read(identifier).get('final_collected'):
+                store.update(identifier, collection_incomplete=True,
+                             stop_partial_finished=time.time() >= deadline,
+                             collection_error='Partial Stop collection could not finish; verified artifacts are retained')
+
+
+def stop_retry_state(store, identifier, intent):
+    """Persist a non-renewable Stop window, including time lost before SSH bootstrap."""
+    with advisory_file_lock(store.directory(identifier) / '.state-lock'):
+        state = store.read(identifier)
+        if state.get('stop_rpc_confirmed') and state.get('stop_unconfirmed') and not state.get('stop_execution_confirmed') and not state.get('final_collected'):
+            state = store.update(identifier, stop_unconfirmed=False, stop_process_pending=True,
+                                 error=STOP_EXIT_PENDING_ERROR)
+        if state.get('stop_rpc_confirmed') or state.get('stop_execution_confirmed') or state.get('final_collected') or state.get('stop_results_published'):
+            return state
+        deadline = state.get('stop_retry_deadline')
+        if deadline is None:
+            deadline = min((state.get('stop_rpc_at') or time.time()) + STOP_RETRY_SECONDS, intent['deadline'] - 15)
+            state = store.update(identifier, stop_retry_deadline=deadline)
+        if time.time() >= deadline and not state.get('stop_unconfirmed'):
+            state = store.update(identifier, stop_unconfirmed=True, stop_unconfirmed_at=time.time(),
+                                 status='collecting', error=STOP_UNCONFIRMED_ERROR)
+            _log(SERVICE, 'Stop not confirmed within retry window; rental remains occupied', level='WARNING')
+        return state
+
+
 def stop_and_collect(connection, store, identifier, intent, *, lease_id=None):
     """Bound Stop RPC, process wait and final collection across supervisor restarts."""
+    state = stop_retry_state(store, identifier, intent)
+    if state.get('stop_results_published'):
+        return True
+    progress = {}
+    if (state.get('stop_unconfirmed') or state.get('stop_process_pending')) and not state.get('stop_execution_confirmed') and not state.get('final_collected'):
+        if time.time() < (state.get('next_stop_probe_at') or 0):
+            return False
+        store.update(identifier, next_stop_probe_at=time.time() + STOP_PROBE_SECONDS)
+        try:
+            progress = connection.operation('status', timeout=10)
+        except (VastError, OSError) as exc:
+            _log(SERVICE, 'Unconfirmed Stop status probe failed: ' + type(exc).__name__, level='WARNING')
+            return False
+        if not progress.get('finished'):
+            if state.get('stop_process_pending'):
+                publish_stopping_snapshot(connection, store, identifier, intent)
+            return False
+        # Execution completion proves safety, but is not a Stop RPC acknowledgement.
+        state = store.update(identifier, stop_execution_confirmed=True, stop_unconfirmed=False, stop_process_pending=False,
+                             stop_wait_until=time.time(), error=None)
     with advisory_file_lock(store.directory(identifier) / '.state-lock'):
         state = store.read(identifier)
         if state.get('stop_results_published'):
             return True
-        send_stop = not state.get('stop_rpc_at')
-        if send_stop:
-            state = store.update(identifier, stop_rpc_at=time.time(),
+        # An attempted RPC is not evidence that the remote worker received it.
+        # Retry only within the original window; never free an unconfirmed GPU.
+        send_stop = not state.get('stop_rpc_confirmed') and not state.get('stop_execution_confirmed') and not state.get('final_collected')
+        if send_stop or not state.get('stop_rpc_at'):
+            state = store.update(identifier, stop_rpc_at=state.get('stop_rpc_at') or time.time(),
                                  status=state['status'] if state['status'] in {'completed', 'failed', 'cancelled'} else 'collecting',
                                  stop_reason=state.get('stop_reason') if state['status'] in {'completed', 'failed', 'cancelled'} else state.get('stop_reason') or 'requested')
     if send_stop:
+        attempted_at = time.time()
         try:
-            connection.operation('stop', timeout=max(.01, min(30, intent['deadline'] - time.time() - 15)))
+            connection.operation('stop', timeout=max(.01, min(30, state['stop_retry_deadline'] - time.time())))
+            state = store.update(identifier, stop_rpc_confirmed=True, stop_rpc_confirmed_at=time.time(),
+                                 stop_wait_until=min(attempted_at + 60, intent['deadline'] - 15), stop_rpc_error=None)
         except Exception as exc:
             _log(SERVICE, 'Stop RPC incomplete; retaining bounded collection: ' + type(exc).__name__, level='WARNING')
-    wait_until = min(state['stop_rpc_at'] + 60, intent['deadline'] - 15)
-    progress = {}
-    if time.time() < wait_until and not state.get('final_collection_at'):
+            store.update(identifier, stop_rpc_error=type(exc).__name__)
+            if (not isinstance(exc, (VastError, OSError))
+                    or isinstance(exc, VastError) and exc.status < 500 and exc.status not in {408, 429}):
+                raise
+            return False
+    wait_until = min(state.get('stop_wait_until', state['stop_rpc_at'] + 60), intent['deadline'] - 15)
+    status_checked = False
+    if time.time() < wait_until and not state.get('final_collection_at') and not progress.get('finished'):
         try:
             progress = connection.operation('status', timeout=max(.01, min(30, wait_until - time.time())))
+            status_checked = True
         except Exception as exc:
             _log(SERVICE, 'Stop status unavailable: ' + type(exc).__name__, level='WARNING')
+            status_checked = True
         if not progress.get('finished') and time.time() < wait_until:
             return False
+    if not state.get('final_collected') and not progress.get('finished'):
+        if not status_checked:
+            try:
+                progress = connection.operation('status', timeout=10)
+            except (VastError, OSError) as exc:
+                _log(SERVICE, 'Stopped execution remains unconfirmed: ' + type(exc).__name__, level='WARNING')
+        if not progress.get('finished'):
+            store.update(identifier, stop_unconfirmed=False, stop_process_pending=True,
+                         next_stop_probe_at=time.time() + STOP_PROBE_SECONDS,
+                         status='collecting', error=STOP_EXIT_PENDING_ERROR)
+            publish_stopping_snapshot(connection, store, identifier, intent)
+            return False
+    if progress.get('finished'):
+        store.update(identifier, stop_execution_confirmed=True, stop_unconfirmed=False, stop_process_pending=False, error=None)
     if not state.get('final_collection_at'):
         state = store.update(identifier, final_collection_at=time.time())
     deadline = min(state['final_collection_at'] + 180, intent['deadline'] - 15)
@@ -728,7 +841,7 @@ def stop_and_collect(connection, store, identifier, intent, *, lease_id=None):
         with snapshot(store, identifier, check=remaining):
             current = store.read(identifier)
             final = current.get('final_collected') or bool(progress.get('finished'))
-            if not current.get('stop_snapshot_collected') and not current.get('final_collected'):
+            if not current.get('final_collected') and (final or not current.get('stop_snapshot_collected')):
                 connection.collect(final, timeout=remaining(), ignore_quota=True)
                 store.update(identifier, stop_snapshot_collected=True)
             if not final:
@@ -834,6 +947,16 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                 store.control(identifier, "cleanup")
             store.update(identifier, status="failed", error="Rental deadline reached; preserving last local snapshot")
             return
+        if control['stop']:
+            state = stop_retry_state(store, identifier, intent)
+            if state.get('stop_unconfirmed') or state.get('stop_process_pending'):
+                next_probe = max(state.get('next_stop_probe_at') or 0, state.get('next_stop_connection_at') or 0)
+                if time.time() < next_probe:
+                    time.sleep(min(5, next_probe - time.time()))
+                    continue
+                # Bound connection attempts even when provider/SSH bootstrap fails
+                # before stop_and_collect can issue its status-only probe.
+                store.update(identifier, next_stop_connection_at=time.time() + STOP_PROBE_SECONDS)
         if state.get('worker_ready') and not state.get('uploaded'):
             if remaining <= UPLOAD_FINISH_RESERVE_SECONDS:
                 store.update(identifier, status='failed', error='Input upload could not finish before the rental collection reserve; partial data retained')
@@ -991,8 +1114,12 @@ def run_loop(store: JobStore, identifier: str, lease_id: str | None = None) -> N
                     _log(SERVICE, safe_error, level='WARNING')
                 else:
                     continue
-            store.update(identifier, error=safe_error)
-            if isinstance(exc, VastError) and exc.status == 422:
+            waiting_for_stop = current.get('stop_unconfirmed') or current.get('stop_process_pending')
+            stop_error = STOP_EXIT_PENDING_ERROR if current.get('stop_process_pending') else STOP_UNCONFIRMED_ERROR
+            store.update(identifier, error=stop_error if waiting_for_stop else safe_error,
+                         **({'next_stop_probe_at': time.time() + STOP_PROBE_SECONDS} if waiting_for_stop else {}))
+            unconfirmed_stop = control['stop'] and current.get('uploaded') and not current.get('stop_execution_confirmed') and not current.get('final_collected')
+            if isinstance(exc, VastError) and exc.status == 422 and not unconfirmed_stop:
                 store.update(identifier, status="failed")
                 if not lease_id:
                     store.control(identifier, "cleanup")

@@ -2759,9 +2759,16 @@ function loopEvaluationSelection(url) {
   if (!backtestEditorAdapter.isV8) return null;
   url = url || new URL(window.location.href);
   var run=url.searchParams.get('result_loop'),kind=url.searchParams.get('result_evaluation');
-  if (!/^[0-9a-f]{32}$/.test(run||'') || !['observer_holdout','observer_full_range'].includes(kind) || (url.hash && url.hash!=='#results')) return null;
+  if (!/^[0-9a-f]{32}$/.test(run||'') || !['observer_holdout','observer_full_range','selected'].includes(kind) || (url.hash && url.hash!=='#results')) return null;
   var rawTop=url.searchParams.get('result_top')||'',top=/^[1-9][0-9]{0,3}$/.test(rawTop)&&Number(rawTop)<=1000?Number(rawTop):0;
-  return {run:run,kind:kind,top:top,key:run+':'+kind+(top?':top:'+top:'')};
+  var selectionId=url.searchParams.get('result_selection')||'',operations=null;
+  if(kind==='selected'){
+    try{
+      var target=JSON.parse(sessionStorage.getItem('pbgui.loopEvaluationTargets')||'{}')[selectionId];
+      if(/^[a-f0-9]{32}$/.test(selectionId)&&target&&target.run===run&&Array.isArray(target.operations)&&target.operations.length&&target.operations.every(function(value){return typeof value==='string'&&/^[a-f0-9]{32}$/.test(value);}))operations=Array.from(new Set(target.operations));
+    }catch(_){}
+  }
+  return {run:run,kind:kind,top:top,operations:operations,key:run+':'+kind+(kind==='selected'?':'+selectionId:'')+(top?':top:'+top:'')};
 }
 function initializeLoopEvaluationControls() {
   var selection=loopEvaluationSelection(),group=document.getElementById('loop-evaluation-controls');
@@ -2796,9 +2803,15 @@ async function loadLoopEvaluationResults(selection, filterName, options) {
   function current(){var next=loopEvaluationSelection();return !failed&&currentPanel==='results'&&generation===_resultsLoadGeneration&&next&&next.key===selection.key;}
   if (!options.keepVisible) document.getElementById('results-list').textContent='Loading Loop evaluations…';
   try {
+    if(selection.kind==='selected'&&!selection.operations)throw new Error('Selected Loop evaluations are no longer available in this tab. Return to the Loop and select them again.');
     var run=await backtestResultRead(String(API_BASE).replace(/\/backtest-v8$/, '/optimize-v8/loops'), '/'+selection.run);
     if(!current())return results;
-    var jobs=(run.observer_jobs||[]).filter(function(job){return job.kind===selection.kind&&job.simulation_complete&&['complete','completed'].includes(job.status)&&job.log_available;});
+    var selectedOperations=new Set(selection.operations||[]),seenJobs=new Set();
+    var jobs=(run.observer_jobs||[]).filter(function(job){
+      if(!['observer_holdout','observer_full_range'].includes(job.kind)||!(selection.kind==='selected'?selectedOperations.has(job.operation):job.kind===selection.kind)||!job.simulation_complete||!['complete','completed'].includes(job.status)||!job.log_available)return false;
+      var key=job.operation||job.kind+':'+job.name;if(seenJobs.has(key))return false;seenJobs.add(key);return true;
+    });
+    if(selection.kind==='selected'&&jobs.length!==selectedOperations.size)throw new Error('Some selected Loop evaluations are no longer available. Return to the Loop and select them again.');
     jobs.sort(function(a,b){return a.round-b.round||a.name.localeCompare(b.name);});
     var loaded=new Array(jobs.length),cursor=0;
     async function worker(){
@@ -2807,7 +2820,7 @@ async function loadLoopEvaluationResults(selection, filterName, options) {
         while(current()){
           var page=await backtestResultRead(API_BASE,'/results?name='+encodeURIComponent(job.name)+'&offset='+offset+'&limit='+RESULTS_PAGE_SIZE);
           if(!current())return;
-          (page.results||[]).forEach(function(result){if(result.config_name===job.name)items.push(Object.assign({},result,{backtest_version:'v8',loop_compare_label:(job.round<0?'Unchanged start':'Loop '+(job.round+1))+' · '+(job.comparison_label||job.candidate_id||'')+' · '+(result.exchange_dir||result.exchange||result.result_name||result.path)}));});
+          (page.results||[]).forEach(function(result){if(result.config_name===job.name)items.push(Object.assign({},result,{backtest_version:'v8',loop_compare_label:(job.round<0?'Unchanged start':'Loop '+(job.round+1))+' · '+(selection.kind==='selected'?(job.kind==='observer_holdout'?'Holdout':'Full Time Range')+' · ':'')+(job.comparison_label||job.candidate_id||'')+' · '+(result.exchange_dir||result.exchange||result.result_name||result.path)}));});
           if(!page.pagination||!page.pagination.has_more)break;
           var next=Number(page.pagination.next_offset);
           if(!Number.isFinite(next)||next<=offset)throw new Error('Invalid backtest result pagination');
@@ -2913,7 +2926,7 @@ async function initializeBacktestPageFromUrl(arrivalUrl) {
   var url = arrivalUrl || new URL(window.location.href);
   var nativeLog=url.searchParams.get('native_log');
   if(backtestEditorAdapter.isV8&&nativeLog&&/^[0-9a-f-]{32,36}$/.test(nativeLog))showLog(nativeLog);
-  if (backtestEditorAdapter.isV8 && url.searchParams.get('panel')==='results' && /^[0-9a-f]{32}$/.test(url.searchParams.get('result_loop')||'') && ['observer_holdout','observer_full_range'].includes(url.searchParams.get('result_evaluation')) && (!url.hash||url.hash==='#results')) {
+  if (backtestEditorAdapter.isV8 && url.searchParams.get('panel')==='results' && /^[0-9a-f]{32}$/.test(url.searchParams.get('result_loop')||'') && ['observer_holdout','observer_full_range','selected'].includes(url.searchParams.get('result_evaluation')) && (!url.hash||url.hash==='#results')) {
     selectPanel('results',{deferResultsLoad:true,deferArchivesLoad:true});await loadResults(url.searchParams.get('result_filter')||'');return;
   }
   if (backtestEditorAdapter.isV8 && url.searchParams.get('panel') === 'results' && url.searchParams.get('result_filter') && (!url.hash || url.hash === '#results')) {
@@ -6269,13 +6282,15 @@ function _applyResultsData(resultItems, filterName) {
   var cfgSel = document.getElementById('results-config-filter');
   if (cfgSel) {
     var savedVal = typeof filterName === 'string' ? filterName : cfgSel.value;
-    var names = {};
-    resultsForSelectedVersion(results).forEach(function(r) { if (r.config_name) names[r.config_name] = true; });
-    var sorted = Object.keys(names).sort();
-    cfgSel.innerHTML = '\x3Coption value="">All configs\x3C/option>';
-    sorted.forEach(function(n) {
-      cfgSel.innerHTML += '\x3Coption value="' + esc(n) + '"' + (n === savedVal ? ' selected' : '') + '>' + esc(n) + '\x3C/option>';
-    });
+    var names = new Set();
+    resultsForSelectedVersion(results).forEach(function(r) { if (r.config_name) names.add(r.config_name); });
+    var sorted = Array.from(names).sort();
+    var options = document.createDocumentFragment();
+    options.appendChild(new Option('All configs', ''));
+    sorted.forEach(function(n) { options.appendChild(new Option(n, n, false, n === savedVal)); });
+    var scrollTop = cfgSel.scrollTop;
+    cfgSel.replaceChildren(options);
+    cfgSel.scrollTop = scrollTop;
   }
   updateVersionBoundResultActions();
   renderResults();
@@ -6286,7 +6301,8 @@ function loadResults(filterName, loadOptions) {
   loadOptions = loadOptions || {};
   var evaluation=loopEvaluationSelection();
   if(evaluation)return loadLoopEvaluationResults(evaluation,typeof filterName==='string'?filterName:undefined,loadOptions);
-  var selectedFilter = typeof filterName === 'string' ? filterName : _pendingResultFilter;
+  var selectedFilter = typeof filterName === 'string' ? filterName : (_pendingResultFilter ||
+    (document.getElementById('results-config-filter') || {}).value || '');
   _pendingResultFilter = '';
   if (!loadOptions.emptyRetry) _resultsEmptyRetryCount = 0;
   if (_resultsEmptyRetryTimer) {
@@ -6297,6 +6313,13 @@ function loadResults(filterName, loadOptions) {
   var loadGeneration = ++_resultsLoadGeneration;
   var selectedVersion = selectedResultsVersion();
   var versions = selectedVersion === 'both' ? ['v7', 'v8'] : [selectedVersion];
+  if (typeof loadOptions.keepVisible === 'undefined') {
+    loadOptions.keepVisible = resultsForSelectedVersion(results).some(function(result) {
+      return !selectedFilter || result.config_name === selectedFilter;
+    });
+  }
+  var retainedVisible = !!(loadOptions.keepVisible && results.length);
+  var displayedResultPage = false;
   var progress = {};
   versions.forEach(function(version) {
     resultsByVersion[version] = [];
@@ -6310,6 +6333,7 @@ function loadResults(filterName, loadOptions) {
 
   function renderLoadedPages() {
     var applied = _applyResultsData(resultsByVersion.v7.concat(resultsByVersion.v8), selectedFilter);
+    displayedResultPage = true;
     var loaded = versions.reduce(function(total, version) { return total + progress[version].loaded; }, 0);
     var totalsKnown = versions.every(function(version) { return Number.isFinite(progress[version].total); });
     var total = totalsKnown
@@ -6393,6 +6417,10 @@ function loadResults(filterName, loadOptions) {
     return applied;
   }).catch(function(e) {
     if (loadGeneration !== _resultsLoadGeneration) return results;
+    if (!retainedVisible && !displayedResultPage) {
+      var failedList = document.getElementById('results-list');
+      if (failedList) failedList.textContent = 'Could not load results: ' + e.message;
+    }
     toast('Load results failed: ' + e.message, 'err');
     throw e;
   });

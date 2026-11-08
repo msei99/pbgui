@@ -132,7 +132,18 @@ def test_select_compacts_prior_rounds_and_preserves_every_candidate_metric(recor
     saved = store.read(OWNER, row['id'])
     snapshot = EvidenceStore(store).load(OWNER, saved['ai_snapshot_id'])
     assert snapshot['data']['evidence']['candidates'] == candidates
-    assert 'long_native_metric_name_0' not in wire['evidence']['candidates_metrics']['columns']
-    aliases = [alias['id'] for item in wire['evidence']['candidates'] for alias in item.get('aliases', [item])]
-    assert set(aliases) == {item['id'] for item in candidates}
+    assert 'candidates' not in wire['evidence']
+    assert wire['evidence']['selection']['candidate_count'] == len(candidates)
+    from pb8_loop_selection import query
+    ids, cursor = [], 0
+    while cursor is not None:
+        page = query(snapshot, '/selection/rows', cursor, 1500)
+        ids.extend(item['id'] for item in page['entries'])
+        cursor = page['next_offset']
+    assert set(ids) == {item['id'] for item in candidates}
+    # Non-goal native metrics are queryable without placing the catalogue or
+    # every candidate value in the initial message. Missing and null stay distinct.
+    ranked = query(snapshot, '/selection/rank/long_native_metric_name_0/value/max', 0, 1500)
+    assert ranked['matched_count'] == 33
+    assert EvidenceStore(store).resolve(snapshot, '/data/evidence/candidates/2/metrics/long_native_metric_name_0') is None
     assert candidates[0]['metrics'] == metrics

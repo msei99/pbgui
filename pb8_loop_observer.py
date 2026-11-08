@@ -221,6 +221,8 @@ class ObserverJobs:
     def __init__(self, store, backend, thread):
         self.store, self.backend, self.thread = store, backend, thread
         self._replacement_poll_cursors = OrderedDict()
+        self._training_poll_cursors = OrderedDict()
+        self._training_collect_cursors = OrderedDict()
 
     @staticmethod
     def sources(record):
@@ -279,8 +281,16 @@ class ObserverJobs:
                     if observer_identity(job) not in present:
                         current.setdefault('observer_jobs', []).append(job)
                         present.add(observer_identity(job))
-            record = self.store.update(record['owner'], record['id'], save)
+            record = self._update_status(record, save)
         return record
+
+    def _update_status(self, record, function):
+        """Persist only the observer branch and current control metadata while training."""
+        partial = getattr(self.store, 'update_runtime_fields', None)
+        if partial is None:
+            return self.store.update(record['owner'], record['id'], function)
+        changes = partial(record['owner'], record['id'], {'observer_jobs'}, function)
+        return {**record, **changes}
 
     def update(self, record, job, **values):
         """Update only the separate observer collection under the record transaction lock."""
@@ -290,18 +300,33 @@ class ObserverJobs:
         def change(current):
             target = next(item for item in current['observer_jobs'] if item['operation'] == job['operation'])
             target.update(values)
-        return self.store.update(record['owner'], record['id'], change)
+        return self._update_status(record, change)
 
     def _poll_batch(self, record, pending):
-        """Rotate existing backends during replacement without archiving polling-only state."""
+        """Rotate bounded report work without delaying training dispatch or quota checks."""
         from pb8_loop_gpu_replacement import open_replacement
+        from pb8_loop_research import enabled
         key = (record['owner'], record['id'])
         previous = self._replacement_poll_cursors.pop(key, None)
-        if not open_replacement(record):
+        replacement = open_replacement(record)
+        training = (enabled(record) and record.get('status') in {'running', 'finishing'}
+                    and record.get('phase') == 'optimize' and not replacement)
+        if training:
+            batch = self._training_poll_batch(record, pending)
+            collectable = [job for job in pending if job.get('backend') and
+                           (job.get('started') or job.get('status') in {'running', 'complete', 'completed'})]
+            extra = self._training_poll_batch(record, collectable, cursors=self._training_collect_cursors)
+            if extra and all(job['operation'] != extra[0]['operation'] for job in batch):
+                batch.append({**extra[0], '_poll_only': True})
+            return batch
+        self._training_poll_cursors.pop(key, None)
+        self._training_collect_cursors.pop(key, None)
+        if not replacement and not training:
             return pending[:4]
         # Planned jobs cannot advance while replacement blocks new starts.
         # Queued native jobs still need polling to discover an independent start.
-        pending = [job for job in pending if job.get('backend')]
+        if replacement:
+            pending = [job for job in pending if job.get('backend')]
         now = time.monotonic()
         for cached_key, (_, checked_at) in list(self._replacement_poll_cursors.items()):
             if now - checked_at >= REPLACEMENT_CURSOR_TTL:
@@ -310,31 +335,64 @@ class ObserverJobs:
             return []
         cursor = previous[0] if previous and now - previous[1] < REPLACEMENT_CURSOR_TTL else None
         start = next((index + 1 for index, job in enumerate(pending) if job['operation'] == cursor), 0)
-        batch = (pending[start:] + pending[:start])[:4]
+        batch = (pending[start:] + pending[:start])[:1 if training else 4]
         self._replacement_poll_cursors[key] = (batch[-1]['operation'], now)
         while len(self._replacement_poll_cursors) > REPLACEMENT_CURSOR_LIMIT:
             self._replacement_poll_cursors.popitem(last=False)
         return batch
 
-    async def tick(self, record):
+    def _training_poll_batch(self, record, pending, *, cursors=None):
+        """Finish a fixed cycle before admitting arrivals, so old backends get revisited."""
+        cursors = self._training_poll_cursors if cursors is None else cursors
+        key = (record['owner'], record['id'])
+        now = time.monotonic()
+        previous = cursors.pop(key, None)
+        for cached_key, (_, _, checked_at) in list(cursors.items()):
+            if now - checked_at >= REPLACEMENT_CURSOR_TTL:
+                cursors.pop(cached_key)
+        if not pending:
+            return []
+        # Completed rows retain their position in the immutable append-only job
+        # list, even when they disappear from pending between two polls.
+        order = {job['operation']: index for index, job in enumerate(record.get('observer_jobs') or pending)}
+        if any(job['operation'] not in order for job in pending):
+            order = {job['operation']: index for index, job in enumerate(pending)}
+        eligible = []
+        if previous and now - previous[2] < REPLACEMENT_CURSOR_TTL:
+            cursor, boundary, _ = previous
+            if cursor in order and boundary in order:
+                eligible = [job for job in pending
+                            if order[cursor] < order[job['operation']] <= order[boundary]]
+        if not eligible:
+            eligible = pending
+            boundary = max(order, key=order.get)
+        job = min(eligible, key=lambda item: order[item['operation']])
+        cursors[key] = (job['operation'], boundary, now)
+        while len(cursors) > REPLACEMENT_CURSOR_LIMIT:
+            cursors.popitem(last=False)
+        return [job]
+
+    async def tick(self, record, *, allow_launch=True):
         """Reconcile a bounded number of jobs without waiting for their simulations."""
-        record = await self.thread(self.plan, record)
+        if allow_launch:
+            record = await self.thread(self.plan, record)
         pending = [job for job in record.get('observer_jobs', [])
                    if job['status'] not in FINISHED or needs_observer_report(job)]
-        if record['status'] == 'paused':
+        if record['status'] == 'paused' or not allow_launch:
             # A backend-free job cannot start while paused. Avoid copying the
             # full run for each such job merely to reach that same decision.
             pending = [job for job in pending if job.get('backend')]
         for original in self._poll_batch(record, pending):
             job = copy.deepcopy(original)
+            poll_only = job.pop('_poll_only', False)
             starting = False
             try:
-                current = await self.thread(self.store.read, record['owner'], record['id'])
-                launch = current['status'] in {'running', 'finishing', 'completed', 'unconfirmed', 'failed', 'stopping', 'stopped'}
+                current = await self.thread(getattr(self.store, 'read_runtime', self.store.read), record['owner'], record['id'])
+                launch = allow_launch and not poll_only and current['status'] in {'running', 'finishing', 'completed', 'unconfirmed', 'failed', 'stopping', 'stopped'}
                 from pb8_loop_gpu_replacement import open_replacement
                 if open_replacement(current):
                     launch = False
-                if not launch and current['status'] not in {'paused', 'replacing_gpu'} and not open_replacement(current) and not job.get('started'):
+                if allow_launch and not poll_only and not launch and current['status'] not in {'paused', 'replacing_gpu'} and not open_replacement(current) and not job.get('started'):
                     if job.get('backend') and job['status'] not in FINISHED:
                         await self.thread(self.backend.stop, current, job)
                         state = await self.thread(self.backend.poll, current, job)
@@ -364,7 +422,11 @@ class ObserverJobs:
                 if state['started']:
                     values['run_started_at'] = job.get('run_started_at') or (state.get('source') or {}).get('started_at') or time.time()
                 if state['status'] in FINISHED:
-                    values['ended_at'] = job.get('ended_at') or time.time()
+                    completed_at = (state.get('source') or {}).get('completed_at')
+                    started_at = values.get('run_started_at') or job.get('run_started_at')
+                    native_time = (type(completed_at) in (int, float) and math.isfinite(completed_at)
+                                   and completed_at <= time.time() and (started_at is None or completed_at >= started_at))
+                    values['ended_at'] = completed_at if native_time else job.get('ended_at') or time.time()
                 record = await self.thread(self.update, current, job, **values)
                 job.update(values)
                 if state['status'] in SUCCESS:

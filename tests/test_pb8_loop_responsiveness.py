@@ -55,6 +55,40 @@ def test_paused_unstarted_reports_do_not_reread_full_run(record, monkeypatch):
     assert row['observer_jobs'][0]['status'] == 'planned'
 
 
+@pytest.mark.parametrize('observer', [False, True])
+def test_launch_authorization_never_loads_population_or_full_snapshot_cache(record, tmp_path, monkeypatch, observer):
+    """Keep owner/control/binding checks while avoiding unrelated evidence under launch locks."""
+    from pb8_loop_backend import LoopBackend
+    from pb8_loop_store import LoopStore, authorize_native_job
+    store, row = record
+    operation = 'f' * 32
+    row = store.update(OWNER, row['id'], lambda current: current.update(status='running',
+        observer_jobs=[{'observer_only':True, 'operation':operation, 'backend':{'id':'native'}}]))
+    original = LoopStore.read
+    reads = []
+
+    def selective(self, *args, **kwargs):
+        """Reject a complete archive hydration before it can become a cached snapshot."""
+        assert kwargs.get('fields') is not None or 'candidates' in kwargs.get('exclude_fields', set())
+        reads.append(kwargs)
+        return original(self, *args, **kwargs)
+
+    def forbidden_cache(*_args, **_kwargs):
+        """Authorization must not serialize the full previous population into a cache."""
+        raise AssertionError('Launch authorization built a full-snapshot cache')
+
+    monkeypatch.setattr(LoopStore, 'read', selective)
+    monkeypatch.setattr(LoopStore, '_remember_read', forbidden_cache)
+    current = LoopBackend(tmp_path, store).authorized(row, observer=observer)
+    assert current['status'] == 'running' and 'candidates' not in current
+    assert not {'jobs', 'history', 'observer_jobs'} & current.keys()
+    assert {'settings', 'initial_config', 'fingerprint', 'control_generation'} <= current.keys()
+    data = {'loop_id':row['id'], 'loop_owner':OWNER, 'filename':'native',
+            'operation_id':operation, 'loop_observer':observer}
+    authorize_native_job(tmp_path, data, row['id'])
+    assert reads[-1]['fields'] == ({'status', 'deadline', 'observer_jobs'} if observer else {'status', 'deadline'})
+
+
 @pytest.mark.parametrize('wake', ['resume', 'deadline'])
 @pytest.mark.parametrize('reserved', [False, True])
 def test_unchanged_paused_loop_skips_hydration_but_wakes_for_controls_and_deadline(record, tmp_path, monkeypatch, wake, reserved):
@@ -126,11 +160,11 @@ def test_loop_archive_read_allows_unrelated_api_work(record, tmp_path, monkeypat
         entered = asyncio.Event()
         release = threading.Event()
 
-        def slow_read(*args):
+        def slow_read(*args, **kwargs):
             """Never block the test indefinitely if storage regresses onto the API thread."""
             loop.call_soon_threadsafe(entered.set)
             assert release.wait(2), 'Archive read blocked unrelated API work'
-            return original(*args)
+            return original(*args, **kwargs)
 
         async def idle(_row):
             """Isolate the initial archive read from provider and worker operations."""
@@ -161,7 +195,7 @@ def test_loop_and_holdout_transactions_run_outside_api_thread(record, tmp_path, 
     api_thread = threading.get_ident()
     calls = []
 
-    for name in ('read', 'write'):
+    for name in ('read', 'write', 'update_runtime_fields'):
         original = getattr(store, name)
 
         def checked(*args, _name=name, _original=original, **kwargs):
@@ -176,7 +210,8 @@ def test_loop_and_holdout_transactions_run_outside_api_thread(record, tmp_path, 
         asyncio.run(controller.finish(row, 'Training complete'))
     else:
         asyncio.run(ObserverJobs(store, backend, owned_thread).tick(row))
-    assert 'read' in calls and 'write' in calls
+    assert 'read' in calls
+    assert ('write' if operation == 'finish' else 'update_runtime_fields') in calls
 
 
 def test_cancelled_storage_operation_keeps_owner_until_worker_finishes():

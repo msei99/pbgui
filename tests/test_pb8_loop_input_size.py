@@ -41,12 +41,21 @@ def test_selection_columns_preserve_every_id_and_current_safety_value(count):
     content = {'stage':'select','rubric':RULE,'initial_config':{},'evidence':{'candidates':candidates}}
     before = copy.deepcopy(content)
     required = required_content(content)
-    assert len(required['evidence']['candidates']) == count
-    table = required['evidence']['candidates_metrics']
-    assert len(table['rows']) == count and 'unrelated_extra' not in table['columns']
-    for index,row in enumerate(table['rows']):
-        assert row[table['columns'].index('gain')] == candidates[index]['metrics']['gain']
-        assert row[table['columns'].index('liquidated')] == 0
+    from pb8_loop_selection import query
+    assert 'candidates' not in required['evidence']
+    assert required['evidence']['selection']['candidate_count'] == count
+    frozen = {'id': 'a' * 32, 'sha256': 'b' * 64, 'data': content, 'required': required}
+    cursor, seen = 0, []
+    while cursor is not None:
+        page = query(frozen, '/selection/rows', cursor, 1500)
+        assert tokens(page) <= 1500
+        for item in page['entries']:
+            index = int(item['id'].split('_')[-1])
+            assert item['metrics']['gain'] == candidates[index]['metrics']['gain']
+            assert item['metrics']['liquidated'] == 0 and 'unrelated_extra' not in item['metrics']
+            seen.append(item['id'])
+        cursor = page['next_offset']
+    assert seen == [candidate['id'] for candidate in candidates]
     assert content == before
 
 

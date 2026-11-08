@@ -137,6 +137,128 @@ def test_new_optimizer_launch_precedes_report_preparation(record, tmp_path, monk
     assert reports == [1] and 'f' * 32 in backend.starts
 
 
+@pytest.mark.parametrize('previous_phase,next_phase', [('optimize', 'select'), ('select', 'evaluate')])
+def test_training_decision_transitions_precede_observer_work(record, tmp_path, monkeypatch, previous_phase, next_phase):
+    """User reports cannot delay importing training results or starting their AI evaluation."""
+    store, row = record
+    store.update(OWNER, row['id'], lambda current: current.update(phase=previous_phase, optimizer_research_version=1))
+    controller = LoopController(tmp_path, store, Backend(), FakeAI())
+
+    async def transition(current):
+        """Persist the next foreground phase without launching external work."""
+        await owned_thread(store.update, OWNER, row['id'], lambda value: value.update(phase=next_phase))
+
+    async def forbidden(current):
+        """Report planning is deferred until the next optimizer is actually running."""
+        pytest.fail('Observer work delayed the next training decision')
+
+    monkeypatch.setattr(controller, '_tick', transition)
+    monkeypatch.setattr(controller.observers, 'tick', forbidden)
+    asyncio.run(controller.tick(OWNER, row['id']))
+    assert store.read(OWNER, row['id'])['phase'] == next_phase
+
+
+@pytest.mark.parametrize('status,started,limited', [('planned', False, None), ('queued', False, None),
+                                                  ('queued', True, None), ('running', True, 'proxy')])
+def test_pending_training_launch_or_stop_precedes_reports(record, tmp_path, monkeypatch, status, started, limited):
+    """Temporary slot shortages and quota cancellation cannot start slow foreground reports."""
+    store, row = record
+    row = store.update(OWNER, row['id'], lambda current: current.update(
+        optimizer_research_version=1, phase='optimize', jobs=[{
+            'operation': 'f'*32, 'kind': 'optimizer', 'round': 0, 'status': status,
+            'started': started, 'limit_reached': limited}]))
+    controller = LoopController(tmp_path, store, Backend(), FakeAI())
+
+    async def waiting(current):
+        """Model an occupied Vast slot or an unacknowledged stop without external actions."""
+        return None
+
+    report_calls = []
+
+    async def existing_only(current, *, allow_launch=True):
+        """Waiting slots permit collection but never slow planning or report launch."""
+        assert not allow_launch
+        report_calls.append(allow_launch)
+
+    monkeypatch.setattr(controller, '_tick', waiting)
+    monkeypatch.setattr(controller.observers, 'tick', existing_only)
+    asyncio.run(controller.tick(OWNER, row['id']))
+    assert report_calls == ([] if limited else [False])
+
+
+def test_waiting_training_collects_existing_reports_without_preparing_new_ones(record, monkeypatch):
+    """Keep already finished results current while preserving priority for the queued GPU job."""
+    store, row = record
+    row = reference(store, row)
+    backend = Backend(); backend.done = True
+    observer = ObserverJobs(store, backend, owned_thread)
+    row = observer.plan(row)
+
+    def existing(current):
+        """Restore one accepted native report alongside unprepared user reports."""
+        current.update(optimizer_research_version=1, phase='optimize')
+        current['observer_jobs'][0].update(backend={'id': 'existing'}, status='queued')
+
+    row = store.update(OWNER, row['id'], existing)
+
+    def forbidden(*args, **kwargs):
+        """Waiting training must not perform planning, prepare or start side effects."""
+        pytest.fail('Queued training was delayed by new report work')
+
+    monkeypatch.setattr(observer, 'plan', forbidden)
+    monkeypatch.setattr(backend, 'prepare', forbidden)
+    monkeypatch.setattr(backend, 'start', forbidden)
+    monkeypatch.setattr(backend, 'stop', forbidden)
+    asyncio.run(observer.tick(row, allow_launch=False))
+    current = store.read(OWNER, row['id'])
+    assert current['observer_jobs'][0]['report_done'] and current['observer_jobs'][0]['status'] == 'complete'
+    assert all(job.get('backend') is None for job in current['observer_jobs'][1:])
+
+
+def test_research_report_rotation_keeps_training_checks_timely_and_does_not_starve_waiting_jobs(record):
+    """One report per active-training pass rotates past running and queued head jobs."""
+    store, row = record
+    row.update(optimizer_research_version=1, phase='optimize')
+    observer = ObserverJobs(store, Backend(), owned_thread)
+    pending = [{'operation': str(index), 'status': 'running' if index == 0 else 'planned',
+                'backend': {'id': str(index)} if index == 0 else None} for index in range(6)]
+    assert [observer._poll_batch(row, pending)[0]['operation'] for _ in range(6)] == [str(i) for i in range(6)]
+    row['status'] = 'completed'
+    assert observer._poll_batch(row, pending) == pending[:4]
+
+
+def test_training_report_cycles_revisit_existing_jobs_despite_continuous_arrivals(record):
+    """Appending new reports cannot keep completed older backends behind a moving cursor."""
+    store, row = record
+    row.update(optimizer_research_version=1, phase='optimize')
+    row['observer_jobs'] = [{'operation': f'old{i}', 'status': 'running', 'backend': {'id': str(i)}}
+                            for i in range(3)]
+    observer = ObserverJobs(store, Backend(), owned_thread)
+    visited = []
+    for index in range(4):
+        visited.append(observer._poll_batch(row, row['observer_jobs'])[0]['operation'])
+        row['observer_jobs'].append({'operation': f'new{index}', 'status': 'queued',
+                                     'backend': {'id': f'new{index}'}})
+    assert visited == ['old0', 'old1', 'old2', 'old0']
+
+
+def test_training_report_cycle_survives_completed_cursor_leaving_pending(record):
+    """A completed cursor and boundary retain stable positions in the archived job list."""
+    store, row = record
+    row.update(optimizer_research_version=1, phase='optimize')
+    row['observer_jobs'] = [{'operation': str(i), 'status': 'running'} for i in range(3)]
+    observer = ObserverJobs(store, Backend(), owned_thread)
+    assert observer._poll_batch(row, row['observer_jobs'])[0]['operation'] == '0'
+    row['observer_jobs'][0]['status'] = 'complete'
+    row['observer_jobs'].append({'operation': '3', 'status': 'planned'})
+    pending = row['observer_jobs'][1:]
+    assert observer._poll_batch(row, pending)[0]['operation'] == '1'
+    row['observer_jobs'][2]['status'] = 'complete'
+    pending = [row['observer_jobs'][1], row['observer_jobs'][3]]
+    assert observer._poll_batch(row, pending)[0]['operation'] == '1'
+    assert observer._poll_batch(row, pending)[0]['operation'] == '3'
+
+
 @pytest.mark.parametrize('template', [False, True])
 def test_next_optimizer_and_terminal_collection_do_not_wait_for_observers(record, tmp_path, template):
     """A background monitor cannot block the next round or final normal completion."""
@@ -344,3 +466,84 @@ def test_reducers_and_delta_projection_are_independent_of_rubric():
     jobs[2]['simulation_complete']=False
     assert _observer_reports({'observer_jobs':jobs})[2]['display_status']=='incomplete'
     assert _observer_reports({'observer_jobs':jobs})[2]['delta_start']=={}
+
+
+@pytest.mark.parametrize('completed_at', [130, 90, float('nan'), float('inf'), 10**12, None])
+def test_report_duration_uses_native_completion_not_delayed_collection(record, monkeypatch, completed_at):
+    """Late report polling preserves real runtime and rejects invalid native timestamps."""
+    store, row = record
+    row = reference(store, row)
+    backend = Backend()
+    observer = ObserverJobs(store, backend, owned_thread)
+    row = observer.plan(row)
+    operation = row['observer_jobs'][0]['operation']
+
+    def prepared(value):
+        """Create only temporary detached report state; never start a real process."""
+        for job in value['observer_jobs']:
+            job.update(status='skipped', report_done=True)
+        job = value['observer_jobs'][0]
+        job.update(status='running', started=True, run_started_at=100,
+                   backend={'id': 'test', 'execution': 'validation'}, report_done=False)
+
+    store.update(OWNER, row['id'], prepared)
+    monkeypatch.setattr(backend, 'poll', lambda *_: {
+        'status': 'complete', 'started': True,
+        'source': {'started_at': 100, 'completed_at': completed_at}})
+    before = time.time()
+    asyncio.run(observer.tick(store.read(OWNER, row['id'])))
+    job = next(job for job in store.read(OWNER, row['id'])['observer_jobs'] if job['operation'] == operation)
+    assert job['report_done']
+    assert job['ended_at'] == 130 if completed_at == 130 else job['ended_at'] >= before
+
+
+def test_training_collection_has_own_bounded_cycle_amid_planned_report_backlog(record):
+    """Completed native jobs need not wait for every newly planned report to launch."""
+    store, row = record
+    row.update(optimizer_research_version=1, phase='optimize')
+    row['observer_jobs'] = [
+        {'operation': f'old{i}', 'status': 'running', 'started': True, 'backend': {'id': str(i)}}
+        for i in range(2)] + [{'operation': f'new{i}', 'status': 'planned', 'backend': None} for i in range(100)]
+    observer = ObserverJobs(store, Backend(), owned_thread)
+    assert observer._poll_batch(row, row['observer_jobs'])[0]['operation'] == 'old0'
+    assert observer._poll_batch(row, row['observer_jobs'])[0]['operation'] == 'old1'
+    batch = observer._poll_batch(row, row['observer_jobs'])
+    assert [job['operation'] for job in batch] == ['new0', 'old0']
+    assert batch[1]['_poll_only'] and len(batch) <= 2
+    assert '_poll_only' not in row['observer_jobs'][0]
+    row['status'] = 'completed'
+    assert observer._poll_batch(row, row['observer_jobs']) == row['observer_jobs'][:4]
+    assert not observer._training_collect_cursors
+
+
+@pytest.mark.parametrize('native_state', ['complete', 'queued'])
+def test_extra_training_collection_cannot_launch_or_stop_backends(record, monkeypatch, native_state):
+    """At most the regular slot prepares/starts work; the added slot only reconciles."""
+    store, row = record
+    row = reference(store, row)
+    backend = Backend()
+    observer = ObserverJobs(store, backend, owned_thread)
+    row = observer.plan(row)
+    old, new = [job['operation'] for job in row['observer_jobs'][:2]]
+
+    def prepare_state(current):
+        """Use isolated owned fixtures for one existing job and one planned report."""
+        current.update(optimizer_research_version=1, phase='optimize')
+        for job in current['observer_jobs'][2:]:
+            job.update(status='skipped', report_done=True)
+        current['observer_jobs'][0].update(status='running', started=True, backend={'id': 'old'})
+
+    row = store.update(OWNER, row['id'], prepare_state)
+    observer._training_poll_cursors[(OWNER, row['id'])] = (
+        old, row['observer_jobs'][-1]['operation'], time.monotonic())
+    monkeypatch.setattr(backend, 'poll', lambda current, job: {
+        'status': native_state if job['operation'] == old else 'queued',
+        'started': job['operation'] == old})
+    asyncio.run(observer.tick(row))
+    assert list(backend.prepared) == [new]
+    assert backend.starts == [new] and not backend.stops
+    saved = store.read(OWNER, row['id'])
+    result = saved['observer_jobs'][0]
+    assert result['status'] == native_state
+    assert bool(result.get('report_done')) == (native_state == 'complete')
+    assert all('_poll_only' not in job for job in saved['observer_jobs'])

@@ -349,3 +349,5 @@ Wenn ein Suite-Szenarioeditor geoeffnet ist, erfordern Templates, Reset to Base 
 Wenn Add to Run keinen Editorentwurf erstellen kann, zeigt Backtest den Serverfehler und behaelt die aktuelle Seite bei. Der Editor wird erst nach Erhalt einer gueltigen Entwurfs-ID geoeffnet.
 
 Im visuellen Szenarioeditor bleibt der Zoom innerhalb der konfigurierten Daten. Ein erfolgreicher neuer Versuch entfernt frühere Fehler, und beim Abbrechen des Szenarioersatzes bleibt der offene Editor unverändert.
+
+Die Ergebnisansicht behält passende Zeilen und den gewählten Config-Filter beim Nachladen bei. Schlägt die erste Ergebnisabfrage fehl oder läuft sie in einen Timeout, zeigt die Liste den Fehler statt dauerhaft „Loading results…“. Auch große Config-Auswahllisten werden zusammen aktualisiert; verfügbare Ergebnisse und Sortierung bleiben erhalten.

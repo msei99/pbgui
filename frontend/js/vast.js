@@ -159,6 +159,8 @@
   let workerAction = null;
   function stopPhase(job) {
     if (!job || ['completed','cancelled','failed'].includes(job.status)) return null;
+    if (job.stop_unconfirmed) return 'Stop not confirmed';
+    if (job.stop_process_pending) return 'Stop acknowledged; waiting for exit';
     if (job.status === 'collecting') return 'Collecting results…';
     return stoppingJobs.get(job.id) || (job.stop_requested ? 'Stop requested' : null);
   }

@@ -269,7 +269,7 @@ def test_optimizer_starts_only_after_fresh_markets_are_staged(queue, tmp_path, m
     monkeypatch.setattr(vast_market_cache, 'fetch_markets', fetch)
     monkeypatch.setattr('vast_inception.stage_inception', lambda connection: None)
     connection = SimpleNamespace(store=queue.store, identifier=identifier, directory=directory,
-                                 remote_root=str(remote), command=command)
+                                 remote_root=str(remote), command=command, proxy_budget_command=lambda: None)
     if failure:
         with pytest.raises(VastError, match='not started'):
             WorkerConnection.start(connection)

@@ -134,7 +134,8 @@ def test_actual_result_renderer_distinguishes_checked_and_numeric_targets():
     script = r"""
 const assert=browserAssert,fs=testSources,vm=browserScope;
 const source=fs.readFileSync('frontend/js/pb8_loop_optimizer.js','utf8');
-const body=source.match(/  function resultSummary\([\s\S]*?\n  \}/)[0];
+const body=source.match(/  function optimizerResearchSummary\([\s\S]*?\n  \}/)[0]+'\n'+
+ source.match(/  function resultSummary\([\s\S]*?\n  \}/)[0];
 let rendered;
 const context=vm.createContext({reportTable(parent,headers,rows){rendered=rows;},
  element(){return {};},goalTable(){},numeric(value){return value;}});

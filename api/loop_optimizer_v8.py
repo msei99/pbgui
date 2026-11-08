@@ -33,6 +33,7 @@ from pb8_loop_store import TERMINAL, LoopDeletionConflict, config_defaults, conf
 from pb8_loop_evidence import LoopAIPause
 
 SERVICE = 'PB8Loop'
+RESUME_LOCK_WAIT_SECONDS = 15
 _list_cache = OrderedDict()
 _list_cache_lock = threading.RLock()
 _LIST_CACHE_BYTES = 8 * 1024 * 1024
@@ -51,7 +52,8 @@ _DISPLAY_FIELDS = frozenset({
     'jobs', 'observations', 'observer_jobs', 'observer_enabled', 'observer_holdouts',
     'training_exclusions', 'holdouts', 'final_holdout_policy', 'final_validation_status',
     'comparison', 'baseline', 'final_validation', 'best', 'bootstrap_jev_answers', 'jev_answers',
-    'cleanup_done',
+    'cleanup_done', 'optimizer_research_version', 'optimizer_assessment', 'validation_recovery', 'decision_repair',
+    'native_training_version', 'native_training_round', 'native_training_summary', 'native_training_retry', 'native_training_fallback',
 })
 _OVERVIEW_FIELDS = frozenset({
     'id', 'owner', 'status', 'phase', 'round', 'created_at', 'started_at', 'updated_at',
@@ -485,7 +487,9 @@ def projection(row):
     return {key: row.get(key) for key in ('id', 'status', 'phase', 'round', 'created_at', 'started_at', 'updated_at', 'reason',
             'last_error', 'failure', 'holdout_retryable', 'stop_reason', 'continuation', 'interpretation', 'rubric', 'history', 'bootstrap', 'ai_calls', 'ai_tokens_reserved',
             'ai_usd_reserved', 'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline', 'rental_handover',
-            'ai_pause', 'knowledge_summary', 'ai_evidence_status', 'bootstrap_evidence_preview', 'ai_preview', 'control_generation')} | {
+            'ai_pause', 'knowledge_summary', 'ai_evidence_status', 'bootstrap_evidence_preview', 'ai_preview', 'control_generation',
+            'optimizer_research_version', 'optimizer_assessment', 'validation_recovery', 'decision_repair',
+            'native_training_version', 'native_training_round', 'native_training_summary', 'native_training_retry', 'native_training_fallback')} | {
         'gpu_replacement': _replacement_projection(row),
         'initial_snapshot_digest': digest({'config': row['initial_config'], 'overrides': row['initial_overrides']}),
         'name': row['settings'].get('loop_name') or row['settings']['config_name'],
@@ -503,15 +507,16 @@ def projection(row):
         'holdout_available': bool(row['holdouts']),
         'best': {'assessment': best['assessment'], 'metrics': best['metrics'],
                  'candidate_id': best['candidate']['id'], 'round': next((job['round'] for job in row['jobs'] if job['operation'] == best.get('operation')), None)} if best else None,
-        'jobs': [{key: job.get(key) for key in ('operation', 'name', 'kind', 'round', 'status', 'started', 'reason', 'error', 'runner', 'executed_digest', 'run_started_at', 'limit_reached', 'results_consumed', 'result_count', 'result_error', 'created_at', 'ended_at', 'optimizer_archive')} | {
+        'jobs': [{key: job.get(key) for key in ('operation', 'name', 'kind', 'round', 'status', 'started', 'reason', 'error', 'runner', 'executed_digest', 'run_started_at', 'limit_reached', 'results_consumed', 'result_count', 'result_error', 'created_at', 'ended_at', 'optimizer_archive', 'research', 'research_verification')} | {
                     'snapshot_digest': digest({'config': job['config'], 'overrides': job['overrides']}) if job['kind'] == 'optimizer' else None,
                     'changes': _job_changes(row['initial_config'], job['config'], row['initial_overrides'], job['overrides']) if job['kind'] == 'optimizer' else [],
                     'native_iters': job['config'].get('optimize', {}).get('iters') if job['kind'] == 'optimizer' else None,
                     'candidate_optimizer': (job.get('candidate') or {}).get('optimizer_job'),
                     'log_available': bool((job.get('backend') or {}).get('id')),
-                    'execution': (job.get('backend') or {}).get('execution') or (row['settings']['execution'] if job['kind'] == 'optimizer' else 'cpu'),
+                    'execution': 'vast_cpu' if job.get('native_reused') else (job.get('backend') or {}).get('execution') or (row['settings']['execution'] if job['kind'] == 'optimizer' else 'cpu'),
                     'display_status': 'Proxy limit reached' if job.get('limit_reached') == 'proxy' else 'Time limit reached' if job.get('limit_reached') else job['status'],
-                    'proxy_limit': row['settings'].get('run_proxy') if job['kind'] == 'optimizer' else None,
+                    'proxy_limit': ((job.get('research', {}).get('budget', {}).get('value') if job.get('research', {}).get('budget', {}).get('mode') == 'proxy' else None)
+                                    or row['settings'].get('run_proxy')) if job['kind'] == 'optimizer' and row['settings'].get('run_limit_mode') == 'proxy' else None,
                     'proxy_evaluations': job.get('proxy_evaluations') if job['kind'] == 'optimizer' else None,
                  } for job in row['jobs']],
         'jev_answers': (row.get('bootstrap_jev_answers') or []) + (row.get('jev_answers') or []),
@@ -1213,6 +1218,17 @@ async def log_target(loop_id: str, operation: str = Query(pattern=r'^[0-9a-f]{32
         raise _error(exc) from exc
 
 
+@router.get('/{loop_id}/optimizer-configs')
+async def optimizer_configs(loop_id: str, session: SessionToken = Depends(require_auth)):
+    """Export measured optimizer recommendations from the authenticated owner's run."""
+    try:
+        row = await asyncio.to_thread(_controller.store.read, _owner(session), loop_id)
+        from pb8_loop_research import recommendation_configs
+        return JSONResponse(recommendation_configs(row), headers={'Cache-Control': 'no-store'})
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
 @router.get('/{loop_id}/best-config')
 async def best_config(loop_id: str, session: SessionToken = Depends(require_auth)):
     """Return the best complete candidate bundle with no automatic bot deployment."""
@@ -1488,14 +1504,24 @@ async def _loop_action_owned(owner, loop_id, body):
                 path = _controller.store.path(owner, loop_id).with_suffix('.controller')
                 fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
                 try:
-                    try:
-                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    except BlockingIOError as exc:
-                        raise LoopAIPause('evidence_recovery', 'The previous Loop step is still stopping. Wait for it to finish before resuming.') from exc
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                     return _controller.store.update(owner, loop_id, resume)
                 finally:
                     os.close(fd)
-            row = await asyncio.to_thread(apply_resume)
+            # A paused reconciliation/observer tick may briefly own this lock.
+            # Wait without blocking a worker on flock or leaving an unowned
+            # resume mutation behind when the request is cancelled. The atomic
+            # resume callback still rejects changed status/control generations.
+            lock_deadline = time.monotonic() + RESUME_LOCK_WAIT_SECONDS
+            while True:
+                try:
+                    row = await owned_thread(apply_resume)
+                    break
+                except BlockingIOError as exc:
+                    remaining = lock_deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise LoopAIPause('evidence_recovery', 'The previous Loop step is still stopping. Wait for it to finish before resuming.') from exc
+                    await asyncio.sleep(min(.1, remaining))
         else:
             row = await asyncio.to_thread(_controller.action, owner, loop_id, body.action)
         return JSONResponse(projection(row), headers={'Cache-Control': 'no-store'})

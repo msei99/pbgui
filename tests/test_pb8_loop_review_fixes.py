@@ -467,4 +467,4 @@ def test_retention_storage_failure_does_not_block_running_loops(record, monkeypa
         await controller.close()
 
     asyncio.run(exercise())
-    controller.tick.assert_awaited_once_with(OWNER, row['id'])
+    controller.tick.assert_awaited_once_with(OWNER, row['id'], background_reports=True)

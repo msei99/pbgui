@@ -37,9 +37,10 @@ def optimizer_execution_evidence(job, settings, record=None):
     """Explain intentional quota cancellation without disguising real interruptions."""
     result = {key: copy.deepcopy(job.get(key)) for key in
               ('operation', 'status', 'reason', 'error', 'config', 'executed_config', 'runner',
-               'limit_reached', 'proxy_evaluations', 'result_count', 'results_consumed')}
+               'limit_reached', 'proxy_evaluations', 'result_count', 'results_consumed', 'research', 'research_verification')}
     result['backend_status'] = job.get('status')
-    count, target = job.get('proxy_evaluations'), settings.get('run_proxy')
+    count, target = job.get('proxy_evaluations'), (job.get('research', {}).get('budget', {}).get('value')
+                                                  or settings.get('run_proxy'))
     quota_complete = (settings.get('run_limit_mode') == 'proxy' and job.get('limit_reached') == 'proxy'
                       and type(count) is int and type(target) is int and count >= target
                       and job.get('status') in {'cancelled', 'stopped', 'complete', 'completed'}
@@ -794,10 +795,11 @@ class LoopStore:
     def path(self, owner, loop_id):
         return self.owner_dir(owner) / (identifier(loop_id) + '.json')
 
-    def read(self, owner, loop_id, *, cache_snapshot=True, fields=None, settings_fields=None, prefer_cached_fields=False):
+    def read(self, owner, loop_id, *, cache_snapshot=True, fields=None, settings_fields=None, prefer_cached_fields=False, exclude_fields=()):
         """Read verified state; display projections can skip the extra raw snapshot cache."""
         result = self._read_snapshot(owner, loop_id, cache_snapshot=cache_snapshot, fields=fields,
-                                     settings_fields=settings_fields, prefer_cached_fields=prefer_cached_fields)
+                                     settings_fields=settings_fields, prefer_cached_fields=prefer_cached_fields,
+                                     exclude_fields=exclude_fields)
         # Report scheduling is mandatory, including restored Template runs.
         result['observer_enabled'] = True
         if result.get('final_holdout_policy') in {'final_only', 'disabled'}:
@@ -805,6 +807,20 @@ class LoopStore:
             result['final_validation_status'] = 'observer_only' if result.get('observer_holdouts') else 'not_requested'
             result['holdout_retryable'] = False
         return result
+
+    def read_runtime(self, owner, loop_id):
+        """Hydrate execution/report context without the unrelated optimizer population."""
+        return self.read(owner, loop_id, exclude_fields={'candidates'})
+
+    def read_execution(self, owner, loop_id):
+        """Keep decision evidence complete; optimizer/report-only work skips the old population."""
+        header = self.read(owner, loop_id, fields={'phase', 'status', 'cleanup_done'})
+        if not (header['phase'] == 'optimize' or header['status'] in TERMINAL and header.get('cleanup_done')):
+            return self.read(owner, loop_id)
+        result = self.read_runtime(owner, loop_id)
+        # A concurrent transition must not receive incomplete decision evidence.
+        return (result if result['phase'] == 'optimize' or result['status'] in TERMINAL and result.get('cleanup_done')
+                else self.read(owner, loop_id))
 
     def native_job(self, owner, loop_id, operation):
         """Read only verified native navigation metadata, independently of the raw cache."""
@@ -830,10 +846,15 @@ class LoopStore:
         return {'owner': owner, 'id': loop_id}, ({key: job[key] for key in ('operation', 'name', 'kind', 'backend')
                                                 if key in job} if job is not None else None)
 
-    def _read_snapshot(self, owner, loop_id, *, cache_snapshot=True, fields=None, settings_fields=None, prefer_cached_fields=False):
+    def _read_snapshot(self, owner, loop_id, *, cache_snapshot=True, fields=None, settings_fields=None, prefer_cached_fields=False, exclude_fields=()):
         """Cache only verified reads; external file changes always force verification again."""
         if settings_fields is not None and fields is None:
             raise ValueError('Selective settings require an explicit display field selection')
+        exclude_fields = frozenset(exclude_fields)
+        if exclude_fields & {'id', 'owner'}:
+            raise ValueError('Loop ownership fields cannot be excluded')
+        if exclude_fields:
+            cache_snapshot = False
         use_cache = cache_snapshot and (fields is None or prefer_cached_fields)
         if fields is not None:
             fields = frozenset(fields) | {'id', 'owner'}
@@ -884,8 +905,9 @@ class LoopStore:
             if header['_loop_storage'].get('version') != 1:
                 raise LoopStorageError('Unsupported Loop archive format')
             archive = LoopArchive(self.owner_dir(owner), loop_id)
-            result = (archive.load(header['_loop_storage']['root']) if fields is None
-                      else archive.fields(header['_loop_storage']['root'], fields, settings_fields=settings_fields))
+            result = (archive.load(header['_loop_storage']['root']) if fields is None and not exclude_fields
+                      else archive.fields(header['_loop_storage']['root'], fields,
+                                          settings_fields=settings_fields, exclude_fields=exclude_fields))
             if result.get('owner') != owner or result.get('id') != loop_id:
                 raise LoopStorageError('Loop archive ownership mismatch')
             result.update({key: header[key] for key in HOT_FIELDS if key in header})
@@ -897,6 +919,8 @@ class LoopStore:
             self._remember_read(path, stamp, result)
         if settings_fields is not None and 'settings' in result:
             result['settings'] = {key: value for key, value in result['settings'].items() if key in settings_fields}
+        if exclude_fields:
+            result = {key: value for key, value in result.items() if key not in exclude_fields}
         return result if fields is None else {
             **{key: value for key, value in result.items() if key in fields}, '_view_revision': view_revision}
 
@@ -1003,6 +1027,86 @@ class LoopStore:
             self.write(record)
             return record
 
+    def update_decisions(self, owner, loop_id, function):
+        """Charge evidence reads atomically without rewriting candidate/report archives."""
+        return self.update_ai_fields(owner, loop_id, {'ai_decisions'}, function)
+
+    def update_ai_fields(self, owner, loop_id, fields, function, *, read_fields=()):
+        """Persist only declared AI metadata branches under the normal Loop transaction lock."""
+        allowed = {'ai_decisions', 'ai_calls', 'ai_tokens_reserved', 'ai_usd_reserved', 'pending_ai',
+                   'last_usage', 'last_ai_request', 'ai_model_profile', 'ai_snapshot_id', 'ai_snapshot_stage',
+                   'ai_snapshot_round', 'knowledge_summary', 'last_ai_decision', 'ai_evidence_status', 'ai_retry'}
+        fields = set(fields)
+        read_fields = set(read_fields)
+        if not fields or not fields <= allowed or not read_fields <= allowed | {'settings'}:
+            raise ValueError('Partial Loop updates accept only declared AI metadata fields')
+        return self._update_fields(owner, loop_id, fields, function, read_fields=read_fields)
+
+    def update_runtime_fields(self, owner, loop_id, fields, function):
+        """Patch job status branches without rewriting populations, history or AI state."""
+        fields = set(fields)
+        if not fields or not fields <= {'jobs', 'observer_jobs', 'last_error'}:
+            raise ValueError('Runtime status updates accept only job collections and last_error')
+        try:
+            row = self._update_fields(owner, loop_id, fields, function,
+                                      boundary='Runtime status', refresh_pending=True)
+        except OSError as exc:
+            if isinstance(exc, LoopStorageError):
+                raise
+            raise LoopStorageError(f'Runtime status persistence failed: {type(exc).__name__}') from exc
+        return {key: value for key, value in row.items() if key != '_view_revision'}
+
+    def _update_fields(self, owner, loop_id, fields, function, *, read_fields=(),
+                       boundary='AI metadata', refresh_pending=False):
+        """Replace declared immutable branches under one owner-checked cross-process lock."""
+        fields, read_fields = set(fields), set(read_fields)
+        requested = set(HOT_FIELDS) | fields | read_fields
+        def mutate(row):
+            """A metadata callback cannot silently change control state or read-only settings."""
+            readonly = {key: copy.deepcopy(value) for key, value in row.items() if key not in fields}
+            function(row)
+            if {key: value for key, value in row.items() if key not in fields} != readonly:
+                raise ValueError(f'{boundary} transaction changed undeclared or read-only fields')
+        path = self.path(owner, loop_id)
+        with advisory_file_lock(path):
+            header = json.loads(read_regular_file_nofollow(path, self.root))
+            if header.get('owner') != owner or header.get('id') != loop_id:
+                raise ValueError('Loop ownership mismatch')
+            if '_loop_storage' not in header:
+                def migrate(row):
+                    """Apply the same declared-field boundary during one-time legacy migration."""
+                    view = {key: copy.deepcopy(value) for key, value in row.items()
+                            if key in requested}
+                    mutate(view)
+                    for key in fields:
+                        if key in view:
+                            row[key] = view[key]
+                        else:
+                            row.pop(key, None)
+                return self.update(owner, loop_id, migrate)
+            if header['_loop_storage'].get('version') != 1:
+                raise LoopStorageError('Unsupported Loop archive format')
+            row = self.read(owner, loop_id, fields=requested, cache_snapshot=False)
+            mutate(row)
+            updated_at = time.time()
+            row['updated_at'] = updated_at
+            archive = LoopArchive(path.parent, loop_id)
+            values = {key: row[key] for key in fields if key in row}
+            values['updated_at'] = updated_at
+            root = archive.replace_fields(header['_loop_storage']['root'],
+                                          values, fields - row.keys())
+            header['_loop_storage']['root'] = root
+            header['updated_at'] = updated_at
+            if refresh_pending and header['status'] in TERMINAL:
+                # Terminal collection may clear the last pending report. This
+                # completion boundary needs the complete report-target inventory,
+                # which is independent of the old optimizer population.
+                snapshot = archive.fields(root, None, exclude_fields={'candidates'})
+                snapshot.update({key: header[key] for key in HOT_FIELDS if key in header})
+                header['observer_pending'] = manifest(snapshot, root)['observer_pending']
+            atomic_write_private_text(path, json.dumps(header, indent=4, allow_nan=False) + '\n')
+            return row
+
     def delete(self, owner, loop_id):
         """Remove owned run history atomically; retain definitions and reusable evidence."""
         path = self.path(owner, loop_id)
@@ -1012,7 +1116,7 @@ class LoopStore:
                 raise LoopDeletionConflict('Stop this loop and wait for its jobs to finish collecting before deleting it.')
             path.unlink()
 
-    def create(self, owner, settings, config, overrides, fingerprint, holdouts, comparison, queued=False, training_exclusions=None):
+    def create(self, owner, settings, config, overrides, fingerprint, holdouts, comparison, queued=False, training_exclusions=None, optimizer_research_version=None):
         """Create a durable run; chat-bound runs use reviewed default instructions only."""
         validate_cloud_loop_config(apply_run_limit(settings, config), settings['execution'])
         from ai_loop_search_limits import exposure_ceiling, validate_exposure_ceiling
@@ -1033,6 +1137,8 @@ class LoopStore:
                   'rubric': [], 'best': None, 'history': [], 'stagnation': 0, 'ai_calls': 0,
                   'ai_tokens_reserved': 0, 'ai_usd_reserved': 0.0, 'jev_usd_reserved': 0.0,
                   'baseline_required': True, 'validation_count': 0, 'holdout_used': False, 'pending_ai': None, 'errors': 0}
+        if optimizer_research_version is not None:
+            record.update(optimizer_research_version=optimizer_research_version, optimizer_trials={})
         from ai_loop_windows import bound_plan
         plan = bound_plan(settings)
         record.update(observer_enabled=True, observer_jobs=[],
@@ -1183,7 +1289,10 @@ def authorize_native_job(root, data, loop_id):
     try:
         if identifier(loop_id) != identifier(data['loop_id']):
             raise ValueError('Loop ownership mismatch')
-        current = LoopStore(Path(root) / 'data/loop_optimizer').read(data['loop_owner'], loop_id)
+        fields = {'status', 'deadline'}
+        if data.get('loop_observer'):
+            fields.add('observer_jobs')
+        current = LoopStore(Path(root) / 'data/loop_optimizer').read(data['loop_owner'], loop_id, fields=fields)
         observer = next((job for job in current.get('observer_jobs', [])
                          if job.get('observer_only') and job['operation'] == data.get('operation_id')
                          and (job.get('backend') or {}).get('id') == data.get('filename')), None) if data.get('loop_observer') else None

@@ -657,7 +657,98 @@ class WorkerConnection:
             with tempfile.TemporaryFile() as stream:
                 stream.write(payload); stream.seek(0)
                 self.command('/usr/local/bin/python -c ' + shlex.quote(script), stdin=stream, timeout=30)
-        self.command("mkdir -p " + self.remote_root + " && " + "PBGUI_WORKDIR=" + self.remote_root + " nohup " + WORKER + "run > " + self.remote_root + "/runner.log 2>&1 < /dev/null &", timeout=15)
+        guarded = self.proxy_budget_command()
+        launch = guarded or ("env PBGUI_WORKDIR=" + self.remote_root + " " + WORKER + "run")
+        self.command("mkdir -p " + self.remote_root + " && nohup " + launch + " > " + self.remote_root + "/runner.log 2>&1 < /dev/null &", timeout=15)
+        if guarded:
+            self.confirm_proxy_budget()
+
+    def proxy_budget_limit(self):
+        """Resolve the fixed user limit from the exact owned Loop operation."""
+        state = self.store.read(self.identifier)
+        if not state.get('loop_id') or state.get('kind') == 'calibration':
+            return None
+        from pb8_loop_store import LoopStore
+        record = LoopStore(self.store.root.parent / 'loop_optimizer').read(
+            state['loop_owner'], state['loop_id'], fields={'settings', 'jobs'})
+        settings = record['settings']
+        if settings.get('run_limit_mode') != 'proxy':
+            return None
+        job = next((job for job in record['jobs']
+                    if job.get('operation') == state.get('loop_operation')
+                    and job.get('kind') == 'optimizer'
+                    and (job.get('backend') or {}).get('id') == self.identifier
+                    and (job.get('backend') or {}).get('execution') == 'vast'), None)
+        limit = settings.get('run_proxy')
+        if job is None or type(limit) is not int or limit <= 0:
+            raise VastError('Cannot authorize remote Loop proxy limit', 422)
+        budget = (job.get('research') or {}).get('budget')
+        if budget and (budget.get('mode') != 'proxy' or budget.get('value') != limit):
+            raise VastError('Loop proxy budget differs from fixed user limit', 422)
+        return limit
+
+    def proxy_budget_command(self):
+        """Install only the job-scoped watchdog; retain the immutable native worker."""
+        limit = self.proxy_budget_limit()
+        if limit is None:
+            return None
+        source = PROJECT / 'setup/vast_gpu_benchmark/proxy_budget_worker.py'
+        if source.is_symlink():
+            raise VastError('Invalid proxy watchdog source', 422)
+        payload = source.read_bytes()
+        checksum = hashlib.sha256(payload).hexdigest()
+        target = self.remote_root + '/proxy-budget-' + checksum + '.py'
+        script = (
+            'import pathlib,sys,os,hashlib; root=pathlib.Path(' + repr(self.remote_root) + '); '
+            'assert not any(p.is_symlink() for p in (root,*root.parents)); '
+            'root.mkdir(parents=True,exist_ok=True); data=sys.stdin.buffer.read(65537); '
+            'assert 0<len(data)<=65536 and hashlib.sha256(data).hexdigest()==' + repr(checksum) + '; '
+            'target=pathlib.Path(' + repr(target) + '); assert not target.is_symlink(); '
+            'tmp=target.with_suffix(".tmp"); '
+            'fd=os.open(tmp,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_NOFOLLOW,0o600); '
+            'f=os.fdopen(fd,"wb"); f.write(data); f.close(); os.replace(tmp,target)'
+        )
+        with tempfile.TemporaryFile() as stream:
+            stream.write(payload); stream.seek(0)
+            self.command('/usr/local/bin/python -c ' + shlex.quote(script), stdin=stream, timeout=30)
+        self.store.update(self.identifier, proxy_budget_guard={'sha256': checksum, 'limit': limit})
+        return '/usr/local/bin/python ' + shlex.quote(target) + ' ' + shlex.quote(self.remote_root) + ' ' + str(limit)
+
+    def attach_proxy_budget(self):
+        """Attach the same bounded job guard to an already running native wrapper."""
+        command = self.proxy_budget_command()
+        if command is None:
+            return False
+        self.command('nohup ' + command + ' attach > ' + self.remote_root
+                     + '/proxy-budget.log 2>&1 < /dev/null &', timeout=15)
+        self.confirm_proxy_budget()
+        return True
+
+    def confirm_proxy_budget(self):
+        """Require a live job lock or recorded local Stop, never a stale PID alone."""
+        limit = self.store.read(self.identifier)['proxy_budget_guard']['limit']
+        script = (
+            'import pathlib,json,time,fcntl,os; root=pathlib.Path(' + repr(self.remote_root) + '); '
+            'assert not any(p.is_symlink() for p in (root,*root.parents)); '
+            'ok=False\n'
+            'for _ in range(40):\n'
+            ' if (root/"finished.json").is_file(): ok=True; break\n'
+            ' try:\n'
+            '  p=root/"proxy-budget-state.json"; assert not p.is_symlink(); state=json.loads(p.read_text())\n'
+            '  assert state.get("limit")== ' + str(limit) + '\n'
+            '  if state.get("stop_requested_at") and (root/"stop").is_file(): ok=True; break\n'
+            '  fd=os.open(root/"proxy-budget.lock",os.O_RDWR|os.O_NOFOLLOW)\n'
+            '  try:\n'
+            '   try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)\n'
+            '   except BlockingIOError: ok=True\n'
+            '  finally: os.close(fd)\n'
+            '  if ok: break\n'
+            ' except (OSError,ValueError,AssertionError): pass\n'
+            ' time.sleep(.1)\n'
+            'assert ok,"Remote proxy watchdog did not acknowledge ownership"\n'
+        )
+        self.command('/usr/local/bin/python -c ' + shlex.quote(script), timeout=10)
+        self.store.update(self.identifier, proxy_budget_guard_confirmed_at=time.time())
 
     @contextmanager
     def _collection_state_lock(self):

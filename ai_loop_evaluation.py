@@ -23,6 +23,17 @@ def evaluation_comparison(decision, options):
             raise ValueError('Evaluation criteria require metric, direction, reducer and reason')
         normalized.append({key: rule[key] for key in ('metric', 'direction', 'reducer', 'reason')})
     explanations = decision.get('candidate_assessments')
+    policy = decision.get('candidate_assessment_policy')
+    if policy is not None:
+        if (not isinstance(policy, dict) or set(policy) != {'scope', 'reason'}
+                or policy['scope'] != 'all_training_candidates'
+                or not isinstance(policy['reason'], str) or not policy['reason'].strip()
+                or explanations is not None):
+            raise ValueError('Use one common assessment policy with scope=all_training_candidates and reason, '
+                             'or explicit assessments for every candidate')
+        # Only the repeated prose is compressed. Every option still undergoes
+        # the same exact finite-value checks and per-report recomputation below.
+        explanations = dict.fromkeys(options, policy['reason'])
     if (not isinstance(explanations, dict) or set(explanations) != set(options)
             or any(not isinstance(value, str) or not value.strip() for value in explanations.values())):
         raise ValueError('Reassess every supplied training candidate under the same evaluation criteria')

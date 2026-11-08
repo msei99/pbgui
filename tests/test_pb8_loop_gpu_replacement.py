@@ -1589,15 +1589,16 @@ def test_stop_collection_has_shared_deadline_and_retains_available_artifacts(env
             clock[0] += timeout
             raise VastError('Transfer deadline reached')
     intent = {'deadline': 2000}
-    assert stop_and_collect(Connection(), queue.store, NATIVE, intent, lease_id=WORKER)
+    assert stop_and_collect(Connection(), queue.store, NATIVE, intent, lease_id=WORKER) is False
     assert operations == [('stop', 30), ('status', 30)]
     assert collections == [180]
     assert clock[0] == 1240
     state = queue.store.read(NATIVE)
-    assert state['status'] == 'cancelled' and state['collection_incomplete']
+    assert state['status'] == 'collecting' and state['collection_incomplete']
+    assert state['stop_process_pending'] and not state.get('stop_results_published')
     assert artifact.read_bytes() == b'previous verified snapshot'
-    assert stop_and_collect(Connection(), queue.store, NATIVE, intent, lease_id=WORKER)
-    assert operations == [('stop', 30), ('status', 30)] and collections == [180]
+    assert stop_and_collect(Connection(), queue.store, NATIVE, intent, lease_id=WORKER) is False
+    assert operations == [('stop', 30), ('status', 30), ('status', 10)] and collections == [180]
     assert not queue.store.read(WORKER, 'control.json')['cleanup']
 
 
@@ -1606,6 +1607,7 @@ def test_stop_collection_has_shared_deadline_and_retains_available_artifacts(env
 def test_stop_publishes_last_verified_results_without_hiding_execution_failure(environment, monkeypatch, outcome, publication_timeout):
     """The final Stop snapshot reaches native candidates before the runner exits."""
     import msgpack
+    was_partial = outcome == 'partial'
     from pathlib import Path
     from vast_job_runner import stop_and_collect
     from vast_jobs import write_json
@@ -1645,9 +1647,12 @@ def test_stop_publishes_last_verified_results_without_hiding_execution_failure(e
                 write_json(root / 'finished.json', dict(cancelled=outcome == 'cancelled',
                     exit_code=1 if outcome == 'failed' else 130 if outcome == 'cancelled' else 0))
             queue.store.update(NATIVE, final_collected=final, last_backup_at=clock[0])
-    assert stop_and_collect(Connection(), queue.store, NATIVE, {'deadline':2000}, lease_id=WORKER)
+    assert stop_and_collect(Connection(), queue.store, NATIVE, {'deadline':2000}, lease_id=WORKER) is (outcome != 'partial')
     current = queue.store.read(NATIVE)
-    assert current['status'] == ('cancelled' if outcome == 'partial' else outcome)
+    assert current['status'] == ('collecting' if outcome == 'partial' else outcome)
+    if outcome == 'partial':
+        assert current['stop_rpc_confirmed'] and current['stop_process_pending']
+        assert not current.get('stop_unconfirmed') and not current.get('stop_results_published')
     assert current['stop_reason'] == 'requested'
     if publication_timeout:
         assert not current.get('result_path') and current['collection_incomplete']
@@ -1658,9 +1663,21 @@ def test_stop_publishes_last_verified_results_without_hiding_execution_failure(e
         assert current['evaluations'] == 1 and Path(current['result_path']).is_dir()
         assert current['result_partial'] is (outcome == 'partial')
         assert ('exited with code 1' in (current.get('error') or '')) is (outcome == 'failed')
+    if outcome == 'partial' and not publication_timeout:
+        # A later real exit must download full results, rather than treating
+        # the already-published partial snapshot as a completed physical job.
+        outcome = 'completed'
+        clock[0] += 31
+        assert stop_and_collect(Connection(), queue.store, NATIVE, {'deadline': 2000}, lease_id=WORKER)
+        completed = queue.store.read(NATIVE)
+        assert collections == [False, True]
+        assert completed['status'] == 'completed' and completed['result_partial'] is False
+        assert completed['stop_execution_confirmed'] and not completed['stop_process_pending']
+        assert stop_and_collect(Connection(), queue.store, NATIVE, {'deadline': 2000}, lease_id=WORKER)
+        assert collections == [False, True]
     # A recovered supervisor must neither download again nor duplicate the import.
-    assert stop_and_collect(Connection(), queue.store, NATIVE, {'deadline':2000}, lease_id=WORKER)
-    assert len(collections) == 1
+    assert stop_and_collect(Connection(), queue.store, NATIVE, {'deadline':2000}, lease_id=WORKER) is (outcome != 'partial')
+    assert len(collections) == (2 if was_partial and not publication_timeout else 1)
     assert len(list(results_root.glob('fixture_vast_*'))) == (0 if publication_timeout else 1)
     if publication_timeout and outcome != 'partial':
         from vast_job_runner import finalize_collected_results
@@ -1850,3 +1867,120 @@ def test_interrupted_preparation_after_api_restart_cannot_leave_an_unrentable_su
         assert attempts_used(row) == 3 and row['jobs'][-1]['gpu_predecessor'] == original['operation']
         for key in ('config', 'overrides', 'optimizer_start', 'optimizer_archive', 'round'):
             assert row['jobs'][-1][key] == original[key]
+
+
+def test_replacement_preserves_research_budget_and_reverifies_successor(environment):
+    """A physical retry retains its partial quota and seed but must verify its new preparation."""
+    loops, queue, original, backend = environment
+    research = {'purpose': 'explore', 'budget': {'mode': 'proxy', 'value': 30000, 'fraction': .3},
+                'signature': 'a'*64, 'seed': 123456, 'seed_index': 0}
+    def reviewed(row):
+        """Attach only synthetic research metadata to the owned fixture predecessor."""
+        row['settings'].update(run_limit_mode='proxy', run_proxy=100000)
+        row['jobs'][0].update(research=research, research_verification={'status': 'old_verification'})
+    loops.update(OWNER, original['id'], reviewed)
+    service, row, _ = advance_to_capacity(environment)
+    row = service.step(row)
+    successor = row['jobs'][-1]
+    assert successor['research'] == research
+    assert 'research_verification' not in successor
+    row = service.step(row)
+    assert row['jobs'][-1]['research_verification'] == {'status': 'verified', 'boundary': 'native_preparation'}
+    assert backend.prepared[-1]['research']['budget']['value'] == 30000
+
+
+def test_replacement_monitor_enforces_partial_research_quota_and_records_progress(environment, monkeypatch):
+    """Parallel work cannot spend the full default quota while replacement is in progress."""
+    service, row, _ = reserved_successor(environment)
+    loops, queue, original, backend = environment
+    row = parallel_attempt(environment, row)
+    def setup(current):
+        """Use a 30k experiment alongside a 100k reviewed ceiling."""
+        current['settings'].update(run_limit_mode='proxy', run_proxy=100000)
+        current['jobs'][-1]['research'] = {'budget': {'mode': 'proxy', 'value': 30000, 'fraction': .3}}
+    row = loops.update(OWNER, row['id'], setup)
+    stopped = []
+    native_poll = backend.poll
+    def poll(current, job):
+        """Report an already completed batch without provider access."""
+        state = native_poll(current, job)
+        state.update(proxy_evaluations=32768, search_progress={'proxy_evaluations': 32768, 'generation': 4})
+        return state
+    def stop(current, job):
+        """Only the already running owned parallel job may be stopped."""
+        stopped.append(job['operation'])
+        queue.store.update(job['backend']['id'], status='cancelled')
+    monkeypatch.setattr(backend, 'poll', poll)
+    monkeypatch.setattr(backend, 'stop', stop)
+    current = service.monitor_jobs(row)
+    parallel = current['jobs'][-1]
+    assert stopped == ['7'*32] and parallel['limit_reached'] == 'proxy'
+    assert parallel['research_progress'][-1]['proxies'] == 32768
+
+
+def failed_setup(environment):
+    """Freeze an interrupted evaluation after an already-deleted pre-search rental."""
+    loops, queue, row, _ = environment
+    queue.store.update(NATIVE, status='failed', error='Worker setup exceeded 15 minutes',
+                       loop_operation=PREDECESSOR)
+    queue.store.update(WORKER, rental_state='deletion_verified', absent_checks=2, provider_checked_at=time.time())
+    queue.store.control(WORKER, 'cleanup')
+    def paused(current):
+        current.update(status='paused', phase='evaluate', pending_ai={'stage': 'evaluate'},
+                       last_ai_request={'outcome': 'interrupted', 'ended_at': time.time()},
+                       native_training_fallback={'active': True, 'round': 0},
+                       observations=[{'diagnostic': True}])
+        current['jobs'][0].update(status='failed', started=True)
+    return loops.update(OWNER, row['id'], paused)
+
+
+def test_deleted_failed_setup_recovers_preserved_trial_to_optimize(environment):
+    """An ended setup failure resumes search rather than replaying stale evaluation/fallback."""
+    loops, queue, _, backend = environment
+    original = failed_setup(environment)
+    service, row, _ = begin(environment)
+    op = open_replacement(row)
+    assert op['original_phase'] == 'evaluate' and op['resume_phase'] == 'optimize'
+    assert op['setup_recovery_context']['observations'] == [{'diagnostic': True}]
+    assert not row.get('pending_ai') and not row.get('native_training_fallback')
+    row = LoopController(loops.root.parent.parent, store=loops, backend=backend).action(OWNER, row['id'], 'resume')
+    for _ in range(3):
+        row = service.step(row)
+    assert open_replacement(row)['step'] == 'prepare'
+    successor = row['jobs'][-1]
+    for key in ('config', 'overrides', 'optimizer_start', 'optimizer_archive', 'round'):
+        assert successor[key] == original['jobs'][0][key]
+    assert row['jobs'][0]['status'] == 'failed' and attempts_used(row) == 2
+    worker = open_replacement(row)['worker_id']
+    queue.store.publish({'id': worker, 'kind': 'worker', 'rental_state': 'active',
+                         'loop_id': row['id'], 'loop_owner': OWNER, 'host_machine_id': 202})
+    row = service.change(row, lambda current, operation: operation.update(step='resume'))
+    row = service.step(row)
+    assert row['status'] == 'running' and row['phase'] == 'optimize'
+    assert row['settings'] == original['settings'] and row['deadline'] == original['deadline']
+    assert row['baseline'] == original['baseline'] and row['best'] == original['best']
+
+
+@pytest.mark.parametrize('case', ['started', 'proxies', 'wrong_error', 'wrong_operation', 'active_ai', 'history', 'active_job', 'one_absence'])
+def test_setup_recovery_rejects_unproven_or_busy_failure(environment, case):
+    """Recovery cannot replay real searches, active decisions or unverified deletion."""
+    loops, queue, _, _ = environment
+    row = failed_setup(environment)
+    if case == 'started':
+        queue.store.update(NATIVE, started_at=time.time())
+    elif case == 'proxies':
+        queue.store.update(NATIVE, proxy_evaluations=1)
+    elif case == 'wrong_error':
+        queue.store.update(NATIVE, error='Optimizer failed')
+    elif case == 'wrong_operation':
+        queue.store.update(NATIVE, loop_operation='f' * 32)
+    elif case == 'active_ai':
+        row['last_ai_request'] = {'outcome': 'running'}
+    elif case == 'history':
+        row['history'] = [{'round': row['round']}]
+    elif case == 'active_job':
+        row['jobs'].append(dict(row['jobs'][0], status='running', operation='f' * 32))
+    elif case == 'one_absence':
+        queue.store.update(WORKER, absent_checks=1)
+    with pytest.raises(VastError):
+        review(queue, row, WORKER)

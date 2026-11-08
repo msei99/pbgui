@@ -37,7 +37,8 @@ def test_prior_loop_holdout_cannot_block_new_template_run(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize('stage', ['interpret', 'bootstrap', 'evaluate'])
-def test_real_model_snapshot_excludes_background_reports(tmp_path, monkeypatch, stage):
+@pytest.mark.parametrize('research_version', [None, 1])
+def test_real_model_snapshot_excludes_background_reports(tmp_path, monkeypatch, stage, research_version):
     """Inspect actual frozen model input/history before any provider can be called."""
     monkeypatch.setattr('ai_loop_manual.installed_manual', lambda: {
         'source': 'offline_test_fixture', 'digest': 'test-manual',
@@ -45,6 +46,8 @@ def test_real_model_snapshot_excludes_background_reports(tmp_path, monkeypatch, 
                    'evidence_path': '/data/passivbot_manual/documents/0/text'}],
         'documents': [{'path': 'docs/optimizing.md', 'text': 'Original synthetic scoring manual'}], 'omitted': []})
     store, row = run_record(tmp_path)
+    row = store.update(row['owner'], row['id'], lambda current: current.update(
+        optimizer_research_version=research_version))
     marker = 'USER_REPORT_PRIVATE_987654321'
     row = store.update(row['owner'], row['id'], lambda current: current.update(observer_jobs=[
         {'observer_only': True, 'kind': kind, 'operation': marker, 'status': 'complete',
@@ -72,6 +75,9 @@ def test_real_model_snapshot_excludes_background_reports(tmp_path, monkeypatch, 
     payload = json.dumps(captured)
     assert marker not in payload and '987654321' not in payload
     assert 'observer_jobs' not in payload
+    if stage == 'evaluate' and research_version == 1:
+        from pb8_loop_evaluation_evidence import PROJECTION_VERSION
+        assert captured['required']['evaluation_projection_version'] == PROJECTION_VERSION
     assert captured['required']['passivbot_manual']['index'][0]['path'] == 'docs/optimizing.md'
     assert 'documents' not in captured['required']['passivbot_manual']
     assert captured['content']['passivbot_manual']['documents'][0]['text'] == 'Original synthetic scoring manual'

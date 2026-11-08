@@ -106,7 +106,10 @@ def test_mandatory_evidence_preserves_labels_and_distinct_distributions():
     source = {'stage': 'select', 'initial_config': {}, 'rubric': ROW['rubric'],
               'evidence': {'candidates': [{'id': 'a', **first}, {'id': 'b', **second}]}}
     compact = required_content(source)['evidence']
-    candidates = compact['candidates']
+    from pb8_loop_selection import query
+    assert compact['selection']['candidate_count'] == 2
+    frozen = {'id': 'a' * 32, 'sha256': 'b' * 64, 'data': source}
+    candidates = query(frozen, '/selection/rows', 0, 5000)['entries']
     assert len(candidates) == 2
     assert candidates[0]['metric_statistics'][DD] == {'mean': .33, 'max': .47}
     assert 'optional' not in candidates[0]['metric_statistics']

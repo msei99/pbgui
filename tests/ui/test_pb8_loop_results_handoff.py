@@ -347,7 +347,7 @@ def test_all_loop_evaluations_compare_native_results_and_restore(kind, prefix):
         browser.close()
 
 
-@pytest.mark.parametrize('kind,prefix,ended', [('observer_holdout','',False),('observer_full_range','/nested',True)])
+@pytest.mark.parametrize('kind,prefix,ended', [('observer_holdout','',False),('observer_full_range','/nested',True),('selected','/nested',True)])
 def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix,ended):
     """Real menu, delayed options/rental, rerender click lock, BFCache lifecycle and cold return."""
     browser_api=__import__('browser_driver')
@@ -360,18 +360,21 @@ def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix
         optimize=optimize.replace('%%'+key+'%%',value)
         backtest=backtest.replace('%%'+key+'%%',prefix+'/api/backtest-v8' if key=='API_BASE' else value)
     run_id='a'*32;panel='loops-results' if ended else 'loops-queue'
-    jobs=[{'operation':format(index+1,'032x'),'name':'evaluation_'+str(index),'round':1,'kind':kind,
+    jobs=[{'operation':format(index+1,'032x'),'name':'evaluation_'+str(index),'round':1,'kind':('observer_holdout' if index%2 else 'observer_full_range') if kind=='selected' else kind,
         'status':'complete','simulation_complete':True,'report_done':True,'log_available':True,'metrics':{}}
         for index in range(16)]
     run={'id':run_id,'name':'Isolated navigation','status':'completed' if ended else 'running','phase':'evaluate',
         'round':1,'ended':ended,'created_at':1000,'settings':{'config_name':'fixture','execution':'vast'},
         'jobs':[],'history':[],'observer_jobs':jobs,'observer_enabled':True,
         'cycles':[{'round':1,'status':'validated','ai_evaluated':True,'goals':[],'backtests':0,'completed_backtests':0}]}
+    if kind=='selected':
+        jobs.append(dict(jobs[0],round=2,source_round=1))
+    result_names=[]
     loops=[run];held_targets=[];held_options=[];held_rentals=[];errors=[];target_count=[];target_timings=[]
     with browser_api.sync_browser() as driver:
         # This part deliberately exercises full navigation; persisted lifecycle is simulated separately below.
         browser=driver.chromium.launch(headless=True,args=['--disable-features=BackForwardCache'])
-        page=browser.new_page(viewport={'width':1200,'height':900})
+        page=browser.new_page(viewport={'width':720 if kind=='selected' else 1200,'height':900})
         page.set_default_timeout(7000)
         # Capture the actual measure before document teardown can discard console events.
         page.add_init_script("""(() => {const measure=performance.measure.bind(performance);
@@ -393,13 +396,15 @@ def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix
                 asset=ROOT/'frontend'/path.removeprefix('/app/')
                 route.fulfill(body=asset.read_bytes() if asset.is_file() else b'',content_type='text/css' if asset.suffix=='.css' else 'text/javascript')
             elif path=='/api/optimize-v8/loops':route.fulfill(json={'loops':loops})
+            elif path=='/api/optimize-v8/loops/'+run_id:route.fulfill(json=run)
             elif path=='/api/optimize-v8/loops/configs':route.fulfill(json={'configs':[]})
             elif path=='/api/optimize-v8/loops/options':held_options.append(route)
             elif path.endswith('/rental'):held_rentals.append(route)
             elif path.endswith('/log-target'):
                 target_count.append(query['operation'][0]);held_targets.append(route)
             elif path=='/api/backtest-v8/results':
-                route.fulfill(json={'results':[{'path':'evaluation/result','config_name':'evaluation_0','exchange':'binance','analysis':{}}]})
+                name=query.get('name',['evaluation_0'])[0];result_names.append(name)
+                route.fulfill(json={'results':[{'path':name+'/result' if kind=='selected' else 'evaluation/result','config_name':name if kind=='selected' else 'evaluation_0','exchange':'binance','analysis':{}}]})
             elif path=='/api/backtest-v8/results/equity':
                 route.fulfill(body='datetime,usd_total_balance,usd_total_equity\n2020-01-01,1000,1000\n2020-01-02,1100,1090\n',content_type='text/csv')
             elif path=='/api/help/index':route.fulfill(json=[])
@@ -410,6 +415,84 @@ def test_loop_round_trip_keeps_report_and_restarts_cancelled_handoff(kind,prefix
         page.locator('.nav-group-btn[data-group="pbv8"]').click()
         page.locator('.nav-item[data-page="v8_optimize"]').click()
         page.wait_for_url('**/api/optimize-v8/main_page')
+        if kind=='selected':
+            report_url='http://pbgui.test'+prefix+'/api/optimize-v8/main_page?'+urlencode({'loop_id':run_id,'loop_view':'run','loop_tab':'performance'})+'#'+panel
+            page.goto(report_url)
+            table=page.locator('#loop-report-body table').first
+            browser_api.expect(table.locator('tbody tr')).to_have_count(17)
+            deduplicate=page.get_by_role('checkbox',name='Filter out duplicates')
+            deduplicate.check()
+            browser_api.expect(table.locator('tbody tr')).to_have_count(16)
+            selected=page.locator('#loop-evaluation-compare-selected')
+            browser_api.expect(selected).to_be_disabled()
+            def drag_rows(start, end):
+                """Add or remove a real pointer range without modifier keys."""
+                lines=table.locator('tbody tr')
+                lines.nth(end).scroll_into_view_if_needed()
+                lines.nth(start).scroll_into_view_if_needed()
+                first=lines.nth(start).bounding_box()
+                last=lines.nth(end).bounding_box()
+                page.mouse.move(first['x']+40,first['y']+first['height']/2)
+                page.mouse.down()
+                page.mouse.move(last['x']+40,last['y']+last['height']/2,steps=12)
+                page.mouse.up()
+
+            drag_rows(0,3)
+            browser_api.expect(selected).to_have_text('Compare selected (4)')
+            drag_rows(4,8)
+            browser_api.expect(selected).to_have_text('Compare selected (9)')
+            browser_api.expect(table.locator('tbody tr.selected')).to_have_count(9)
+            extra=table.locator('tbody tr').nth(9)
+            extra.click()
+            browser_api.expect(selected).to_have_text('Compare selected (10)')
+            extra.press('Space')
+            browser_api.expect(selected).to_have_text('Compare selected (9)')
+            drag_rows(0,3)
+            browser_api.expect(selected).to_have_text('Compare selected (5)')
+            for _ in range(5):
+                table.locator('tbody tr.selected').first.click()
+            browser_api.expect(selected).to_have_text('Compare selected (0)')
+            table.locator('tr[data-selection="'+jobs[0]['operation']+'"]').click()
+            table.locator('tr[data-selection="'+jobs[1]['operation']+'"]').click()
+            browser_api.expect(selected).to_have_text('Compare selected (2)')
+            browser_api.expect(selected).to_be_enabled()
+            table.get_by_role('button',name='Gain',exact=True).click()
+            run['updated_at']=1002
+            run['observer_jobs'].append(dict(jobs[0],round=3,source_round=1))
+            jobs[0]['metrics']['gain']=99
+            page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_function("(operation)=>document.querySelector('#loop-report-body tr[data-selection=\"'+operation+'\"]')?.cells[4].textContent.includes('99')",arg=jobs[0]['operation'])
+            browser_api.expect(table.locator('tbody tr')).to_have_count(16)
+            browser_api.expect(selected).to_have_text('Compare selected (2)')
+            page.reload()
+            browser_api.expect(page.get_by_role('checkbox',name='Filter out duplicates')).to_be_checked()
+            browser_api.expect(table.locator('tbody tr')).to_have_count(16)
+            browser_api.expect(selected).to_have_text('Compare selected (2)')
+            browser_api.expect(table.locator('tbody tr.selected')).to_have_count(2)
+            selected.click()
+            page.wait_for_url('**/backtest-v8/main_page?**')
+            compare_url=page.url
+            assert parse_qs(urlparse(compare_url).query)['result_evaluation']==['selected']
+            assert 'result_operations' not in compare_url
+            page.wait_for_function("results.length===2 && document.querySelector('#compare-chart-div')?.data?.length===4")
+            assert set(result_names)=={'evaluation_0','evaluation_1'}
+            assert page.evaluate('results.map(item=>item.loop_compare_label).join(" ")').count('Holdout')==1
+            assert 'Full Time Range' in page.evaluate('results.map(item=>item.loop_compare_label).join(" ")')
+            page.reload()
+            page.wait_for_function("results.length===2 && document.querySelector('#compare-chart-div')?.data?.length===4")
+            page.locator('#loop-return-button').click()
+            page.wait_for_url('**/optimize-v8/main_page?**')
+            browser_api.expect(page.locator('#loop-evaluation-compare-selected')).to_have_text('Compare selected (2)')
+            assert page.url==report_url
+            # An expired tab-local selection must explain the problem instead of loading everything.
+            page.evaluate("sessionStorage.removeItem('pbgui.loopEvaluationTargets')")
+            result_names.clear()
+            page.goto(compare_url)
+            page.wait_for_function("document.querySelector('#results-list').textContent.includes('no longer available in this tab')")
+            assert not result_names
+            assert not errors,errors
+            browser.close()
+            return
         page.locator('.sb-section[data-panel="'+panel+'"]').click()
         parent='#'+panel+'-table tr[data-key="'+run_id+'"]'
         cycle='#'+panel+'-table tr[data-key="'+run_id+':1"]'

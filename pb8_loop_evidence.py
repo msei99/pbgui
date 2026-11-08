@@ -16,6 +16,7 @@ from file_lock import advisory_file_lock
 from secure_files import (atomic_write_private_text, ensure_private_directory, read_regular_file_nofollow,
                           read_regular_file_prefix_nofollow)
 from logging_helpers import human_log as _log
+from pb8_loop_selection import PROJECTION_VERSION as SELECTION_PROJECTION_VERSION
 
 SERVICE = 'PB8LoopEvidence'
 MIN_CONTEXT = 256_000
@@ -26,7 +27,7 @@ SAFE_METRICS = {'backtest_completion_ratio', 'drawdown_worst_strategy_eq', 'draw
 TOOL_SCHEMA = {'type': 'object', 'properties': {'path': {'type': 'string', 'maxLength': 8192},
                'offset': {'type': 'integer', 'minimum': 0}}, 'required': ['path', 'offset'],
                'additionalProperties': False}
-TOOL_DESCRIPTION = 'Read exact immutable evidence and installed PB8 manuals for this decision. Start at /required, /history/index or a passivbot_manual evidence_path; follow next_offset.'
+TOOL_DESCRIPTION = 'Read exact immutable evidence, bounded /selection and /evaluation queries and installed PB8 manuals. Research source inputs: /data/optimizer_sources/{operation}. The mandatory package is already supplied initially; use /required only to recover missing pages after compaction. Query /selection/rank/{metric}/{reducer}/{min|max}, /history/index or a manual evidence_path; follow next_offset.'
 
 
 class LoopAIPause(Exception):
@@ -169,10 +170,66 @@ def select_findings(entries, record, budget=6000):
             'selection_version': SCHEMA, 'index_path': '/history/index'}, eligible
 
 
+def selection_snapshot_stale(snapshot):
+    """Old immutable selection snapshots must be rebuilt before their next dispatch."""
+    return (snapshot.get('data', {}).get('stage') == 'select'
+            and snapshot.get('required', {}).get('selection_projection_version') != SELECTION_PROJECTION_VERSION)
+
+
+def decision_snapshot_stale(snapshot):
+    """Reproject obsolete stage views without rewriting their immutable originals."""
+    from pb8_loop_evaluation_evidence import PROJECTION_VERSION
+    data = snapshot.get('data') or {}
+    if 'optimizer_research' in data.get('evidence', {}):
+        from pb8_loop_rng import VISIBILITY_VERSION
+        if snapshot.get('required', {}).get('rng_visibility_version') != VISIBILITY_VERSION:
+            return True
+    if (data.get('stage') in {'bootstrap', 'evaluate'} and 'optimizer_research' in data.get('evidence', {})
+            and snapshot.get('required', {}).get('optimizer_source_version') != 2):
+        return True
+    return selection_snapshot_stale(snapshot) or (
+        data.get('stage') == 'evaluate' and 'optimizer_research' in data.get('evidence', {})
+        and snapshot.get('required', {}).get('evaluation_projection_version') != PROJECTION_VERSION)
+
+
 def required_content(content):
-    """Keep every current goal/safety value; make historical reports optional."""
-    raw = copy.deepcopy(content)
+    """Keep exact evaluation evidence; select through a bounded population overview."""
+    selection = None
+    research_evaluation = (content.get('stage') == 'evaluate'
+                           and 'optimizer_research' in content.get('evidence', {}))
+    if content.get('stage') == 'select' or research_evaluation:
+        # Do not copy the population just to build a bounded overview. The
+        # original immutable snapshot remains the source for exact queries.
+        if content.get('stage') == 'select':
+            selection = content['evidence'].get('candidates') or []
+        inline = {'stage', 'input_digest', 'goals', 'loop_id', 'round_number', 'completed_rounds',
+                  'max_rounds', 'required_goal_ids', 'scenario_enabled', 'strategy_enabled',
+                  'execution', 'validation_budget', 'rubric', 'search_policy', 'hsl_mode',
+                  'run_limit', 'metric_dependency_policy', 'optimizer_metric_policy', 'passivbot_manual',
+                  'variant_config_schema', 'optimizer_patch_contract'}
+        raw = {key: copy.deepcopy(value) for key, value in content.items() if key in inline}
+        raw['context_references'] = {key: {'path': '/data/' + key.replace('~', '~0').replace('/', '~1')}
+                                     for key in content if key not in inline and key != 'evidence'}
+        raw['evidence'] = {}
+        for key, value in content['evidence'].items():
+            if key == 'candidates':
+                continue
+            if key in {'loop_id', 'round_number', 'max_candidates', 'validation_budget', 'repair_error',
+                       'remaining_runs', 'completed_rounds', 'completed_rounds_after_evaluation',
+                       'max_rounds', 'remaining_rounds', 'optimizer_attempts', 'cpu_validation_completed',
+                       'cpu_validation_pending', 'free_slots', 'required_rounds', 'required_rounds_remaining',
+                       'max_variants'} or (
+                    key == 'jev' and small_tree(value, 1500) and len(encode(value)) <= 1500):
+                raw['evidence'][key] = copy.deepcopy(value)
+            else:
+                raw['evidence'][key + '_reference'] = {
+                    'path': '/data/evidence/' + key.replace('~', '~0').replace('/', '~1')}
+    else:
+        raw = copy.deepcopy(content)
     relevant = SAFE_METRICS | {metric for rule in raw.get('rubric', []) for metric in rule['metrics']}
+    if raw.get('optimizer_patch_contract') and 'variant_config_schema' in raw:
+        raw['variant_config_schema'] = {'evidence_path': '/data/variant_config_schema',
+            'instruction': 'Complete schema for full-config variants; compact optimizer patches are preferred.'}
     initial = raw.get('initial_config') or {}
     stage = raw['stage']
     def walk(value, key=''):
@@ -255,7 +312,29 @@ def required_content(content):
                 missing[str(index)] = absent
             candidate['metrics_row'] = index
         evidence[name + '_metrics'] = {'columns': columns, 'rows': rows, 'missing': missing}
+    if selection is not None:
+        from pb8_loop_selection import overview
+        evidence['selection'] = overview(selection, relevant)
+        result['selection_projection_version'] = SELECTION_PROJECTION_VERSION
+    if research_evaluation:
+        from pb8_loop_evaluation_evidence import evaluation_overview, decision_brief, PROJECTION_VERSION
+        evidence['evaluation'] = evaluation_overview(content['evidence'], relevant)
+        evidence['decision_brief'] = decision_brief(content)
+        evidence['evaluation_policy'] = {'mode': (content['evidence'].get('evaluation_policy') or {}).get('mode'),
+            'instruction': 'Keep the same explained criteria for every qualified CPU training option. '
+                           'Use exact evaluation queries and candidate_assessment_policy for a shared explanation; '
+                           'the controller recomputes every option, including unqueried options. '
+                           'All original hard limits and winner selection rules remain binding.'}
+        result['evaluation_projection_version'] = PROJECTION_VERSION
     result['evidence'] = evidence
+    if 'optimizer_research' in content.get('evidence', {}):
+        from pb8_loop_rng import model_view, VISIBILITY_VERSION
+        result = model_view(result)
+        result['rng_visibility_version'] = VISIBILITY_VERSION
+        if content.get('stage') in {'bootstrap', 'evaluate'}:
+            result['optimizer_source_version'] = 2
+            result.setdefault('context_references', {})['optimizer_sources'] = {'path': '/data/optimizer_sources'}
+
     return result
 
 
@@ -364,6 +443,9 @@ class EvidenceStore:
                     value = json.loads(text)
                     if value.get('id') != item['id'] or value.get('loop') != item.get('loop'):
                         raise ValueError('Archive identity mismatch')
+                    if (str(item['id']).startswith('native_source:') and ':optimizer:' in item['id']
+                            and value != item):
+                        raise ValueError('Optimizer input archive content mismatch')
                     manifest[item['id']] = {'key': key, 'sha256': hashlib.sha256(text).hexdigest(),
                                             'bytes': len(text), 'loop': item.get('loop'),
                                             'created_at': item.get('created_at'), 'required': False}
@@ -380,6 +462,16 @@ class EvidenceStore:
 
     def resolve(self, snapshot, path):
         """Read only archive identities frozen in this snapshot, never caller filenames."""
+        def resolve_pointer(value, subpath):
+            """Protect scalar reads through historical seed-delta value pointers too."""
+            result = pointer(value, subpath)
+            if 'optimizer_research' in snapshot.get('data', {}).get('evidence', {}):
+                from pb8_loop_rng import seed_path
+                if subpath and subpath.rsplit('/', 1)[-1] in {'value', 'before', 'after'}:
+                    parent = pointer(value, subpath.rsplit('/', 1)[0])
+                    if isinstance(parent, dict) and seed_path(parent.get('path')):
+                        return None
+            return result
         if path == '/history/index':
             return [{'id': key, **{name: value.get(name) for name in ('loop', 'created_at', 'bytes')}}
                     for key, value in sorted(snapshot['history'].items())]
@@ -394,12 +486,12 @@ class EvidenceStore:
                 text = read_regular_file_nofollow(path_on_disk, self.store.root)
                 if hashlib.sha256(text).hexdigest() != binding['sha256']:
                     raise ValueError('Archive content hash mismatch')
-                return pointer(json.loads(text), '/' + '/'.join(parts[3:])) if len(parts) > 3 else json.loads(text)
+                return resolve_pointer(json.loads(text), '/' + '/'.join(parts[3:])) if len(parts) > 3 else json.loads(text)
             except (ValueError, OSError) as exc:
                 if binding.get('required'):
                     raise LoopAIPause('evidence_recovery', 'Required archive failed integrity verification') from exc
                 return {'error': 'evidence_integrity', 'path': path, 'available': False}
-        return pointer({'required': snapshot['required'], 'data': snapshot['data']}, path)
+        return resolve_pointer({'required': snapshot['required'], 'data': snapshot['data']}, path)
 
     def _snapshot_header(self, path, owner):
         """Read only identity/age fields preceding the immutable evidence body."""
@@ -491,16 +583,37 @@ class EvidenceStore:
                      level='WARNING', meta={'bytes': size})
 
 
-def records(value, path=''):
+def small_tree(value, limit=4000):
+    """Bound work before tokenizing a subtree; never encode an entire large collection."""
+    stack = [value]
+    remaining = limit
+    while stack and remaining >= 0:
+        item = stack.pop()
+        remaining -= 1
+        if isinstance(item, str):
+            remaining -= len(item)
+        elif isinstance(item, (dict, list)):
+            remaining -= len(item)
+            if remaining < 0:
+                return False
+            if isinstance(item, dict):
+                stack.extend(item.keys())
+                stack.extend(item.values())
+            else:
+                stack.extend(item)
+    return remaining >= 0
+
+
+def records(value, path='', record_tokens=900):
     """Bundle small subtrees, split larger ones in deterministic pointer order."""
-    if path and tokens(value) <= 900:
+    if path and small_tree(value) and tokens(value) <= record_tokens:
         yield {'path': path, 'value': value}
     elif isinstance(value, dict) and value:
         for key, child in value.items():
-            yield from records(child, path + '/' + key.replace('~', '~0').replace('/', '~1'))
+            yield from records(child, path + '/' + key.replace('~', '~0').replace('/', '~1'), record_tokens)
     elif isinstance(value, list) and value:
         for index, child in enumerate(value):
-            yield from records(child, path + '/' + str(index))
+            yield from records(child, path + '/' + str(index), record_tokens)
     else:
         yield {'path': path, 'value': value}
 
@@ -512,8 +625,11 @@ class EvidenceSession:
         if type(page_tokens) is not int or not 512 <= page_tokens <= 6144:
             raise ValueError('Invalid evidence page profile')
         self.store, self.snapshot, self.page_tokens = evidence_store, snapshot, page_tokens
+        self.private_rng = 'optimizer_research' in snapshot.get('data', {}).get('evidence', {})
         self.lock = threading.RLock()
         self.charge = None
+        self.selection_index = None
+        self.evaluation_index = None
         self.dialog = -1
         self.total_calls = 0
         self.total_budget_notices = 0
@@ -538,19 +654,23 @@ class EvidenceSession:
         self.covered, self.seen = set(), set()
         self.intervals = {}
 
-    def pages(self, value, path):
-        """Create actual bounded JSON pages, including metadata and scalar chunks."""
-        entries = []
-        for entry in records(value):
-            if tokens(entry) + 180 <= self.page_tokens:
-                entries.append(entry)
+    def page_entries(self, value, path=''):
+        """Yield bounded exact records and string fragments without collecting the subtree."""
+        for entry in records(value, record_tokens=min(900, self.page_tokens - 256)):
+            if self.private_rng:
+                from pb8_loop_rng import model_view
+                entry = {**entry, 'value': model_view(entry['value'], path + entry['path'])}
+            if small_tree(entry) and tokens(entry) + 180 <= self.page_tokens:
+                yield entry
                 continue
             text = entry['value']
             if not isinstance(text, str):
                 raise LoopAIPause('context_budget', 'An evidence scalar cannot fit its page profile')
             offset = 0
             while offset < len(text):
-                low, high, best = 1, len(text) - offset, None
+                # Bound each probe too: escaped text can use at most a modest
+                # number of characters inside a single output page.
+                low, high, best = 1, min(len(text) - offset, self.page_tokens * 4), None
                 while low <= high:
                     count = (low + high) // 2
                     fragment = {'path': entry['path'], 'value': text[offset:offset + count],
@@ -561,20 +681,26 @@ class EvidenceSession:
                         high = count - 1
                 if best is None:
                     raise LoopAIPause('context_budget', 'Evidence pointer exceeds page profile')
-                entries.append(best)
+                yield best
                 offset = best['char_end']
-        result, current, start = [], [], 0
-        for entry in entries:
+
+    def iter_pages(self, value, path):
+        """Construct only requested pages, with one bounded record of lookahead."""
+        current, start = [], 0
+        for entry in self.page_entries(value, path):
             candidate = self.envelope(path, start, current + [entry], False)
             if current and tokens(candidate) > self.page_tokens:
-                result.append(self.envelope(path, start, current, False))
+                yield self.envelope(path, start, current, False)
                 start += len(current)
                 current = []
             current.append(entry)
             if tokens(self.envelope(path, start, current, False)) > self.page_tokens:
                 raise LoopAIPause('context_budget', 'Evidence page metadata exceeds safe profile')
-        result.append(self.envelope(path, start, current, True))
-        return result
+        yield self.envelope(path, start, current, True)
+
+    def pages(self, value, path):
+        """Materialize only the bounded mandatory recovery set when coverage needs it."""
+        return list(self.iter_pages(value, path))
 
     def envelope(self, path, offset, entries, complete):
         """Use the same response shape for measurement and actual tool delivery."""
@@ -644,7 +770,23 @@ class EvidenceSession:
         self.seen.add(signature)
         if self.calls > 32 and self.stalled >= 4:
             raise LoopAIPause('evidence_recovery', 'Repeated evidence reads made no progress')
-        pages = self.required_pages if path == '/required' else self.pages(self.store.resolve(self.snapshot, path), path)
+        if path.startswith('/evaluation/'):
+            from pb8_loop_evaluation_evidence import query, EvaluationIndex
+            if self.evaluation_index is None:
+                self.evaluation_index = EvaluationIndex(self.snapshot['data'].get('evidence') or {})
+            result = query(self.snapshot, path, offset, self.page_tokens, self.evaluation_index)
+            self.cache[cache_key] = (signature, result)
+            return result
+        if path.startswith('/selection/'):
+            from pb8_loop_selection import query, SelectionIndex
+            if path.startswith('/selection/rank/') and self.selection_index is None:
+                content = self.snapshot['data']
+                self.selection_index = SelectionIndex(content.get('evidence', {}).get('candidates', []),
+                                                      content.get('rubric') or [])
+            result = query(self.snapshot, path, offset, self.page_tokens, self.selection_index)
+            self.cache[cache_key] = (signature, result)
+            return result
+        pages = self.required_pages if path == '/required' else self.iter_pages(self.store.resolve(self.snapshot, path), path)
         result = next((page for page in pages if page['offset'] == offset), None)
         if result is None:
             raise ValueError('Offset must match a returned page boundary')
@@ -653,6 +795,22 @@ class EvidenceSession:
                 self._mark(path + entry['path'], entry)
         self.cache[cache_key] = (signature, result)
         return result
+
+    def close(self):
+        """Release session-owned query indexes after success, failure or cancellation."""
+        with self.lock:
+            try:
+                if self.selection_index is not None:
+                    try:
+                        self.selection_index.close()
+                    finally:
+                        self.selection_index = None
+            finally:
+                if self.evaluation_index is not None:
+                    try:
+                        self.evaluation_index.close()
+                    finally:
+                        self.evaluation_index = None
 
     def missing(self):
         """Return whole required pages not re-read since the last compaction."""

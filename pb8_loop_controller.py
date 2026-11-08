@@ -45,7 +45,24 @@ async def owned_thread(function, *args, **kwargs):
     """Join a started filesystem/process operation before honoring task cancellation."""
     task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
     try:
-        return await asyncio.shield(task)
+        try:
+            return await asyncio.wait_for(asyncio.shield(task), timeout=10)
+        except TimeoutError:
+            if task.done():
+                return task.result()
+            import sys
+            stacks = {}
+            for frame in sys._current_frames().values():
+                names = []
+                while frame is not None and len(names) < 8:
+                    names.append(frame.f_code.co_name)
+                    frame = frame.f_back
+                key = '/'.join(names)
+                stacks[key] = stacks.get(key, 0) + 1
+            _log(SERVICE, 'Loop operation exceeds ten seconds', level='WARNING',
+                 meta={'function': getattr(function, '__qualname__', type(function).__name__),
+                       'thread_functions': dict(list(stacks.items())[:16])})
+            return await asyncio.shield(task)
     except asyncio.CancelledError:
         await asyncio.gather(task, return_exceptions=True)
         raise
@@ -60,6 +77,7 @@ class LoopController:
         self.observers = ObserverJobs(self.store, self.backend, owned_thread)
         self._task = None
         self._steps = {}
+        self._observer_steps = {}
         self._closing = False
         self._active_decisions = set()
         self._evidence_retention_at = 0
@@ -73,12 +91,13 @@ class LoopController:
 
     async def close(self):
         self._closing = True
-        tasks = [task for task in [self._task, *self._steps.values()] if task is not None]
+        tasks = [task for task in [self._task, *self._steps.values(), *self._observer_steps.values()] if task is not None]
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
         self._idle_paused.clear()
         self._steps.clear()
+        self._observer_steps.clear()
         self._task = None
 
     async def create(self, owner, settings, bundle=None, queued=False):
@@ -88,7 +107,8 @@ class LoopController:
         config, overrides, fingerprint, holdouts, comparison = await owned_thread(self.backend.initial, *args)
         exclusions = copy.deepcopy(holdouts)
         validate_change({'settings': settings, 'initial_config': config, 'initial_overrides': overrides, 'holdouts': holdouts, 'training_exclusions': exclusions}, config, overrides)
-        record = await owned_thread(self.store.create, owner, settings, config, overrides, fingerprint, holdouts, comparison, queued=queued, training_exclusions=exclusions)
+        record = await owned_thread(self.store.create, owner, settings, config, overrides, fingerprint, holdouts, comparison, queued=queued, training_exclusions=exclusions,
+                                    optimizer_research_version=1 if settings['execution'] in {'gpu', 'vast'} else None)
         return record
 
     def action(self, owner, loop_id, action):
@@ -132,19 +152,23 @@ class LoopController:
 
     def delete(self, owner, loop_id):
         """Exclude concurrent controller work while deleting a collected owned run."""
-        path = self.store.path(owner, loop_id).with_suffix('.controller')
-        if path.is_symlink():
-            raise ValueError('Loop controller storage must not contain symlinks')
-        fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        descriptors = []
         try:
-            try:
-                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as exc:
-                raise LoopDeletionConflict('This loop is still processing. Wait for collection to finish before deleting it.') from exc
+            for suffix in ('.controller', '.observer-controller'):
+                path = self.store.path(owner, loop_id).with_suffix(suffix)
+                if path.is_symlink():
+                    raise ValueError('Loop controller storage must not contain symlinks')
+                fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+                descriptors.append(fd)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError as exc:
+                    raise LoopDeletionConflict('This loop is still processing. Wait for collection to finish before deleting it.') from exc
             self.store.delete(owner, loop_id)
         finally:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-            os.close(fd)
+            for fd in reversed(descriptors):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
 
     async def _run(self):
         while not self._closing:
@@ -154,7 +178,9 @@ class LoopController:
                     key = record['id']
                     observer_pending = (record['observer_pending'] if record.get('_metadata_only')
                                         else self.observers.pending(record))
-                    if record['status'] in TERMINAL and record.get('cleanup_done') and not observer_pending:
+                    if record['status'] in TERMINAL and record.get('cleanup_done'):
+                        if observer_pending:
+                            self._schedule_observers(record['owner'], key, allow_launch=True)
                         continue
                     task = self._steps.get(key)
                     if (task is not None and not task.done() and record['status'] in {'paused', 'stopping'}
@@ -175,7 +201,7 @@ class LoopController:
                             if await owned_thread(self.store._read_stamp, path) == idle_stamp:
                                 continue
                         self._idle_paused.pop(idle_key, None)
-                        self._steps[key] = asyncio.create_task(self.tick(record['owner'], key), name='pb8-loop-' + key)
+                        self._steps[key] = asyncio.create_task(self.tick(record['owner'], key, background_reports=True), name='pb8-loop-' + key)
                 for key in list(self._steps):
                     if self._steps[key].done():
                         if not self._steps[key].cancelled():
@@ -196,7 +222,49 @@ class LoopController:
                 _log(SERVICE, f'Loop scan failed: {type(exc).__name__}', level='ERROR', meta={'traceback': traceback.format_exc()})
             await asyncio.sleep(2)
 
-    async def tick(self, owner, loop_id):
+    def _schedule_observers(self, owner, loop_id, *, allow_launch):
+        """Own one independent report pass so its I/O cannot delay optimizer polling."""
+        previous = self._observer_steps.get(loop_id)
+        if self._closing or previous is not None and not previous.done():
+            return
+        task = asyncio.create_task(self._observer_tick(owner, loop_id, allow_launch=allow_launch),
+                                   name='pb8-loop-reports-' + loop_id)
+        self._observer_steps[loop_id] = task
+
+        def finished(completed):
+            """Release the bounded registry entry and retrieve failures deterministically."""
+            if self._observer_steps.get(loop_id) is completed:
+                self._observer_steps.pop(loop_id, None)
+            if not completed.cancelled():
+                completed.exception()
+        task.add_done_callback(finished)
+
+    async def _observer_tick(self, owner, loop_id, *, allow_launch):
+        """Serialize reports across API processes, independently of training ownership."""
+        path = self.store.path(owner, loop_id).with_suffix('.observer-controller')
+        fd = None
+        try:
+            fd = os.open(path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return
+            current = await owned_thread(getattr(self.store, 'read_runtime', self.store.read), owner, loop_id)
+            if allow_launch:
+                await self.observers.tick(current)
+            else:
+                await self.observers.tick(current, allow_launch=False)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log(SERVICE, f'User-only evaluation for {loop_id}: {type(exc).__name__}', level='WARNING',
+                 meta={'traceback': traceback.format_exc()})
+        finally:
+            if fd is not None:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                os.close(fd)
+
+    async def tick(self, owner, loop_id, *, background_reports=False):
         """Claim nonblocking cross-process ownership for one recoverable state transition."""
         path = self.store.owner_dir(owner) / (loop_id + '.controller')
         if path.is_symlink():
@@ -209,7 +277,7 @@ class LoopController:
                 return
             try:
                 read_stamp = await owned_thread(self.store._read_stamp, self.store.path(owner, loop_id))
-                record = await owned_thread(self.store.read, owner, loop_id)
+                record = await owned_thread(self._read_execution, owner, loop_id)
             except FileNotFoundError:
                 # A queued/finished run may have been deleted after the scan.
                 return
@@ -257,7 +325,10 @@ class LoopController:
                     current['last_error'] = (str(exc).strip() or type(exc).__name__)[:1000]
                     # Managed transient requests have their own bounded retry
                     # policy. An interrupted or exhausted call cannot restart it.
-                    if isinstance(exc, LoopAIRequestFailed) or current.get('pending_ai') or current['errors'] >= 3:
+                    correcting_proposal = (current.get('optimizer_research_version') == 1
+                        and current['phase'] in {'interpret', 'bootstrap', 'select', 'evaluate'}
+                        and isinstance(exc, ValueError) and not isinstance(exc, LoopAIRequestFailed))
+                    if isinstance(exc, LoopAIRequestFailed) or current.get('pending_ai') or (current['errors'] >= 3 and not correcting_proposal):
                         current['status'] = 'failed'
                         current['reason'] = current['last_error']
                         current['failure'] = failure_details(current, type(exc).__name__)
@@ -266,20 +337,42 @@ class LoopController:
                     else:
                         current.pop('last_ai_decision', None)
                         current['repair_error'] = str(exc)[:1000]
+                        if correcting_proposal:
+                            current['decision_repair'] = {'active': True, 'attempts': current['errors'],
+                                'error': current['repair_error'],
+                                'retry_at': time.time() + min(300, 15 * 2 ** min(current['errors'] - 1, 5))}
                 updated = await owned_thread(self.store.update, owner, loop_id, failed)
                 _log(SERVICE, f"Loop {loop_id}, phase {record['phase']}, round {record['round'] + 1}: "
                      f'{type(exc).__name__}: {str(exc).strip() or type(exc).__name__}', level='ERROR',
                      meta={'failure': updated.get('failure'), 'traceback': traceback.format_exc()})
             # Separate failure boundary: user-only diagnostics never change the Loop's decisions/errors.
             try:
-                current = await owned_thread(self.store.read, owner, loop_id)
-                if (phase_before != 'optimize' and current.get('phase') == 'optimize'
-                        and current['status'] in ACTIVE):
+                current = await owned_thread(self._read_execution, owner, loop_id)
+                from pb8_loop_research import enabled as research_enabled
+                stopping_training = (research_enabled(current) and current.get('phase') == 'optimize'
+                    and any(job.get('kind') == 'optimizer' and job.get('round') == current['round']
+                        and job.get('status') not in JOB_FINISHED and job.get('limit_reached')
+                        for job in current.get('jobs', [])))
+                pending_training = (research_enabled(current) and current.get('phase') == 'optimize'
+                    and any(job.get('kind') == 'optimizer' and job.get('round') == current['round']
+                        and job.get('status') not in JOB_FINISHED
+                        and (not job.get('started') or job.get('status') in {'planned', 'queued'})
+                        for job in current.get('jobs', [])))
+                if (current['status'] in ACTIVE and
+                        (stopping_training or research_enabled(current) and current.get('phase') in {'select', 'evaluate'} or
+                         phase_before != 'optimize' and current.get('phase') == 'optimize')):
                     # Release this transition's controller claim first. The next
-                    # tick prepares/starts training before expensive report work;
-                    # its normal observer pass still runs after training launch.
+                    # tick evaluates/starts training before expensive report work;
+                    # its normal observer pass runs while training is active.
                     return
-                await self.observers.tick(current)
+                if background_reports:
+                    self._schedule_observers(owner, loop_id, allow_launch=not pending_training)
+                elif pending_training and current['status'] in ACTIVE:
+                    # Existing reports may complete while a rental slot is busy;
+                    # defer their expensive preparation/launch, not their results.
+                    await self.observers.tick(current, allow_launch=False)
+                else:
+                    await self.observers.tick(current)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -313,12 +406,19 @@ class LoopController:
             job['status'] not in OBSERVER_FINISHED and (job.get('backend') or job.get('started')))
             for job in record.get('observer_jobs', []))
 
+    def _read_execution(self, owner, loop_id):
+        """Keep population hydration out of active optimizer polling."""
+        return getattr(self.store, "read_execution", self.store.read)(owner, loop_id)
+
     def commit(self, record, function):
         """Reject decisions made before a newer user pause/stop action."""
         def guarded(current):
             if current['control_generation'] != record['control_generation'] or current['status'] not in ACTIVE:
                 raise ValueError('A newer pause or stop invalidated the pending transition')
+            phase = current['phase']
             function(current)
+            if current.get('decision_repair') and current['phase'] != phase:
+                current['decision_repair']['active'] = False
             if current['status'] == 'failed':
                 current['failure'] = failure_details(current)
         return self.store.update(record['owner'], record['id'], guarded)
@@ -352,16 +452,23 @@ class LoopController:
             return f"{len(self._active_decisions)} AI Loop request(s) still running. Wait for the response before restarting."
         return ''
 
-    def job(self, record, kind, config, overrides, reason, candidate=None):
-        """Snapshot an experiment with a fresh population and a unique persisted RNG seed."""
+    def job(self, record, kind, config, overrides, reason, candidate=None, experiment=None):
+        """Snapshot an experiment with a fresh population and durable RNG allocation."""
         token = uuid.uuid4().hex
         start = None
+        research = None
+        from pb8_loop_research import enabled, experiment_plan, resolve_variant
+        if kind == 'optimizer' and enabled(record):
+            variant = resolve_variant(record, {'config': config, 'overrides': overrides,
+                                               'experiment': experiment})
+            config, overrides, experiment = variant['config'], variant['overrides'], variant['experiment']
+            research = experiment_plan(record, config, overrides, experiment)
         if kind == 'optimizer':
-            seed = int(token[:8], 16) & 0x7fffffff
-            used = {item.get('config', {}).get('optimize', {}).get('seed') for item in record.get('jobs', [])}
-            used.add(record['initial_config'].get('optimize', {}).get('seed'))
-            while seed in used:
-                seed = (seed + 1) & 0x7fffffff
+            from pb8_loop_rng import allocate_seed
+            seed = allocate_seed(record)
+            if research is not None:
+                research['seed'] = seed
+                research['seed_policy'] = 'controller_random'
             config = fresh_optimizer_config(config, seed)
             config, overrides, start = apply_optimizer_start(record, config, overrides)
             start.update(population='fresh_random', seed=seed, reference_only=True)
@@ -380,6 +487,7 @@ class LoopController:
                 'kind': kind, 'round': record['round'], 'config': copy.deepcopy(config),
                 'overrides': copy.deepcopy(overrides), 'reason': str(reason)[:4000],
                 'optimizer_start': start, 'optimizer_archive': archive,
+                **({'research': research} if research is not None else {}),
                 'candidate': candidate, 'status': 'planned', 'backend': None, 'started': False, 'created_at': time.time()}
 
     async def remember(self, record, evidence_id, entry):
@@ -389,6 +497,190 @@ class LoopController:
         except OSError as exc:
             raise LoopAIPause('evidence_storage', 'The full finding could not be archived',
                               error_type=type(exc).__name__) from exc
+
+    @staticmethod
+    def pending_validation_retries(record):
+        """Return the latest attempt for each candidate lacking a readable CPU result."""
+        successful = {o['operation'] for o in record.get('observations') or []
+                      if o.get('exact') and o.get('per_report')}
+        latest = {}
+        completed = set()
+        for job in record['jobs']:
+            candidate = job.get('candidate') or {}
+            if (job['kind'] != 'validation' or job.get('round') != record['round']
+                    or job.get('diagnostic_only') or not candidate):
+                continue
+            key = (candidate.get('optimizer_job'), candidate.get('id'))
+            latest[key] = job
+            if job['operation'] in successful:
+                completed.add(key)
+        return [job for key, job in latest.items() if key not in completed]
+
+    async def import_native_training(self, record):
+        """Advance from exact Vast results without launching a local validation process."""
+        from pb8_loop_native import select, distinct, VERSION, IMPORT_ATTEMPTS
+        from pb8_loop_gpu_replacement import replaced_predecessor
+        retry = record.get('native_training_retry') or {}
+        if retry.get('round') == record['round'] and retry.get('retry_at', 0) > time.time():
+            return
+        candidates = record['candidates']
+        reload_errors = []
+        if retry.get('round') == record['round']:
+            candidates = []
+            for source in record['jobs']:
+                if (source['kind'] == 'optimizer' and source['round'] == record['round']
+                        and not replaced_predecessor(record, source)):
+                    try:
+                        candidates.extend(await owned_thread(self.backend.candidates, record, source))
+                    except (ValueError, OSError, RuntimeError) as exc:
+                        reload_errors.append(str(exc)[:500])
+            if not candidates:
+                candidates = record['candidates']
+        selected, summary = await owned_thread(select, record, candidates)
+        if not summary['verified']:
+            attempts = retry.get('attempts', 0) + 1 if retry.get('round') == record['round'] else 1
+            errors = summary['errors'] + reload_errors + [job['result_error'] for job in record['jobs']
+                if job['kind'] == 'optimizer' and job['round'] == record['round'] and job.get('result_error')]
+            message = '; '.join(dict.fromkeys(errors))[:1000] or 'No verifiable exact Vast CPU training reports were found'
+            if attempts >= IMPORT_ATTEMPTS:
+                def fallback(row):
+                    row.update(native_training_fallback={'active': True, 'round': row['round'],
+                        'attempts': attempts, 'reason': message, 'at': time.time()},
+                        native_training_retry=None, native_training_summary=summary,
+                        native_training_round=None, candidates=candidates,
+                        phase='select' if candidates else 'evaluate', observations=[], repair_error=message)
+                updated = await owned_thread(self.commit, record, fallback)
+                _log(SERVICE, 'Native CPU import failed; using local validation for this round: ' + message,
+                     level='WARNING')
+                return updated
+            await owned_thread(self.commit, record, lambda row: row.update(
+                native_training_retry={'round': row['round'], 'attempts': attempts,
+                                       'retry_at': time.time() + 10 * 2 ** (attempts - 1),
+                                       'error': message}, native_training_summary=summary))
+            _log(SERVICE, 'Native CPU import will retry before local fallback: ' + message, level='WARNING')
+            return
+        if not summary['ranking_available']:
+            # Qualitative or unavailable ranking criteria still use the model, never a local rerun.
+            qualified = distinct([candidate for candidate in candidates
+                                  if qualified_winner(candidate.get('native_training'))])
+            from pb8_loop_native import TOP_COUNT
+            decision = await self.decision(record, 'select', {'candidates': qualified,
+                'max_candidates': min(TOP_COUNT, len(qualified)),
+                'validation_budget': {'remaining': len(qualified), 'max_candidates': min(TOP_COUNT, len(qualified)),
+                                      'source': 'vast_cpu_exact'},
+                'native_training_summary': summary})
+            chosen = decision.get('candidate_ids') or []
+            if (len(chosen) != min(TOP_COUNT, len(qualified)) or len(set(chosen)) != len(chosen)
+                    or any(value not in {candidate['id'] for candidate in qualified} for value in chosen)):
+                raise ValueError('Select five distinct qualified native CPU candidates')
+            selected = [candidate for candidate in qualified if candidate['id'] in chosen]
+            summary.update(selected=len(selected), selection_reason=decision.get('reason'))
+        jobs, observations = [], []
+        for candidate in selected:
+            candidate = copy.deepcopy(candidate)
+            result = candidate.pop('native_training')
+            config = await owned_thread(self.backend.validation_config, record, candidate)
+            try:
+                job = await owned_thread(self.job, record, 'validation', config, candidate['overrides'],
+                    'Exact Vast CPU training result reused; no local backtest', candidate=candidate)
+            except ValueError as exc:
+                await owned_thread(self.commit, record, lambda row: row.update(native_training_retry={
+                    'round': row['round'], 'attempts': retry.get('attempts', 0) + 1,
+                    'manual_resume': True, 'error': str(exc)[:1000]}))
+                raise LoopAIPause('native_training_safety', 'Native CPU candidate safety check failed: ' + str(exc)) from exc
+            job.update(name='native_cpu_' + job['operation'][:8], status='complete',
+                       native_reused=True, native_observation=result)
+            jobs.append(job)
+            observations.append({**result, 'operation': job['operation'], 'candidate': candidate, 'round': record['round']})
+        def imported(row):
+            if retry.get('round') == row['round']:
+                for source in row['jobs']:
+                    if source['kind'] == 'optimizer' and source['round'] == row['round']:
+                        count = sum(candidate.get('optimizer_job') == source['operation'] for candidate in candidates)
+                        if count:
+                            source.update(results_consumed=True, result_count=count, result_error=None)
+            # Retain full exact reports only for the five reusable checkpoints;
+            # population evidence already contains native metric statistics.
+            population = []
+            for candidate in candidates:
+                item = {key: value for key, value in candidate.items() if key != 'native_training'}
+                if candidate.get('native_training'):
+                    item['native_cpu_qualified'] = qualified_winner(candidate['native_training'])
+                population.append(item)
+            row.update(phase='evaluate', jobs=row['jobs'] + jobs, observations=observations,
+                       candidates=population, native_training_round=row['round'], native_training_version=VERSION,
+                       native_training_summary=summary, native_training_retry=None, repair_error=None,
+                       candidate_selection={'round': row['round'], 'candidate_ids': [c['id'] for c in selected],
+                                            'reason': 'Top five distinct qualified native CPU candidates by explained training criteria',
+                                            'source': 'vast_cpu_exact', 'ranking': summary})
+        await owned_thread(self.commit, record, imported)
+
+    async def recover_validation(self, record):
+        """Repair/retry native CPU validation without buying another optimizer round."""
+        from ai_loop_search_limits import validation_budget
+        recovery = record.get('validation_recovery') or {}
+        kind = ('baseline' if record['phase'] == 'baseline' else
+                recovery.get('job_kind', 'validation') if record['phase'] == 'recover_validation' else 'validation')
+        if (recovery.get('round') != record['round'] or not recovery.get('active')
+                or recovery.get('job_kind', 'validation') != kind):
+            failures = [j.get('error') or j.get('report_error') for j in record['jobs']
+                        if j['kind'] in {'validation', 'baseline'} and j.get('round') == record['round']
+                        and (j.get('error') or j.get('report_error'))]
+            cause = record.get('repair_error') or '; '.join(failures)[:1000] or 'No completed CPU training validation'
+            recovery = {'round': record['round'], 'attempts': 0, 'retry_at': time.time() + 15,
+                        'error': cause, 'history': [], 'active': True,
+                        'job_kind': kind}
+            await owned_thread(self.commit, record, lambda row: row.update(
+                phase='recover_validation', validation_recovery=recovery, repair_error=cause, last_error=cause))
+            return
+        if time.time() < recovery['retry_at']:
+            if record['phase'] != 'recover_validation':
+                await owned_thread(self.commit, record, lambda row: row.update(phase='recover_validation'))
+            return
+        if validation_budget(record, 0)['remaining'] <= 0:
+            await self.finish(record, 'Validation allowance reached during automatic recovery')
+            return
+        if kind == 'baseline':
+            sources = [j for j in record['jobs'] if j['kind'] == 'baseline' and j.get('candidate')][-1:]
+        else:
+            sources = self.pending_validation_retries(record)
+        sources = sources if recovery['attempts'] < 2 else []
+        # One recovery attempt covers the failed batch, bounded by the original
+        # CPU allowance. An unchanged probe follows repeated batch failures.
+        sources = sources[:validation_budget(record, 0)['remaining']] or [None]
+        jobs = []
+        try:
+            for source in sources:
+                candidate = copy.deepcopy(source['candidate'] if source else
+                             (record.get('best') or record.get('baseline') or {}).get('candidate') or {
+                                 'id': 'recovery_probe', 'optimizer_job': None,
+                                 'config': record['initial_config'], 'overrides': record['initial_overrides']})
+                config = await owned_thread(self.backend.validation_config, record, candidate)
+                job = await owned_thread(self.job, record, kind, config, candidate['overrides'],
+                                         'Automatic CPU validation recovery', candidate=candidate)
+                job.update(recovery_of=source['operation'] if source else None,
+                           diagnostic_only=source is None if kind == 'validation' else False)
+                jobs.append(job)
+        except (OSError, ValueError) as exc:
+            detail = f'{type(exc).__name__}: {str(exc)}'[:1000]
+            _log(SERVICE, 'CPU validation preparation will retry automatically', level='WARNING', meta={'error': detail})
+            def deferred(row):
+                state = copy.deepcopy(recovery)
+                state['attempts'] += 1
+                state['retry_at'] = time.time() + min(300, 15 * 2 ** min(state['attempts'], 5))
+                state['history'] = (state['history'] + [{'at': time.time(), 'error': detail}])[-10:]
+                row.update(phase='recover_validation', validation_recovery=state, repair_error=detail, last_error=detail)
+            await owned_thread(self.commit, record, deferred)
+            return
+        def queued(row):
+            state = copy.deepcopy(recovery)
+            state['attempts'] += 1
+            state['history'] = (state['history'] + [{'at': time.time(), 'operations': [job['operation'] for job in jobs],
+                                                     'error': row.get('repair_error') or state['error']}])[-10:]
+            state['retry_at'] = time.time() + min(300, 15 * 2 ** min(state['attempts'], 5))
+            row.update(phase='baseline' if kind == 'baseline' else 'validate', jobs=row['jobs'] + jobs, validation_recovery=state,
+                       validation_count=row['validation_count'] + len(jobs))
+        await owned_thread(self.commit, record, queued)
 
     async def _tick(self, record):
         from pb8_loop_gpu_replacement import open_replacement, GPUReplacement
@@ -414,6 +706,8 @@ class LoopController:
         if record['status'] == 'queued':
             return
         if record['status'] == 'stopping' or record['status'] in TERMINAL:
+            if record['status'] in TERMINAL and record.get('cleanup_done'):
+                return
             collecting = False
             for job in record['jobs']:
                 if not job.get('backend') and job['status'] not in JOB_FINISHED:
@@ -482,12 +776,19 @@ class LoopController:
             raise LoopAIPause('evidence_recovery', 'AI request was interrupted; its reservation is retained and no duplicate call was sent')
         if time.time() < (record.get('ai_retry') or {}).get('retry_at', 0):
             return
+        if record.get('decision_repair', {}).get('active') and time.time() < record['decision_repair']['retry_at']:
+            return
+        if record.get('decision_repair', {}).get('active') and not record.get('repair_error'):
+            record = await owned_thread(self.commit, record, lambda row: row['decision_repair'].update(active=False))
         phase = record['phase']
         from ai_loop_objectives import validate_template_rubric
         try:
             validate_template_rubric(record, record['initial_config'], record.get('rubric'))
         except ValueError as exc:
             raise LoopAIPause('objective_mismatch', str(exc)) from exc
+        if phase == 'recover_validation':
+            await self.recover_validation(record)
+            return
         if phase == 'interpret':
             decision = await self.decision(record, 'interpret', {'metric_examples': ['gain', 'gain_strategy_eq', 'adg', 'adg_strategy_eq',
                                           'drawdown_worst', 'drawdown_worst_strategy_eq', 'n_fills', 'sharpe_ratio'],
@@ -529,17 +830,33 @@ class LoopController:
             record = await self.sync_jobs(record)
             if record['status'] not in ACTIVE:
                 return
-            job = next(item for item in record['jobs'] if item['kind'] == 'baseline')
+            job = next(item for item in reversed(record['jobs']) if item['kind'] == 'baseline')
             if job['status'] not in JOB_FINISHED:
                 return
             if job['status'] not in {'complete', 'completed'}:
+                if record.get('optimizer_research_version') == 1:
+                    await self.recover_validation(record)
+                    return
                 await owned_thread(self.commit, record, lambda row: row.update(status='failed', reason='Starting baseline backtest failed', last_error=job.get('error')))
                 return
-            result = await owned_thread(self.backend.observations, record, job)
+            try:
+                result = await owned_thread(self.backend.observations, record, job)
+            except (OSError, ValueError) as exc:
+                if record.get('optimizer_research_version') != 1:
+                    raise
+                _log(SERVICE, 'Baseline report unavailable; retrying native CPU validation', level='WARNING', meta={'error_type': type(exc).__name__})
+                record = await owned_thread(self.commit, record, lambda row: row.update(repair_error=f'{type(exc).__name__}: {str(exc)}'[:1000]))
+                await self.recover_validation(record)
+                return
             result.update(operation=job['operation'], candidate={'id': 'baseline', 'optimizer_job': None,
                           'config': copy.deepcopy(record['initial_config']),
                           'overrides': copy.deepcopy(record['initial_overrides'])})
-            await owned_thread(self.commit, record, lambda row: row.update(baseline=result, phase=row['after_baseline']))
+            def baseline_ready(row):
+                row.update(baseline=result, phase=row['after_baseline'])
+                if row.get('validation_recovery', {}).get('active'):
+                    row['validation_recovery']['active'] = False
+                    row.update(repair_error=None, last_error=None, errors=0)
+            await owned_thread(self.commit, record, baseline_ready)
             return
         if phase == 'bootstrap':
             settings = record['settings']
@@ -583,10 +900,13 @@ class LoopController:
             for variant in variants:
                 if not isinstance(variant, dict):
                     raise ValueError('Invalid initial optimizer variant')
+                if record.get('optimizer_research_version') == 1:
+                    from pb8_loop_research import resolve_variant
+                    variant = resolve_variant(record, variant)
                 config = variant.get('config')
                 overrides = variant.get('overrides', record['initial_overrides'])
                 validate_change(record, config, overrides)
-                job = await owned_thread(self.job, record, 'optimizer', config, overrides, variant.get('reason', decision.get('reason', '')))
+                job = await owned_thread(self.job, {**record, 'jobs': record['jobs'] + jobs}, 'optimizer', config, overrides, variant.get('reason', decision.get('reason', '')), **({'experiment': variant.get('experiment')} if record.get('optimizer_research_version') == 1 else {}))
                 if digest([fresh_optimizer_config(config, 0), overrides]) == digest([
                         fresh_optimizer_config(record['initial_config'], 0), record['initial_overrides']]):
                     raise ValueError('Use the saved results to adjust the config before the first optimizer run')
@@ -604,6 +924,8 @@ class LoopController:
                 summary['knowledge'] = ''
             def applied(row):
                 row.update(phase='optimize', jobs=row['jobs'] + jobs, bootstrap=summary, repair_error=None, last_error=None, errors=0)
+                if row.get('decision_repair'):
+                    row['decision_repair']['active'] = False
                 row.pop('bootstrap_candidates', None)
             await owned_thread(self.commit, record, applied)
             return
@@ -637,7 +959,8 @@ class LoopController:
                             candidates.extend(found)
                             results[job['operation']] = {'results_consumed': True, 'result_count': len(found), 'result_error': None}
                         except ValueError as exc:
-                            if not infrastructure and not job.get('limit_reached') and job['status'] != 'failed':
+                            from pb8_loop_native import enabled as native_training
+                            if not native_training(record) and not infrastructure and not job.get('limit_reached') and job['status'] != 'failed':
                                 raise
                             _log(SERVICE, f'Stopped optimizer {job["operation"]} has no usable results: {exc}', level='WARNING')
                             results[job['operation']] = {'result_error': str(exc)[:1000]}
@@ -645,7 +968,8 @@ class LoopController:
                     for item in row['jobs']:
                         if item['operation'] in results:
                             item.update(results[item['operation']])
-                    if candidates:
+                    from pb8_loop_native import enabled as native_training
+                    if candidates or native_training(row):
                         row.update(phase='select', candidates=candidates, repair_error=None)
                     else:
                         from pb8_loop_gpu_replacement import replaced_predecessor
@@ -662,7 +986,20 @@ class LoopController:
             observations = []
             for job in jobs:
                 if job['status'] in {'complete', 'completed'}:
-                    result = await owned_thread(self.backend.observations, record, job)
+                    try:
+                        result = await owned_thread(self.backend.observations, record, job)
+                    except (OSError, ValueError) as exc:
+                        if phase != 'validate' or record.get('optimizer_research_version') != 1:
+                            raise
+                        detail = f'{type(exc).__name__}: {str(exc)}'[:1000]
+                        _log(SERVICE, 'CPU training report unavailable; automatic recovery scheduled', level='WARNING',
+                             meta={'error': detail})
+                        def unreadable(row):
+                            target = next(j for j in row['jobs'] if j['operation'] == job['operation'])
+                            target['report_error'] = detail
+                            row.update(repair_error=detail, last_error=detail)
+                        record = await owned_thread(self.commit, record, unreadable)
+                        continue
                     observations.append({**result, 'candidate': job['candidate'], 'operation': job['operation'], 'round': job['round']})
             if phase == 'holdout':
                 before_data = bool(not observations and all([await owned_thread(self.backend.failed_before_data, record, job) for job in jobs])) if hasattr(self.backend, 'failed_before_data') else False
@@ -683,6 +1020,12 @@ class LoopController:
             await owned_thread(self.commit, record, lambda row: row.update(phase='evaluate', observations=observations))
             return
         if phase == 'select':
+            from pb8_loop_native import enabled as native_training
+            if native_training(record):
+                fallback = await self.import_native_training(record)
+                if fallback is None or fallback['phase'] != 'select':
+                    return
+                record = fallback
             candidates = record['candidates']
             from ai_loop_search_limits import validation_budget
             budget = validation_budget(record, len(candidates))
@@ -691,7 +1034,8 @@ class LoopController:
                         'jobs': [optimizer_execution_evidence(job, record['settings'], record) for job in record['jobs']
                                  if job['kind'] == 'optimizer' and job['round'] == record['round']],
                         'max_candidates': budget['max_candidates'], 'validation_budget': budget,
-                        'jev': record.get('jev_answers') if record.get('jev_round') == record['round'] else []}
+                        'jev': record.get('jev_answers') if record.get('jev_round') == record['round'] else [],
+                        'native_training_fallback': record.get('native_training_fallback')}
             if evidence['max_candidates'] <= 0:
                 await self.finish(record, 'Validation allowance reached')
                 return
@@ -748,8 +1092,21 @@ class LoopController:
                                 and job['round'] == record['round'] and job['status'] in {'complete', 'completed'}}
             eligible = [item for item in observations if item['exact'] and item['assessment'].get('comparable', True)
                         and item['assessment'].get('simulation_complete') is True
-                        and item.get('operation') in completed_checks]
-            if not eligible:
+                        and item.get('operation') in completed_checks
+                        and not next((j.get('diagnostic_only') for j in record['jobs'] if j['operation'] == item.get('operation')), False)]
+            from pb8_loop_research import enabled as research_enabled
+            technical_success = any(o.get('exact') and o.get('per_report') for o in observations)
+            recovery = record.get('validation_recovery') or {}
+            pending_batch = (recovery.get('active') and recovery.get('job_kind', 'validation') == 'validation'
+                             and recovery.get('round') == record['round'] and recovery.get('attempts', 0) < 2
+                             and self.pending_validation_retries(record))
+            native_round = record.get('native_training_version') == 1 and record.get('native_training_round') == record['round']
+            if research_enabled(record) and not native_round and (not technical_success or pending_batch):
+                await self.recover_validation(record)
+                return
+            if research_enabled(record) and record.get('validation_recovery', {}).get('active'):
+                record = await owned_thread(self.commit, record, lambda row: row['validation_recovery'].update(active=False))
+            if not eligible and not research_enabled(record):
                 if observations:
                     await self.remember(record, record['id'] + ':rejected:' + str(record['round']), {'status': 'rejected_exact', 'goals': record['settings']['goals'], 'observations': observations, 'uncertainty': 'Incomplete or incomparable simulations cannot qualify a winner or authorize a next round.'})
                 await owned_thread(self.commit, record, lambda row: row.update(rejected_observations=observations, status='failed',
@@ -801,7 +1158,11 @@ class LoopController:
                         'free_slots': max(1, await owned_thread(self.backend.capacity, record)),
                         'baseline': record.get('baseline'), 'jev': record.get('jev_answers') or [], 'repair_error': record.get('repair_error'),
                         'candidate_selection': record.get('candidate_selection'),
+                        'validation_recovery': record.get('validation_recovery'),
+                        'native_training_summary': record.get('native_training_summary') if native_round else None,
                         'jobs': [optimizer_execution_evidence(job, settings, record) for job in optimizers if job['round'] == record['round']]}
+            if native_round:
+                evidence['native_population'] = record.get('candidates') or []
             if adaptive:
                 common_metrics = None
                 for option in options.values():
@@ -819,7 +1180,18 @@ class LoopController:
             if required_rounds:
                 evidence.update(required_rounds=required_rounds,
                     required_rounds_remaining=max(0, required_rounds - len(completed_rounds | {record['round']})))
+            from pb8_loop_research import evidence as research_evidence, validate_assessment, trial_records
+            if research_enabled(record):
+                evidence['optimizer_research'] = research_evidence(record, observations)
             decision = await self.decision(record, 'evaluate', evidence)
+            def training_report(operation):
+                job = next(j for j in record['jobs'] if j['operation'] == operation and j['kind'] == 'validation'
+                           and not j.get('observer_only') and not j.get('diagnostic_only'))
+                return self.backend.observations(record, job)
+            research_assessment = (await owned_thread(validate_assessment, record, observations,
+                                   decision.get('optimizer_assessment'), report_loader=training_report, include_trials=True)
+                                   if research_enabled(record) else None)
+            research_trials = research_assessment.pop('_trials') if research_assessment is not None else None
             from ai_loop_evaluation import evaluation_comparison
             if adaptive and decision.get('evaluation_criteria') is None:
                 raise ValueError('Adaptive evaluation requires explained evaluation_criteria and candidate_assessments')
@@ -845,9 +1217,13 @@ class LoopController:
             next_stagnation = evaluated_stagnation(record, selected_operation)
             continuing = (len(completed_rounds | {record['round']}) < max_rounds and remaining > 0
                           and (len(completed_rounds | {record['round']}) < required_rounds
-                               or (not decision.get('finish') and next_stagnation < settings['patience'])))
+                               or (not decision.get('finish') and (research_enabled(record) or next_stagnation < settings['patience']))))
             if continuing:
-                for variant in decision.get('variants') or []:
+                for index, variant in enumerate(decision.get('variants') or []):
+                    if research_enabled(record):
+                        from pb8_loop_research import resolve_variant
+                        variant = resolve_variant(record, variant)
+                        decision['variants'][index] = variant
                     if isinstance(variant, dict) and isinstance(variant.get('config'), dict):
                         validate_change(record, variant['config'], variant.get('overrides', record['initial_overrides']))
                         changes = validate_exploration(record, variant['config'], stagnation_after=next_stagnation)
@@ -866,6 +1242,11 @@ class LoopController:
                                           'qualified': bool(current_best)}}
             await self.remember(record, record['id'] + ':round:' + str(record['round']), entry)
             def observed(row):
+                if row.get('decision_repair'):
+                    row['decision_repair']['active'] = False
+                if research_assessment is not None:
+                    row['optimizer_trials'] = research_trials
+                    row['optimizer_assessment'] = research_assessment
                 if adaptive:
                     row['training_candidates'] = training_candidates
                 if comparison is not None:
@@ -875,9 +1256,15 @@ class LoopController:
                 if not already_observed:
                     row['stagnation'] = 0 if improved else row['stagnation'] + 1
                 row['history'] = [item for item in row['history'] if item['round'] != row['round']]
-                row.update(errors=0, last_error=None, repair_error=None)
+                if not research_enabled(record) or any(not j.get('diagnostic_only') and j['operation'] in {o['operation'] for o in observations if o.get('exact') and o.get('per_report')}
+                                                       for j in row['jobs'] if j['kind'] == 'validation'):
+                    row.update(errors=0, last_error=None, repair_error=None)
                 row['history'].append({'round': row['round'], 'reason': str(decision.get('reason', ''))[:4000],
                                        'evaluation_comparison': comparison,
+                                       **({'boundary_responses': [copy.deepcopy(v.get('boundary_response', []))
+                                                                 for v in decision.get('variants') or []]}
+                                          if research_enabled(record) else {}),
+                                       **({'optimizer_assessment': research_assessment} if research_assessment is not None else {}),
                                        'candidate_selection': row.get('candidate_selection'),
                                        'knowledge': decision.get('knowledge', '') if len(decision.get('knowledge', '')) <= 1000 else '',
                                        'knowledge_reference': {'evidence_id': record['id'] + ':round:' + str(record['round']), 'characters': len(decision.get('knowledge', ''))} if len(decision.get('knowledge', '')) > 1000 else None,
@@ -899,8 +1286,10 @@ class LoopController:
                 await self.finish(record, 'Maximum completed rounds reached')
                 return
             must_continue = len({item['round'] for item in record['history'] if item.get('evaluated_at') is not None}) < required_rounds
-            if remaining <= 0 or (not must_continue and (decision.get('finish') or record['stagnation'] >= settings['patience'])):
-                stop = 'Optimizer allowance reached' if remaining <= 0 else 'No improvement patience reached' if record['stagnation'] >= settings['patience'] else 'AI concluded the search'
+            if remaining <= 0 or (not must_continue and (decision.get('finish') or (not research_enabled(record) and record['stagnation'] >= settings['patience']))):
+                stop = ('Optimizer allowance reached' if remaining <= 0 else 'No improvement patience reached'
+                        if not research_enabled(record) and record['stagnation'] >= settings['patience']
+                        else 'AI concluded the search')
                 record = await owned_thread(self.commit, record, lambda row: row.update(stop_reason=stop))
                 await self.finish(record, str(decision.get('reason') or stop))
                 return
@@ -914,14 +1303,26 @@ class LoopController:
             jobs = []
             next_record = {**record, 'round': record['round'] + 1}
             for variant in variants:
+                if record.get('optimizer_research_version') == 1:
+                    from pb8_loop_research import resolve_variant
+                    variant = resolve_variant(record, variant)
                 config = variant.get('config')
                 overrides = variant.get('overrides', record['initial_overrides'])
                 validate_change(record, config, overrides)
-                jobs.append(await owned_thread(self.job, next_record, 'optimizer', config, overrides, variant.get('reason', '')))
+                jobs.append(await owned_thread(self.job, next_record, 'optimizer', config, overrides, variant.get('reason', ''), **({'experiment': variant.get('experiment')} if record.get('optimizer_research_version') == 1 else {})))
+                next_record = {**next_record, 'jobs': record['jobs'] + jobs}
             await owned_thread(self.commit, record, lambda row: row.update(round=next_record['round'], jobs=row['jobs'] + jobs,
-                                                       phase='optimize', repair_error=None, errors=0))
+                                                       phase='optimize', repair_error=None, last_error=None, errors=0))
             return
         raise ValueError('Unknown persisted loop phase')
+
+    def _update_job_status(self, record, function):
+        """Merge fresh job/control state without hydrating unrelated archived evidence."""
+        partial = getattr(self.store, 'update_runtime_fields', None)
+        if partial is None:
+            return self.store.update(record['owner'], record['id'], function)
+        changes = partial(record['owner'], record['id'], {'jobs'}, function)
+        return {**record, **changes}
 
     async def sync_jobs(self, record, launch=True):
         """Reconcile persisted launch intent before allocating any additional job."""
@@ -934,7 +1335,7 @@ class LoopController:
                 continue
             if job['status'] in JOB_FINISHED:
                 continue
-            current = await owned_thread(self.store.read, record['owner'], record['id'])
+            current = await owned_thread(self._read_execution, record['owner'], record['id'])
             if current['status'] not in ACTIVE:
                 launch = False
             if job['backend'] is None:
@@ -944,7 +1345,7 @@ class LoopController:
                     backend = await owned_thread(self.backend.prepare, current, job)
                 except Exception as exc:
                     from fastapi import HTTPException
-                    current = await owned_thread(self.store.read, record['owner'], record['id'])
+                    current = await owned_thread(self._read_execution, record['owner'], record['id'])
                     if current['status'] not in ACTIVE:
                         return current
                     if isinstance(exc, HTTPException) and exc.status_code == 409:
@@ -960,9 +1361,20 @@ class LoopController:
                 def prepared(row):
                     target = next(item for item in row['jobs'] if item['operation'] == job['operation'])
                     target.update(backend=backend, status='queued')
-                record = await owned_thread(self.store.update, record['owner'], record['id'], prepared)
+                    if target.get('research'):
+                        target['research_verification'] = {'status': 'verified', 'boundary': 'native_preparation'}
+                record = await owned_thread(self._update_job_status, record, prepared)
                 job = next(item for item in record['jobs'] if item['operation'] == job['operation'])
             state = await owned_thread(self.backend.poll, record, job)
+            if job.get('research') and state.get('executed_config'):
+                from pb8_loop_research import execution_check
+                try:
+                    execution_check(job['config'], state['executed_config'], job['overrides'])
+                except ValueError as exc:
+                    _log(SERVICE, str(exc), level='ERROR')
+                    if state['status'] not in JOB_FINISHED and state.get('started'):
+                        await owned_thread(self.backend.stop, record, job)
+                    state.update(status='failed', error=str(exc), research_mismatch=True)
             polled_proxy = state.get('proxy_evaluations')
             source = state.get('source') or {}
             started_at = job.get('run_started_at') or source.get('started_at')
@@ -970,18 +1382,18 @@ class LoopController:
                 started_at = time.time()
             mode = current['settings'].get('run_limit_mode', 'config')
             hit = None
-            if job['kind'] == 'optimizer' and started_at is not None and state['status'] not in JOB_FINISHED:
-                if mode == 'hours' and time.time() >= started_at + current['settings']['run_hours'] * 3600:
+            if job['kind'] == 'optimizer' and started_at is not None:
+                if mode == 'hours' and state['status'] not in JOB_FINISHED and time.time() >= started_at + current['settings']['run_hours'] * 3600:
                     hit = 'hours'
-                if mode == 'proxy' and (state.get('proxy_evaluations') or 0) >= current['settings']['run_proxy']:
+                if mode == 'proxy' and state['status'] != 'failed' and (state.get('proxy_evaluations') or 0) >= (job.get('research', {}).get('budget', {}).get('value') or current['settings']['run_proxy']):
                     hit = 'proxy'
+            if hit and not job.get('limit_reached'):
+                def limited(row):
+                    target = next(item for item in row['jobs'] if item['operation'] == job['operation'])
+                    target.update(limit_reached=hit, run_started_at=started_at)
+                current = await owned_thread(self._update_job_status, record, limited)
+                job = next(item for item in current['jobs'] if item['operation'] == job['operation'])
             if (hit or job.get('limit_reached')) and state['status'] not in JOB_FINISHED:
-                if hit and not job.get('limit_reached'):
-                    def limited(row):
-                        target = next(item for item in row['jobs'] if item['operation'] == job['operation'])
-                        target.update(limit_reached=hit, run_started_at=started_at)
-                    current = await owned_thread(self.store.update, record['owner'], record['id'], limited)
-                    job = next(item for item in current['jobs'] if item['operation'] == job['operation'])
                 await owned_thread(self.backend.stop, current, job)
                 state = await owned_thread(self.backend.poll, current, job)
             if launch and state['status'] == 'queued' and not job.get('limit_reached'):
@@ -997,10 +1409,10 @@ class LoopController:
                     capacity = await owned_thread(self.backend.capacity, local)
                 if capacity > 0:
                     try:
-                        state = await owned_thread(self.backend.start, await owned_thread(self.store.read, record['owner'], record['id']), job)
+                        state = await owned_thread(self.backend.start, await owned_thread(self._read_execution, record['owner'], record['id']), job)
                     except Exception as exc:
                         from fastapi import HTTPException
-                        current = await owned_thread(self.store.read, record['owner'], record['id'])
+                        current = await owned_thread(self._read_execution, record['owner'], record['id'])
                         if current['status'] not in ACTIVE:
                             return current
                         if isinstance(exc, HTTPException) and exc.status_code == 409:
@@ -1019,6 +1431,12 @@ class LoopController:
                            if type(value) is int and value >= 0]
                 if job['kind'] == 'optimizer' and proxies:
                     target['proxy_evaluations'] = max(target.get('proxy_evaluations') or 0, *proxies)
+                if state.get('research_mismatch'):
+                    target['research_verification'] = {'status': 'mismatch'}
+                    target['error'] = state['error']
+                if target.get('research') and state.get('search_progress'):
+                    from pb8_loop_research import progress_sample
+                    progress_sample(target, state['search_progress'])
                 if state.get('executed_config'):
                     target['executed_config'] = state['executed_config']
                     target['executed_digest'] = digest(state['executed_config'])
@@ -1037,7 +1455,7 @@ class LoopController:
                     target['error'] = None
                 target['last_observed_at'] = time.time()
                 target['runner'] = {key: state.get('source', {}).get(key) for key in ('started_at', 'pb8_version', 'pb8_commit', 'lease_id', 'dispatch_at', 'deadline', 'rental_state', 'error')}
-            record = await owned_thread(self.store.update, record['owner'], record['id'], synced)
+            record = await owned_thread(self._update_job_status, record, synced)
         return record
 
     async def finish(self, record, reason):

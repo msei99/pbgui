@@ -83,8 +83,8 @@
 .loop-panel .loop-table tbody tr {cursor:pointer;}
 .loop-panel .loop-table tbody tr:focus-visible {outline:2px solid var(--accent);outline-offset:-2px;}
 .loop-panel .loop-table td {white-space:nowrap;}
-.loop-panel .loop-table tr.selected td,.loop-panel .loop-table tr.is-selected td {background:rgba(77,166,255,.12);}
-.loop-panel .loop-table tr.selected td:first-child,.loop-panel .loop-table tr.is-selected td:first-child {border-left:3px solid var(--accent);}
+.loop-panel .loop-table tr.selected td,.loop-panel .loop-table tr.is-selected td,.loop-report-dialog .loop-table tr.selected td {background:rgba(77,166,255,.12);}
+.loop-panel .loop-table tr.selected td:first-child,.loop-panel .loop-table tr.is-selected td:first-child,.loop-report-dialog .loop-table tr.selected td:first-child {border-left:3px solid var(--accent);}
 .loop-panel .loop-table thead th {background:var(--bg2);border-bottom:2px solid var(--border);}
 
 .loop-panel .loop-metric-cell {min-width:185px;}
@@ -94,6 +94,8 @@
 .loop-panel .loop-metric-change.is-worse {color:var(--red);}
 .loop-panel .loop-metric-change.is-neutral {color:var(--text-dim);}
 
-.loop-panel .loop-sort {display:inline-flex;align-items:center;gap:var(--sp-xs);padding:0;border:0;background:none;color:inherit;font:inherit;text-transform:inherit;white-space:nowrap;cursor:pointer;}
-.loop-panel th[aria-sort="ascending"] .loop-sort,.loop-panel th[aria-sort="descending"] .loop-sort {color:var(--accent);}
-.loop-panel .loop-sort:focus-visible {outline:2px solid var(--accent);outline-offset:3px;}
+.loop-panel .loop-sort,.loop-report-dialog .loop-sort {display:inline-flex;align-items:center;gap:var(--sp-xs);padding:0;border:0;background:none;color:inherit;font:inherit;text-transform:inherit;white-space:nowrap;cursor:pointer;}
+.loop-panel th[aria-sort="ascending"] .loop-sort,.loop-panel th[aria-sort="descending"] .loop-sort,.loop-report-dialog th[aria-sort="ascending"] .loop-sort,.loop-report-dialog th[aria-sort="descending"] .loop-sort {color:var(--accent);}
+.loop-panel .loop-sort:focus-visible,.loop-report-dialog .loop-sort:focus-visible {outline:2px solid var(--accent);outline-offset:3px;}
+
+.loop-report-dialog .loop-table tr[data-selection] {cursor:pointer;}

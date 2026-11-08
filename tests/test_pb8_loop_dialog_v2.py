@@ -371,6 +371,63 @@ def test_tool_allowance_survives_logical_decision_reconstruction(record):
     assert rebuilt.state()['tool_calls'] == 128
 
 
+def test_evidence_charges_do_not_hydrate_or_rewrite_unrelated_archives(record, monkeypatch):
+    """Small durable quota transactions retain exact history and survive a fresh store."""
+    from pb8_loop_storage import LoopArchive
+    from pb8_loop_store import LoopStore
+    store, row = record
+    ledger = DecisionLedger(store, row, 'evaluate', 'frozen', {})
+    row = store.update(OWNER, row['id'], lambda value: value.update(history=[{'large': 'x' * 100000}]))
+    original = copy.deepcopy(row)
+
+    def forbidden(*args, **kwargs):
+        """Evidence reads must not take the full archive serialization path."""
+        pytest.fail('Evidence quota loaded or rewrote the complete Loop')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(LoopArchive, 'load', forbidden)
+        patch.setattr(LoopArchive, 'save', forbidden)
+        ledger.reserve_tool()
+        ledger.reserve_tool()
+    current = LoopStore(store.root).read(OWNER, row['id'])
+    assert current['ai_decisions'][ledger.key]['tool_calls'] == 2
+    assert current['history'] == original['history']
+    assert current['settings'] == original['settings']
+    assert current['ai_tokens_reserved'] == original['ai_tokens_reserved']
+    assert current['ai_usd_reserved'] == original['ai_usd_reserved']
+
+
+@pytest.mark.parametrize('change', [{'control_generation': 1}, {'status': 'paused'}])
+def test_fast_evidence_charge_obeys_control_changes(record, change):
+    """Pause and generation changes still reject tools without consuming another call."""
+    store, row = record
+    ledger = DecisionLedger(store, row, 'evaluate', 'frozen', {})
+    store.update(OWNER, row['id'], lambda current: current.update(change))
+    with pytest.raises(LoopAIPause, match='Loop control changed'):
+        ledger.reserve_tool()
+    assert ledger.state().get('tool_calls', 0) == 0
+
+
+def test_evidence_quota_and_regular_updates_share_one_transaction_lock(record):
+    """Concurrent report writes and tool reads cannot lose quota or Loop state."""
+    from concurrent.futures import ThreadPoolExecutor
+    store, row = record
+    ledger = DecisionLedger(store, row, 'evaluate', 'frozen', {})
+
+    def change(index):
+        """Interleave the small branch transaction with ordinary full-record writes."""
+        if index % 2:
+            ledger.reserve_tool()
+        else:
+            store.update(OWNER, row['id'], lambda current: current.update(errors=current['errors'] + 1))
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(change, range(20)))
+    current = store.read(OWNER, row['id'])
+    assert current['errors'] == 10
+    assert current['ai_decisions'][ledger.key]['tool_calls'] == 10
+
+
 @pytest.mark.parametrize('protocol', ['chat', 'responses', 'messages'])
 def test_json_reader_supports_models_without_native_tools(record, protocol):
     """The ordinary decision reads exact evidence without a model approval or native tools."""

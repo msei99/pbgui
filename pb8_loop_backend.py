@@ -200,7 +200,9 @@ class LoopBackend:
         return max(0, min(record['settings']['parallel'], (psutil.cpu_count() or 1) // n_cpus - busy))
 
     def authorized(self, record, observer=False, replacement=None):
-        current = self.store.read(record['owner'], record['id'])
+        current = self.store.read(record['owner'], record['id'], fields={
+            'status', 'deadline', 'control_generation', 'settings', 'initial_config', 'fingerprint',
+            'rental_handover', 'gpu_replacements', 'gpu_replacement_id'})
         if replacement:
             from pb8_loop_gpu_replacement import open_replacement
             operation = open_replacement(current)
@@ -254,6 +256,9 @@ class LoopBackend:
             validate_change(record, config, overrides)
             prepared = opt._save_config_bundle(name, config, override_payloads=overrides, preserve_hsl_runtime_overrides=True)
             validate_change(record, prepared, overrides)
+            if job.get('research'):
+                from pb8_loop_research import execution_check
+                execution_check(config, prepared, overrides)
             if record['settings']['execution'] == 'vast':
                 from vast_jobs import JobStore, digest as file_digest
                 cloud = JobStore()
@@ -295,7 +300,7 @@ class LoopBackend:
         with advisory_file_lock(self.store.path(record['owner'], record['id'])):
             with advisory_file_lock(self.store.root / '.execution'):
                 current = self.authorized(record, observer=bool(job.get('observer_only')))
-                resource_check = copy.deepcopy(current)
+                resource_check = {**current, 'settings': copy.deepcopy(current['settings'])}
                 resource_check['initial_config'] = copy.deepcopy(job['config'])
                 if job['kind'] != 'optimizer':
                     resource_check['settings']['execution'] = 'cpu'
@@ -416,12 +421,13 @@ class LoopBackend:
             status = 'queued' if row['status'] == 'ready' else row['status']
             input_path = JobStore().directory(backend['id']) / 'input/optimize.json'
             executed = opt._read_json(input_path) if input_path.is_file() and not input_path.is_symlink() else None
-            proxy = None
-            if record['settings'].get('run_limit_mode') == 'proxy':
+            proxy, progress = None, None
+            if record['settings'].get('run_limit_mode') == 'proxy' or job.get('research'):
                 log_path = opt._safe_path(opt._log_dir() / ('vast_' + backend['id'] + '.log'), opt._log_dir())
-                proxy = opt._parse_optimize_log_status(opt._read_optimize_log_excerpt(log_path)).get('proxy_evaluations')
+                progress = opt._parse_optimize_log_status(opt._read_optimize_log_excerpt(log_path))
+                proxy = progress.get('proxy_evaluations')
             return {'status': status, 'started': bool(row.get('dispatch_at')), 'source': row, 'executed_config': executed,
-                    'proxy_evaluations': proxy}
+                    'proxy_evaluations': proxy, 'search_progress': progress}
 
         api = opt if job['kind'] == 'optimizer' else bt
         data = api._read_json(api._queue_file(backend['id']))
@@ -430,15 +436,17 @@ class LoopBackend:
         status, pid = api._queue_status(data)
         executed_path = opt._launch_config_file(backend['id']) if job['kind'] == 'optimizer' else bt._snapshot_file(backend['id'])
         executed = api._read_json(executed_path) if executed_path.is_file() and not executed_path.is_symlink() else None
-        proxy = None
-        if job['kind'] == 'optimizer' and record['settings'].get('run_limit_mode') == 'proxy':
+        proxy, progress = None, None
+        if job['kind'] == 'optimizer' and (record['settings'].get('run_limit_mode') == 'proxy' or job.get('research')):
             log_path = opt._safe_path(opt._log_dir() / (backend['id'] + '.log'), opt._log_dir())
-            proxy = opt._parse_optimize_log_status(opt._read_optimize_log_excerpt(log_path)).get('proxy_evaluations')
+            progress = opt._parse_optimize_log_status(opt._read_optimize_log_excerpt(log_path))
+            proxy = progress.get('proxy_evaluations')
         runner = api._read_runner_state(backend['id']) or {}
-        source = dict(data, started_at=data.get('started_at') or runner.get('started_at'), error=runner.get('error') or data.get('error'))
+        source = dict(data, started_at=data.get('started_at') or runner.get('started_at'),
+                      completed_at=runner.get('completed_at'), error=runner.get('error') or data.get('error'))
         return {'status': status, 'started': bool(data.get('started_at') or pid or runner), 'proxy_evaluations': proxy,
 
-                'source': source, 'pid': pid, 'executed_config': executed}
+                'source': source, 'pid': pid, 'executed_config': executed, 'search_progress': progress}
 
     def _result_origin(self, source):
         """Resolve cloud provenance through the exact persisted job, never a label."""
@@ -556,6 +564,12 @@ class LoopBackend:
                            'native_semantics': {'scoring': copy.deepcopy(data.get('optimize', {}).get('scoring')),
                                                 'objectives': copy.deepcopy((data.get('metrics') or {}).get('objectives')),
                                                 'constraint_violation': (data.get('metrics') or {}).get('constraint_violation')}})
+            from pb8_loop_native import enabled as native_training, observation as native_observation
+            if not historical and native_training(record):
+                try:
+                    result[-1]['native_training'] = native_observation(record, job, data, suite_metrics, labels, summary)
+                except (ValueError, KeyError, TypeError) as exc:
+                    result[-1]['native_training_error'] = str(exc)[:500]
             if proof is not None:
                 result[-1]['source']['training_windows'] = proof
         if not result:
@@ -565,6 +579,9 @@ class LoopBackend:
                                        usable_candidates=len(result), unreadable_artifacts=max(0, len(files) - native_loaded),
                                        artifacts_without_metrics=max(0, len(artifacts) - len(result)))
         if coverage is not None:
+            from pb8_loop_native import enabled as native_training
+            if native_training(record):
+                coverage['policy'] = 'CPU criterion leaders plus native Pareto tradeoffs; verified native exact CPU qualification'
             result[0]['source']['training_candidate_coverage'] = coverage
         return result
 
@@ -608,6 +625,11 @@ class LoopBackend:
 
     def observations(self, record, job):
         """Use full finite exact analysis values rather than a truncated GUI summary."""
+        if job.get('native_reused'):
+            result = job.get('native_observation') or {}
+            if result.get('training_source', {}).get('kind') != 'vast_cpu_exact' or not result.get('exact'):
+                raise ValueError('Native CPU checkpoint is incomplete')
+            return copy.deepcopy(result)
         from api import backtest_v8 as bt
         paths = bt._result_analysis_paths(job['name'])
         if not paths:

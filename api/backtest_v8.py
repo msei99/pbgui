@@ -25,6 +25,7 @@ import time
 import traceback
 import uuid
 from collections import OrderedDict
+from concurrent.futures import Future
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from shutil import rmtree, which
@@ -1253,15 +1254,53 @@ def _queue_item(path: Path) -> dict:
     return item
 
 
-def _load_queue() -> list[dict]:
-    _queue_dir().mkdir(parents=True, exist_ok=True)
+_queue_scans = {}
+_queue_scans_lock = threading.Lock()
+_MAX_QUEUE_SCANS = 8
+
+
+def _scan_queue(directory: Path) -> list[dict]:
+    """Validate one current filesystem/PID view without retaining a queue snapshot."""
+    directory.mkdir(parents=True, exist_ok=True)
     items = []
-    for path in sorted(_queue_dir().glob("*.json")):
+    for path in sorted(directory.glob("*.json")):
         try:
             items.append(_queue_item(path))
         except Exception as exc:
             _log(SERVICE, f"Failed to load V8 queue item {path.name}: {exc}", level="WARNING")
     return items
+
+
+def _load_queue() -> list[dict]:
+    """Coalesce only overlapping reads; every subsequent scan revalidates native state."""
+    directory = _queue_dir()
+    identity = threading.get_ident()
+    with _queue_scans_lock:
+        active = _queue_scans.get(directory)
+        if active is not None and active[0] != identity:
+            pending, producer = active[1], False
+        elif active is not None or len(_queue_scans) >= _MAX_QUEUE_SCANS:
+            pending, producer = None, True
+        else:
+            pending, producer = Future(), True
+            _queue_scans[directory] = (identity, pending)
+    if pending is None:
+        return _scan_queue(directory)
+    if not producer:
+        return copy.deepcopy(pending.result())
+    try:
+        items = _scan_queue(directory)
+        pending.set_result(items)
+        return copy.deepcopy(items)
+    except BaseException as exc:
+        if not pending.done():
+            pending.set_exception(exc)
+        _log(SERVICE, f'V8 queue scan failed: {type(exc).__name__}', level='ERROR')
+        raise
+    finally:
+        with _queue_scans_lock:
+            if _queue_scans.get(directory) == (identity, pending):
+                _queue_scans.pop(directory, None)
 
 
 def _runtime_commit(pb8_dir: Path) -> str:

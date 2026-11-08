@@ -22,6 +22,7 @@ CACHE_BYTES = 4 * 1024 * 1024
 HOT_FIELDS = ('id', 'owner', 'status', 'phase', 'round', 'control_generation',
               'created_at', 'updated_at', 'started_at', 'deadline', 'cleanup_done')
 CONFIG_FIELDS = {'config', 'executed_config', 'initial_config', 'overrides', 'initial_overrides'}
+DOCUMENT_FIELDS = {'native_observation', 'candidate'}
 
 
 class LoopStorageError(OSError):
@@ -90,6 +91,17 @@ class LoopArchive:
         with self.connection() as session:
             return session.unpack(root)
 
+    def replace_fields(self, root, values, removed=()):
+        """Publish changed top-level branches without decoding unrelated history."""
+        with advisory_file_lock(self.path):
+            with self.connection(write=True) as session:
+                entries = list(session.entries(root))
+                existing = {key for key, _ in entries}
+                return session.sequence('dict', [
+                    [key, session.pack(values[key], key) if key in values else reference]
+                    for key, reference in entries if key not in removed] + [
+                    [key, session.pack(values[key], key)] for key in sorted(values.keys() - existing)])
+
     def page(self, root, field, offset, limit):
         """Read at most one bounded collection page without loading earlier rounds/configs."""
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 200:
@@ -106,13 +118,14 @@ class LoopArchive:
             return {'items': items, 'total': count, 'offset': offset,
                     'next_offset': offset + len(items) if offset + len(items) < count else None}
 
-    def fields(self, root, names, *, settings_fields=None):
+    def fields(self, root, names, *, settings_fields=None, exclude_fields=()):
         """Load explicitly requested small fields without expanding historical collections."""
         with self.connection() as session:
             return {key: ({name: session.unpack(item) for name, item in session.entries(value)
                            if name in settings_fields} if key == 'settings' and settings_fields is not None
                           else session.unpack(value))
-                    for key, value in session.entries(root) if key in names}
+                    for key, value in session.entries(root)
+                    if (names is None or key in names) and key not in exclude_fields}
 
     def native_job(self, root, operation):
         """Resolve one native identity without hydrating configs, reports or round history."""
@@ -197,10 +210,17 @@ class ObjectSession:
         """Archive complete configurations once, and mutable collections as chunked trees."""
         if name in CONFIG_FIELDS and isinstance(value, dict):
             return self.put(['json', value])
+        if name in DOCUMENT_FIELDS and isinstance(value, dict):
+            document = ['json', value]
+            if len(encoded(document)) <= MAX_OBJECT_BYTES:
+                return self.put(document)
+            # Large evidence still uses bounded tree nodes; never introduce a
+            # new document-size ceiling or relax the verified object limit.
         if isinstance(value, dict):
             return self.sequence('dict', [[key, self.pack(item, key)] for key, item in value.items()])
         if isinstance(value, list):
-            return self.sequence('list', [self.pack(item) for item in value])
+            return self.sequence('list', [self.pack(item, 'candidate' if name == 'candidates' else None)
+                                          for item in value])
         if isinstance(value, str) and len(value) > 4096:
             return self.put(['text', self.sequence('list', [['value', value[i:i + 4096]]
                                                            for i in range(0, len(value), 4096)])])

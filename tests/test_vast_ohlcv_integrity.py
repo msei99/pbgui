@@ -540,7 +540,8 @@ def test_fresh_prepared_input_stages_frozen_metadata_before_worker_launch(prepar
             payloads.append(json.loads(gzip.decompress(kwargs['stdin'].read())))
     monkeypatch.setattr('vast_market_cache._load_local_markets', lambda *a: pytest.fail('Frozen market snapshot ignored'))
     monkeypatch.setattr('vast_inception.load_local_inception', lambda *a: pytest.fail('Frozen inception ignored'))
-    connection = SimpleNamespace(store=p.store, identifier=row['id'], remote_root=str(tmp_path / 'remote'), command=command)
+    connection = SimpleNamespace(store=p.store, identifier=row['id'], remote_root=str(tmp_path / 'remote'),
+                                 command=command, proxy_budget_command=lambda: None)
     WorkerConnection.start(connection)
     assert len(commands) == 3 and 'nohup' in commands[-1]
     assert payloads == [manifest['metadata_snapshot']['markets'], manifest['metadata_snapshot']['inception']]

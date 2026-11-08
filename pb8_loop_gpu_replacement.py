@@ -116,20 +116,36 @@ def review(queue, record, worker_id):
         raise VastError('This GPU rental does not belong to the selected Loop', 409)
     if open_replacement(record):
         raise VastError('This Loop already has a GPU replacement in progress', 409)
-    if record['status'] not in {'running', 'paused'} or record['phase'] != 'optimize':
+    setup_recovery = record['status'] == 'paused' and record['phase'] in {'select', 'evaluate'}
+    if record['status'] not in {'running', 'paused'} or (record['phase'] != 'optimize' and not setup_recovery):
         raise VastError('GPU replacement requires a running or paused optimizer round', 409)
+    if setup_recovery:
+        request = record.get('last_ai_request') or {}
+        if ((record.get('pending_ai') and not (request.get('outcome') == 'interrupted' and request.get('ended_at')))
+                or any(item.get('round') == record['round'] for item in record.get('history', []))
+                or any(job['round'] == record['round'] and job['status'] not in FINISHED
+                       for job in record['jobs'])):
+            raise VastError('Wait for current round work to finish before recovering failed GPU setup', 409)
     if record.get('rental_extension') or worker.get('deadline_request') or record.get('rental_handover', {}).get('status') == 'collecting':
         raise VastError('Wait for the current rental change or handover before replacing this GPU', 409)
     control = queue.store.read(worker_id, 'control.json')
-    if control.get('stop') or control.get('cleanup') or worker.get('rental_state') in {'none', 'deletion_verified', 'destroy_pending'}:
+    deleted_setup = setup_recovery and worker.get('rental_state') == 'deletion_verified' and worker.get('absent_checks', 0) >= 2
+    if not deleted_setup and (control.get('stop') or control.get('cleanup') or worker.get('rental_state') in {'none', 'deletion_verified', 'destroy_pending'}):
         raise VastError('This rental is already ending; GPU replacement was not authorized', 409)
     jobs = []
     for job in record['jobs']:
-        if job['kind'] != 'optimizer' or job['round'] != record['round'] or job['status'] in FINISHED or not job.get('backend'):
+        if (job['kind'] != 'optimizer' or job['round'] != record['round']
+                or (job['status'] in FINISHED and not setup_recovery) or not job.get('backend')):
             continue
         native = queue.store.read(job['backend']['id']) if job['backend'].get('execution') == 'vast' else {}
         if native.get('lease_id') == worker_id:
-            if native.get('status') in FINISHED:
+            if setup_recovery and not (job['status'] == native.get('status') == 'failed'
+                    and native.get('error') == 'Worker setup exceeded 15 minutes'
+                    and native.get('started_at') is None and job.get('run_started_at') is None
+                    and native.get('proxy_evaluations') in (None, 0) and job.get('proxy_evaluations') in (None, 0)
+                    and native.get('loop_operation') == job['operation']):
+                raise VastError('Only a verified failure before optimizer startup can recover from evaluation', 409)
+            if native.get('status') in FINISHED and not setup_recovery:
                 raise VastError('The attached optimizer already finished; wait for Loop collection before reviewing replacement', 409)
             if native.get('loop_id') != record['id'] or native.get('loop_owner') != record['owner']:
                 raise VastError('Attached optimizer ownership changed', 409)
@@ -160,6 +176,8 @@ def review(queue, record, worker_id):
                     jobs[0]['config'], jobs[0]['overrides'], jobs[0].get('optimizer_start'), jobs[0].get('optimizer_archive')]),
                 'limits': limits, 'chain': chain, 'machine': machine, 'gpu_profiles': profiles,
                 'rental_deadline': intent['deadline'], 'rental_budget': intent['budget_usd']}
+    if setup_recovery:
+        snapshot['resume_phase'] = 'optimize'
     derived, deadline = remaining_limits(queue, record, snapshot)
     return {'snapshot': snapshot, 'snapshot_digest': digest(snapshot),
             'remaining_budget_usd': derived['budget'], 'deadline': deadline,
@@ -203,6 +221,16 @@ class GPUReplacement:
                     control_generation=generation + 1, reason=operation['reason'])
                 job = next(job for job in current['jobs'] if job['operation'] == operation['predecessor'])
                 job.update(gpu_replacement_id=operation_id, attempt_charged=True)
+                if snapshot.get('resume_phase'):
+                    if current.get('pending_ai'):
+                        current['interrupted_ai'] = current.pop('pending_ai')
+                    keys = ('native_training_fallback', 'native_training_retry', 'native_training_summary',
+                            'native_training_round', 'validation_recovery', 'decision_repair',
+                            'repair_error', 'last_error', 'observations', 'candidates')
+                    operation['setup_recovery_context'] = {key: copy.deepcopy(current[key]) for key in keys if key in current}
+                    for key in keys:
+                        current.pop(key, None)
+                    current.update(observations=[], candidates=[])
             return self.store.update(owner, loop_id, reserve)
 
     def change(self, record, function):
@@ -289,7 +317,7 @@ class GPUReplacement:
             if state['status'] not in FINISHED and started_at is not None:
                 if mode == 'hours' and time.time() >= started_at + record['settings']['run_hours'] * 3600:
                     hit = 'hours'
-                if mode == 'proxy' and (proxy or 0) >= record['settings']['run_proxy']:
+                if mode == 'proxy' and (proxy or 0) >= (original.get('research', {}).get('budget', {}).get('value') or record['settings']['run_proxy']):
                     hit = 'proxy'
             if (hit or original.get('limit_reached')) and state['status'] not in FINISHED:
                 def limited(current, op):
@@ -315,6 +343,9 @@ class GPUReplacement:
                     job['proxy_evaluations'] = max(counts)
                 if started_at is not None:
                     job['run_started_at'] = started_at
+                if job.get('research') and state.get('search_progress'):
+                    from pb8_loop_research import progress_sample
+                    progress_sample(job, state['search_progress'])
                 if state.get('executed_config'):
                     job.update(executed_config=copy.deepcopy(state['executed_config']), executed_digest=digest(state['executed_config']))
                 if state['status'] in FINISHED:
@@ -401,7 +432,7 @@ class GPUReplacement:
             def reserve(row, op):
                 token = uuid.uuid4().hex
                 successor = {key: copy.deepcopy(predecessor[key]) for key in
-                    ('kind', 'round', 'config', 'overrides', 'optimizer_start', 'optimizer_archive', 'reason', 'candidate') if key in predecessor}
+                    ('kind', 'round', 'config', 'overrides', 'optimizer_start', 'optimizer_archive', 'reason', 'candidate', 'research') if key in predecessor}
                 successor.update(operation=token, name='loop_' + row['id'][:8] + '_' + token[:8],
                     status='planned', backend=None, started=False, created_at=time.time(),
                     gpu_predecessor=op.get('retry_predecessor') or predecessor['operation'], gpu_replacement_successor=op['id'])
@@ -447,6 +478,8 @@ class GPUReplacement:
             def prepared(row, op):
                 job = next(job for job in row['jobs'] if job['operation'] == op['successor'])
                 job.update(backend=backend, status='queued')
+                if job.get('research'):
+                    job['research_verification'] = {'status': 'verified', 'boundary': 'native_preparation'}
                 op.update(step='rent')
             return self.change(record, prepared)
         if operation['step'] == 'rent':
@@ -515,7 +548,7 @@ class GPUReplacement:
                 return self.note(record, 'Waiting for a confirmed different replacement machine identity', retry_at=time.time() + 30)
             def resumed(row, op):
                 op.update(step='done', completed_at=time.time(), reason='Replacement ready; preserved input restarts without a checkpoint')
-                row.update(status='running', phase=op['original_phase'], reason=op['reason'], repair_error=None)
+                row.update(status='running', phase=op.get('resume_phase', op['original_phase']), reason=op['reason'], repair_error=None)
             return self.change(record, resumed)
         raise VastError('Unknown GPU replacement operation step; review is required', 409)
 

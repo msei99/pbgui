@@ -222,15 +222,16 @@ class DecisionLedger:
                                      'tokens': 0, 'usd': 0.0, 'explicit_timeout': explicit is not None}
             elif current['snapshot_sha'] != snapshot_sha:
                 raise LoopAIPause('evidence_recovery', 'Decision evidence changed during a reserved attempt')
-        self.store.update(record['owner'], record['id'], initialize)
+        self.store.update_ai_fields(record['owner'], record['id'], {'ai_decisions'}, initialize,
+                                    read_fields={'settings'})
 
     def state(self):
         """Read authoritative cross-process state rather than an in-memory quota."""
-        return self.store.read(self.record['owner'], self.record['id'])['ai_decisions'][self.key]
+        return self.store.read(self.record['owner'], self.record['id'], fields={'ai_decisions'})['ai_decisions'][self.key]
 
     def remaining(self):
         """Bound all dialogs and retries by the original deadline."""
-        row = self.store.read(self.record['owner'], self.record['id'])
+        row = self.store.read(self.record['owner'], self.record['id'], fields={'ai_decisions', 'deadline'})
         state = row['ai_decisions'][self.key]
         remaining = min(state['deadline'], row['deadline'] - 60) - time.time()
         if remaining <= 0:
@@ -276,7 +277,9 @@ class DecisionLedger:
                                  'usd_reserved': usd, 'snapshot_id': row.get('ai_snapshot_id')}
             row['pending_ai']['request_sha256'] = request_sha256
         self.remaining()
-        self.store.update(self.record['owner'], self.record['id'], reserve)
+        self.store.update_ai_fields(self.record['owner'], self.record['id'],
+            {'ai_decisions', 'ai_calls', 'ai_tokens_reserved', 'ai_usd_reserved', 'pending_ai'}, reserve,
+            read_fields={'settings', 'ai_snapshot_id'})
         return call_id
 
     def reserve_tool(self):
@@ -290,7 +293,7 @@ class DecisionLedger:
             if used >= 128:
                 raise LoopAIPause('evidence_recovery', 'The decision-wide evidence-call allowance is exhausted')
             state['tool_calls'] = used + 1
-        self.store.update(self.record['owner'], self.record['id'], charge)
+        self.store.update_decisions(self.record['owner'], self.record['id'], charge)
 
     def settle(self, call_id, usage):
         """Replace a reservation exactly once; absent usage remains conservatively reserved."""
@@ -316,7 +319,8 @@ class DecisionLedger:
                 row['pending_ai'] = None
             row['last_usage'] = {'tokens': usage, 'status': 'reported' if call['usage_confirmed'] else 'reserved_unconfirmed',
                                  'usd': call['usd'] if self.paid else None}
-        self.store.update(self.record['owner'], self.record['id'], settle)
+        self.store.update_ai_fields(self.record['owner'], self.record['id'],
+            {'ai_decisions', 'ai_tokens_reserved', 'ai_usd_reserved', 'pending_ai', 'last_usage'}, settle)
 
     def timeout(self, call_id):
         """Keep uncertain billing while allowing a bounded retry of this call."""
@@ -324,4 +328,4 @@ class DecisionLedger:
             """Do not release possibly consumed token/USD reservations."""
             if (row.get('pending_ai') or {}).get('id') == call_id:
                 row['pending_ai'] = None
-        self.store.update(self.record['owner'], self.record['id'], uncertain)
+        self.store.update_ai_fields(self.record['owner'], self.record['id'], {'pending_ai'}, uncertain)

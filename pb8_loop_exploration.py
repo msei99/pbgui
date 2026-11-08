@@ -276,6 +276,8 @@ def validate_exploration(record, config, *, stagnation_after=None):
     previous = max(enumerate(jobs), key=lambda item: (item[1].get('round', -1), item[0]))[1] if jobs else None
     reference = (previous.get('executed_config') or previous['config']) if previous else record['initial_config']
     _protect_hard_filters(record, config)
+    if record.get('optimizer_research_version') == 1:
+        return _differences(reference, config)[0]
     coverage = _template_search_coverage(record)
     if coverage is not None:
         # Repeated seeds and single-axis experiments can establish whether a result repeats.

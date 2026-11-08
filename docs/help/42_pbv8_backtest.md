@@ -12,6 +12,8 @@ If an equity file fails to load, the other available curves remain visible with 
 
 **Compare all Holdouts** and **Compare all Full Time Ranges** in AI Loops open this same view for every completed evaluation of that type in the selected run, including the unchanged start. Only matching native jobs are loaded; failed/incomplete evaluations are excluded. Curve labels include the round, comparison candidate and exchange. Newly completed jobs appear automatically, while a narrowed selection survives updates and browser reload. Starting a new “Compare all” action selects all eligible results again.
 
+**Compare selected** in the Loop User evaluation table opens comparison curves immediately for only the selected completed evaluations, including Holdout and Full Time Range together. Repeated references to one native job load once; separate backtests with equal metrics remain separate. Selection and curves survive reload in the same tab. If the tab-local selection is unavailable, return to the Loop and select the reports again.
+
 An AI Loop Results link takes priority over the previously stored Backtest panel on arrival. Browser reload still preserves any panel you subsequently choose.
 
 When opened from AI Loops, **Back to AI Loop** returns directly to the originating run/round and report tab. It remains available across Backtest navigation and browser reload. Log actions in AI Loops open only the specific native file over the Loop view.
@@ -149,4 +151,6 @@ For PB8 8.6 results, the hard-stop chart reads native `hsl_report.json` samples 
 
 ### AI Loop comparison: Top X
 
-Opening a Loop comparison loads the result list without requesting comparison curves. Curves load only after **Apply comparison**; reloading an explicitly started comparison restores it. In the native Loop comparison, choose **All** or **Top X**, enter the candidate count and click **Apply comparison**. Top X ranks complete scored evaluations by target compliance first, then evaluation score (highest first). Each selected candidate includes all its exchange results, so there may be more than X curves. Holdout and Full Time Range use their own evaluation scores. Evaluations with missing scores or missing native results are excluded from Top X. Selection persists on reload and updates automatically as results arrive.
+Opening a **Compare all** Loop comparison loads the result list without requesting comparison curves. Curves load only after **Apply comparison**; reloading an explicitly started comparison restores it. In the native Loop comparison, choose **All** or **Top X**, enter the candidate count and click **Apply comparison**. Top X ranks complete scored evaluations by target compliance first, then evaluation score (highest first). Each selected candidate includes all its exchange results, so there may be more than X curves. Holdout and Full Time Range use their own evaluation scores. Evaluations with missing scores or missing native results are excluded from Top X. Selection persists on reload and updates automatically as results arrive.
+
+The Results view keeps matching rows and the selected config filter visible while reloading. If an initial result request fails or times out, the list shows the error instead of remaining on “Loading results…”. Large config-filter lists are updated together without changing the available results or sorting.

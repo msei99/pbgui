@@ -74,11 +74,20 @@ def validation_budget(record, available):
     """Let AI allocate the remaining total; obsolete per-cycle caps have no effect."""
     total, used = record['settings']['max_validations'], record.get('validation_count', 0)
     remaining = max(0, total - used)
+    from pb8_loop_native import enabled as native_training, local_fallback
     completed = len({item['round'] for item in record.get('history', []) if item.get('evaluated_at') is not None})
     rounds = max(0, record['settings']['max_rounds'] - completed)
+    if native_training(record):
+        return {'total': total, 'used': used, 'remaining': remaining,
+                'remaining_rounds_including_current': rounds,
+                'available_candidates': available, 'max_candidates': min(5, available),
+                'source': 'vast_cpu_exact', 'native_cpu_not_charged': True,
+                'includes': 'local baseline/recovery only; native results need no additional simulation',
+                'excludes': 'native CPU training evidence and user-only background reports',
+                'allocation': 'Rank five qualified distinct configs from exact native CPU results; no local CPU allocation'}
     return {'total': total, 'used': used, 'remaining': remaining,
             'remaining_rounds_including_current': rounds,
-            'available_candidates': available, 'max_candidates': min(remaining, available),
+            'available_candidates': available, 'max_candidates': min(remaining, available, 5) if local_fallback(record) else min(remaining, available),
             'includes': 'baseline and independent CPU training validation jobs',
             'excludes': 'user-only Holdout and Full Time Range background reports',
             'allocation': 'AI chooses count and representative candidates; justify coverage, duplicates and budget for future rounds'}

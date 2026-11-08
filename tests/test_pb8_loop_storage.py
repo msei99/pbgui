@@ -21,6 +21,114 @@ def archive_for(store, row):
     return LoopArchive(store.owner_dir(OWNER), row['id'])
 
 
+@pytest.mark.parametrize('field', ['native_observation', 'candidate'])
+def test_frozen_job_documents_are_compact_and_legacy_trees_remain_readable(tmp_path, monkeypatch, field):
+    """Preserve old tree documents and independent copies while avoiding per-metric nodes."""
+    import pb8_loop_storage as module
+    archive = LoopArchive(tmp_path, 'b' * 32)
+    document = {'per_report': [{f'metric_{i}': i / 1000 for i in range(250)}],
+                'config': {'bot': {'long': {'value': 1}}}}
+    value = {'jobs': [{field: document}, {field: document}]}
+    with monkeypatch.context() as patch:
+        patch.setattr(module, 'DOCUMENT_FIELDS', set())
+        old_root = archive.save(value)
+    assert archive.load(old_root) == value
+    root = archive.replace_fields(old_root, {'jobs': value['jobs']})
+    with archive.connection() as session:
+        jobs = session.field(root, 'jobs')
+        first = next(session.entries(jobs))
+        assert session.object(session.field(first, field))[0] == 'json'
+    restored = archive.load(root)
+    restored['jobs'][0][field]['config']['bot']['long']['value'] = 99
+    assert restored['jobs'][1][field]['config']['bot']['long']['value'] == 1
+    assert archive.load(old_root) == value
+
+
+@pytest.mark.parametrize('field', ['native_observation', 'candidate'])
+def test_oversized_frozen_job_documents_keep_bounded_tree_encoding(tmp_path, field):
+    """Compact evidence introduces no new document ceiling or oversized archive object."""
+    from pb8_loop_storage import MAX_OBJECT_BYTES
+    archive = LoopArchive(tmp_path, 'c' * 32)
+    value = {'jobs': [{field: {'details': 'x' * (MAX_OBJECT_BYTES + 32)}}]}
+    root = archive.save(value)
+    assert archive.load(root) == value
+    with archive.connection() as session:
+        first = next(session.entries(session.field(root, 'jobs')))
+        assert session.object(session.field(first, field))[0] == 'dict'
+
+
+def test_candidate_population_documents_preserve_bounded_pages(tmp_path):
+    """Full populations stay independently pageable without unpacking each metric as a node."""
+    archive = LoopArchive(tmp_path, 'd' * 32)
+    candidates = [{'id':str(i), 'metrics':{f'metric_{k}':i+k/1000 for k in range(100)}}
+                  for i in range(130)]
+    root = archive.save({'candidates':candidates})
+    page = archive.page(root, 'candidates', 63, 3)
+    assert page['items'] == candidates[63:66]
+    assert page['total'] == 130 and page['next_offset'] == 66
+    with archive.connection() as session:
+        collection = session.field(root, 'candidates')
+        assert session.object(collection)[0] == 'list'
+        assert session.object(next(session.entries(collection)))[0] == 'json'
+    assert archive.load(root)['candidates'] == candidates
+
+
+def test_ai_metadata_can_add_and_remove_fields_without_hydrating_history(record, monkeypatch):
+    """Publish only small new/replaced/deleted branches and preserve full cached reads."""
+    store, row = record
+    original = json.loads(json.dumps(row))
+    store.update_ai_fields(OWNER, row['id'], {'ai_retry'}, lambda value: value.update(ai_retry={'attempt': 1}))
+
+    def forbidden(*args, **kwargs):
+        """A metadata change cannot load or serialize the full run archive."""
+        pytest.fail('AI metadata loaded or rewrote the complete Loop')
+
+    def change(value):
+        """Complete the retry and persist bounded diagnostics in the same transaction."""
+        value.pop('ai_retry')
+        value['last_ai_request'] = {'outcome': 'completed'}
+
+    with monkeypatch.context() as patch:
+        patch.setattr(LoopArchive, 'load', forbidden)
+        patch.setattr(LoopArchive, 'save', forbidden)
+        store.update_ai_fields(OWNER, row['id'], {'ai_retry', 'last_ai_request'}, change)
+    current = LoopStore(store.root).read(OWNER, row['id'])
+    assert 'ai_retry' not in current and current['last_ai_request'] == {'outcome': 'completed'}
+    for field in ('jobs', 'history', 'settings', 'initial_config', 'status', 'control_generation'):
+        assert current[field] == original[field]
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('violation', ['control', 'settings', 'new_field'])
+def test_ai_metadata_cannot_mutate_undeclared_state(record, legacy, violation):
+    """Archived and migrating runs enforce the same immutable transaction boundary."""
+    store, row = record
+    path = store.path(OWNER, row['id'])
+    if legacy:
+        path.write_text(json.dumps(row))
+    before = path.read_bytes()
+
+    def invalid(value):
+        """Attempt a mutation outside the declared diagnostics branch."""
+        if violation == 'control':
+            value['status'] = 'paused'
+        elif violation == 'settings':
+            value['settings']['max_runs'] = 999
+        else:
+            value['jobs'] = []
+
+    with pytest.raises(ValueError, match='undeclared or read-only'):
+        store.update_ai_fields(OWNER, row['id'], {'last_ai_request'}, invalid, read_fields={'settings'})
+    assert path.read_bytes() == before
+
+
+def test_ai_metadata_rejects_non_ai_write_fields(record):
+    """A caller must use a normal full transaction for jobs or controller transitions."""
+    store, row = record
+    with pytest.raises(ValueError, match='only declared AI metadata'):
+        store.update_ai_fields(OWNER, row['id'], {'jobs'}, lambda value: value.update(jobs=[]))
+
+
 @pytest.mark.parametrize('field', ['jobs', 'observer_jobs'])
 @pytest.mark.parametrize('legacy', [False, True])
 def test_native_job_navigation_never_loads_full_history_or_waits_on_raw_cache(record, monkeypatch, field, legacy):
@@ -687,3 +795,159 @@ def test_hot_display_cache_cannot_hide_identity_or_archive_tampering(record, cor
                                       (zlib.compress(b'corrupt'), header['_loop_storage']['root'][1]))
     with pytest.raises((ValueError, FileNotFoundError, LoopStorageError)):
         store.read(OWNER, row['id'], fields={'status', 'settings'}, prefer_cached_fields=True)
+
+
+def test_runtime_status_patches_do_not_hydrate_or_rewrite_evidence(record, monkeypatch):
+    """Polling touches its declared branch even with an unrelated large population/history."""
+    store, row = record
+    original = store.update(OWNER, row['id'], lambda value: value.update(
+        jobs=[{'operation': 'a' * 32, 'kind': 'optimizer', 'status': 'running', 'polls': 0}],
+        candidates=[{'large_evidence': list(range(10000))}], history=[{'evidence': 'retained'}]))
+    def forbidden(*args, **kwargs):
+        """Status updates must never enter whole-record archive persistence."""
+        pytest.fail('Runtime status loaded or rewrote the entire archive')
+    with monkeypatch.context() as patch:
+        patch.setattr(LoopArchive, 'load', forbidden)
+        patch.setattr(LoopArchive, 'save', forbidden)
+        changed = store.update_runtime_fields(OWNER, row['id'], {'jobs'},
+            lambda value: value['jobs'][0].update(status='collecting', polls=1))
+    assert 'history' not in changed and 'candidates' not in changed and 'settings' not in changed
+    current = LoopStore(store.root).read(OWNER, row['id'])
+    assert current['jobs'][0]['status'] == 'collecting'
+    for key in ('history', 'candidates', 'settings', 'initial_config', 'status', 'control_generation'):
+        assert current[key] == original[key]
+
+
+@pytest.mark.parametrize('legacy', [False, True])
+@pytest.mark.parametrize('field', ['status', 'control_generation', 'settings', 'ai_calls'])
+def test_runtime_status_cannot_change_undeclared_or_control_fields(record, legacy, field):
+    """Partial runtime writes preserve user control and the distinct AI ledger boundary."""
+    store, row = record
+    path = store.path(OWNER, row['id'])
+    if legacy:
+        path.write_text(json.dumps(row))
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match='undeclared or read-only'):
+        store.update_runtime_fields(OWNER, row['id'], {'jobs'}, lambda value: value.update({field: 'forbidden'}))
+    assert path.read_bytes() == before
+    with pytest.raises(ValueError, match='only job collections'):
+        store.update_runtime_fields(OWNER, row['id'], {field}, lambda value: None)
+
+
+def test_runtime_and_ai_branches_preserve_concurrent_updates_and_pause(record):
+    """Independent status/report/AI writers cannot overwrite each other or revive a pause."""
+    store, row = record
+    store.update(OWNER, row['id'], lambda value: value.update(
+        status='paused', control_generation=7, jobs=[{'polls': 0}], observer_jobs=[{'polls': 0}]))
+    def worker(field):
+        """Use independently owned stores over the same real transaction locks."""
+        local = LoopStore(store.root)
+        for _ in range(15):
+            if field == 'ai_calls':
+                local.update_ai_fields(OWNER, row['id'], {field},
+                    lambda value: value.update(ai_calls=value['ai_calls'] + 1))
+            else:
+                local.update_runtime_fields(OWNER, row['id'], {field},
+                    lambda value: value[field][0].update(polls=value[field][0]['polls'] + 1))
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        list(pool.map(worker, ['jobs', 'observer_jobs', 'ai_calls']))
+    current = store.read(OWNER, row['id'])
+    assert current['jobs'][0]['polls'] == current['observer_jobs'][0]['polls'] == current['ai_calls'] == 15
+    assert current['status'] == 'paused' and current['control_generation'] == 7
+
+
+@pytest.mark.parametrize('status', ['completed', 'stopped', 'failed', 'unconfirmed'])
+def test_terminal_runtime_report_completion_updates_metadata_pending(record, status, monkeypatch):
+    """The final report clears metadata pending while preserving terminal lifecycle state."""
+    store, row = record
+    store.update(OWNER, row['id'], lambda value: value.update(status=status, cleanup_done=True,
+        candidates=[{'id':'unrelated-old-population', 'metrics':{'unused':123}}],
+        observer_jobs=[{'operation': 'a' * 32, 'kind': 'full_range', 'round': 0, 'status': 'running'}]))
+    assert store.list_metadata()[0]['observer_pending']
+    header = json.loads(store.path(OWNER, row['id']).read_text())
+    with archive_for(store, row).connection() as session:
+        population = session.field(header['_loop_storage']['root'], 'candidates')
+    original = ObjectSession.unpack
+
+    def without_population(self, reference):
+        """Final report bookkeeping must never hydrate old optimizer candidates."""
+        assert reference != population, 'Report completion loaded unrelated population'
+        return original(self, reference)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ObjectSession, 'unpack', without_population)
+        store.update_runtime_fields(OWNER, row['id'], {'observer_jobs'},
+            lambda value: value['observer_jobs'][0].update(status='complete', report_done=True))
+    assert not store.list_metadata()[0]['observer_pending']
+    assert store.read(OWNER, row['id'])['status'] == status
+    assert store.read(OWNER, row['id'])['candidates'][0]['id'] == 'unrelated-old-population'
+
+
+def test_runtime_status_publication_failure_retains_committed_root(record, monkeypatch):
+    """A failed atomic manifest publication cannot expose an uncommitted status or AI state."""
+    store, row = record
+    store.update(OWNER, row['id'], lambda value: value.update(jobs=[{'status': 'running'}]))
+    path = store.path(OWNER, row['id'])
+    before = path.read_bytes()
+    def fail(*args, **kwargs):
+        """Fail only the temporary test manifest publication."""
+        raise OSError('isolated disk error')
+    with monkeypatch.context() as patch:
+        patch.setattr('pb8_loop_store.atomic_write_private_text', fail)
+        with pytest.raises(LoopStorageError, match='persistence failed'):
+            store.update_runtime_fields(OWNER, row['id'], {'jobs'},
+                lambda value: value['jobs'][0].update(status='complete'))
+    assert path.read_bytes() == before
+    assert LoopStore(store.root).read(OWNER, row['id'])['jobs'][0]['status'] == 'running'
+
+
+def test_runtime_reads_never_unpack_population_or_poison_full_snapshot_cache(record, monkeypatch):
+    """Status/report context skips population bytes while ordinary reads retain all evidence."""
+    store, row = record
+    row = store.update(OWNER, row['id'], lambda value: value.update(
+        phase='optimize', candidates=[{'id': 'preserved', 'metrics': {'gain': 17}}]))
+    archive = archive_for(store, row)
+    header = json.loads(store.path(OWNER, row['id']).read_text())
+    with archive.connection() as session:
+        population = session.field(header['_loop_storage']['root'], 'candidates')
+    original = ObjectSession.unpack
+
+    def bounded(session, reference):
+        """Excluded evidence cannot reach recursive unpacking, even on a warm cache."""
+        assert reference != population
+        return original(session, reference)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(ObjectSession, 'unpack', bounded)
+        for read in (store.read_runtime, store.read_execution):
+            current = read(OWNER, row['id'])
+            assert 'candidates' not in current
+            assert current['jobs'] == row['jobs'] and current['history'] == row['history']
+            assert current['control_generation'] == row['control_generation']
+    assert store.read(OWNER, row['id'])['candidates'] == row['candidates']
+    store.update(OWNER, row['id'], lambda value: value.update(phase='evaluate'))
+    assert store.read_execution(OWNER, row['id'])['candidates'] == row['candidates']
+
+
+def test_execution_read_rehydrates_population_after_concurrent_phase_transition(record, monkeypatch):
+    """A select/evaluate transition cannot inherit an optimizer-only evidence view."""
+    store, row = record
+    store.update(OWNER, row['id'], lambda value: value.update(phase='optimize', candidates=[{'id': 'keep'}]))
+    original = store.read_runtime
+
+    def transitioned(owner, loop_id):
+        """Move phase between the header read and population-free context read."""
+        store.update(owner, loop_id, lambda value: value.update(phase='evaluate'))
+        return original(owner, loop_id)
+
+    monkeypatch.setattr(store, 'read_runtime', transitioned)
+    restored = store.read_execution(OWNER, row['id'])
+    assert restored['phase'] == 'evaluate' and restored['candidates'] == [{'id': 'keep'}]
+
+
+@pytest.mark.parametrize('field', ['owner', 'id'])
+def test_runtime_exclusions_cannot_remove_ownership(record, field):
+    """Selective hydration still verifies immutable owner and Loop identities."""
+    store, row = record
+    with pytest.raises(ValueError, match='ownership'):
+        store.read(OWNER, row['id'], exclude_fields={field})

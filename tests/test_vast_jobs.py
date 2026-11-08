@@ -346,10 +346,15 @@ def test_stop_collection_error_preserves_concurrent_recover(job, monkeypatch, af
     import vast_job_runner as runner
     store, identifier, intent = job
     monkeypatch.setattr(runner.time, 'time', lambda: 1100)
-    store.update(identifier, stop_rpc_at=1000, final_collection_at=1100)
+    store.update(identifier, stop_rpc_at=1000, stop_rpc_confirmed=True, final_collection_at=1100)
 
     class Connection:
         """Publish final evidence while Stop holds an older state snapshot."""
+        def operation(self, action, **kwargs):
+            """Prove native execution ended before attempting result collection."""
+            assert action == 'status'
+            return {'finished': {'exit_code': 0}}
+
         def collect(self, final, **kwargs):
             """Model collection completion followed by a technical controller failure."""
             final_result_fixture(store, identifier)
@@ -380,7 +385,7 @@ def test_stop_execution_failure_survives_unreadable_diagnostic_log(job, monkeypa
     diagnostic = final / 'optimizer.log'
     diagnostic.write_text('isolated optimizer diagnostic')
     store.update(identifier, kind='optimizer', status='collecting', stop_reason='requested',
-                 stop_rpc_at=1000, final_collection_at=1100)
+                 stop_rpc_at=1000, stop_rpc_confirmed=True, final_collection_at=1100)
     monkeypatch.setattr(runner.time, 'time', lambda: 1100)
     warnings = []
     monkeypatch.setattr(runner, '_log', lambda service, message, **kwargs: warnings.append(message))
@@ -450,11 +455,16 @@ def test_stop_without_final_data_preserves_terminal_state(job, monkeypatch, term
     """The no-final-data fallback rechecks State and preserves all terminal statuses."""
     import vast_job_runner as runner
     store, identifier, intent = job
-    store.update(identifier, stop_rpc_at=1000, final_collection_at=1100)
+    store.update(identifier, stop_rpc_at=1000, stop_rpc_confirmed=True, final_collection_at=1100)
     monkeypatch.setattr(runner.time, 'time', lambda: 1100)
 
     class Connection:
         """End the job after Stop's initial read, without final raw results."""
+        def operation(self, action, **kwargs):
+            """Separate a confirmed process exit from a later download failure."""
+            assert action == 'status'
+            return {'finished': {'exit_code': 0}}
+
         def collect(self, *args, **kwargs):
             """Simulate a concurrent terminal writer before a failed download."""
             store.update(identifier, status=terminal)
@@ -470,7 +480,7 @@ def test_stop_marker_failure_keeps_successful_finalization(job, monkeypatch):
     import vast_job_runner as runner
     store, identifier, intent = job
     final_result_fixture(store, identifier)
-    store.update(identifier, stop_rpc_at=1000, final_collection_at=1100)
+    store.update(identifier, stop_rpc_at=1000, stop_rpc_confirmed=True, final_collection_at=1100)
     monkeypatch.setattr(runner.time, 'time', lambda: 1100)
     update = store.update
 
@@ -2017,3 +2027,188 @@ def test_collection_without_stop_anchor_has_persisted_teardown_limit(job, monkey
     assert not guard_step(store, identifier, client, intent, '',
                           now=2001 + COLLECT_TEARDOWN_GRACE_SECONDS + 1)
     assert store.read(identifier)['rental_state'] == 'destroy_pending'
+
+
+def test_failed_stop_rpc_is_retried_before_any_result_publication(job, monkeypatch):
+    """A lost Stop never frees a live GPU; retry intent and confirmation survive restart."""
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    clock = [1000.0]
+    monkeypatch.setattr(runner.time, 'time', lambda: clock[0])
+    attempts = []
+    class Connection:
+        """Lose the first Stop, then acknowledge the same idempotent request."""
+        def operation(self, action, timeout):
+            """No status or snapshot is allowed before successful delivery."""
+            attempts.append(action)
+            if len(attempts) == 1:
+                raise VastError('SSH operation timed out; reconnecting')
+            if action == 'status':
+                return {'finished': {'exit_code': 130, 'cancelled': True}}
+            return {}
+        def collect(self, final, **kwargs):
+            """Expose final records only after the remote Stop was acknowledged."""
+            assert final and store.read(identifier)['stop_rpc_confirmed']
+            final_result_fixture(store, identifier)
+    connection = Connection()
+    assert runner.stop_and_collect(connection, store, identifier, intent) is False
+    first = store.read(identifier)
+    assert first['status'] == 'collecting' and not first.get('stop_results_published')
+    assert not first.get('stop_rpc_confirmed') and not first.get('final_collection_at')
+    assert attempts == ['stop']
+    clock[0] += 70
+    # Reopen storage as a recovered independent supervisor, retaining the original intent.
+    restored = JobStore(store.root)
+    assert runner.stop_and_collect(connection, restored, identifier, intent)
+    final = restored.read(identifier)
+    assert attempts == ['stop', 'stop', 'status']
+    assert final['stop_rpc_at'] == first['stop_rpc_at']
+    assert final['stop_rpc_confirmed'] and final['stop_rpc_error'] is None
+    assert final['final_collected'] and final['stop_results_published']
+    assert runner.stop_and_collect(connection, restored, identifier, intent)
+    assert attempts == ['stop', 'stop', 'status']
+
+
+@pytest.mark.parametrize('failure', [VastError('Invalid worker identity', 422), RuntimeError('programming failure')])
+def test_permanent_stop_failure_is_not_silently_retried(job, failure, monkeypatch):
+    """Only transient transport/provider failures retain the automatic Stop retry."""
+    import vast_job_runner as runner
+    monkeypatch.setattr(runner.time, 'time', lambda: 1000)
+    store, identifier, intent = job
+    class Connection:
+        """Reject a Stop permanently without providing any execution evidence."""
+        def operation(self, action, timeout):
+            """Return the permanent failure without exposing worker output."""
+            raise failure
+    with pytest.raises(type(failure), match=str(failure)):
+        runner.stop_and_collect(Connection(), store, identifier, intent)
+    state = store.read(identifier)
+    assert not state.get('stop_rpc_confirmed') and not state.get('stop_results_published')
+
+
+def test_stop_retry_window_expires_across_restart_without_releasing_gpu(job, monkeypatch):
+    """An unreachable Stop becomes explicit uncertainty, never a reusable terminal job."""
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    clock = [1000.0]
+    monkeypatch.setattr(runner.time, 'time', lambda: clock[0])
+    calls = []
+
+    class Connection:
+        """Allow status recovery later while all Stop deliveries fail."""
+        finished = False
+
+        def operation(self, action, **kwargs):
+            """Record RPCs without network or production state."""
+            calls.append(action)
+            if action == 'stop':
+                raise OSError('isolated connection loss')
+            return {'finished': {'exit_code': 0}} if self.finished else {}
+
+        def collect(self, final, **kwargs):
+            """Only proven execution completion may publish final results."""
+            assert self.finished and final
+            final_result_fixture(store, identifier)
+
+    conn = Connection()
+    assert not runner.stop_and_collect(conn, store, identifier, intent)
+    original = store.read(identifier)['stop_retry_deadline']
+    clock[0] += runner.STOP_RETRY_SECONDS
+    restored = JobStore(store.root)
+    assert not runner.stop_and_collect(conn, restored, identifier, intent)
+    row = restored.read(identifier)
+    assert row['stop_retry_deadline'] == original
+    assert row['stop_unconfirmed'] and row['status'] == 'collecting'
+    assert 'End rental' in row['error']
+    assert not row.get('stop_results_published') and not row.get('final_collection_at')
+    assert not restored.read(identifier, 'control.json')['cleanup']
+    assert calls == ['stop', 'status']
+    assert not runner.stop_and_collect(conn, restored, identifier, intent)
+    assert calls == ['stop', 'status']
+    conn.finished = True
+    clock[0] += runner.STOP_PROBE_SECONDS
+    assert runner.stop_and_collect(conn, restored, identifier, intent)
+    row = restored.read(identifier)
+    assert calls == ['stop', 'status', 'status']
+    assert row['stop_execution_confirmed'] and not row.get('stop_rpc_confirmed')
+    assert not row['stop_unconfirmed'] and row['final_collected']
+
+
+def test_acknowledged_stop_does_not_free_gpu_without_process_exit(job, monkeypatch):
+    """An RPC acknowledgement is insufficient to publish partial results as finished."""
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    clock = [1000.0]
+    monkeypatch.setattr(runner.time, 'time', lambda: clock[0])
+    calls = []
+
+    class Connection:
+        """Acknowledge delivery, but keep reporting a live native optimizer."""
+        def operation(self, action, **kwargs):
+            """Expose no native finished record."""
+            calls.append(action)
+            return {}
+
+        def collect(self, final, **kwargs):
+            """A failed partial download cannot free execution capacity either."""
+            assert final is False
+            calls.append('partial')
+            raise OSError('isolated snapshot unavailable')
+
+    assert not runner.stop_and_collect(Connection(), store, identifier, intent)
+    clock[0] += 60
+    assert not runner.stop_and_collect(Connection(), store, identifier, intent)
+    row = store.read(identifier)
+    assert calls.count('stop') == 1
+    assert row['stop_rpc_confirmed'] and row['stop_process_pending']
+    assert not row.get('stop_unconfirmed')
+    assert row['status'] == 'collecting' and not row.get('stop_results_published')
+    assert not row.get('final_collection_at')
+
+
+def test_stop_window_starts_before_any_network_operation(job, monkeypatch):
+    """SSH bootstrap failure and supervisor restart cannot renew the user Stop window."""
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    clock = [1000.0]
+    monkeypatch.setattr(runner.time, 'time', lambda: clock[0])
+    first = runner.stop_retry_state(store, identifier, intent)
+    assert first['stop_retry_deadline'] == 1180
+    clock[0] = 1180
+    second = runner.stop_retry_state(JobStore(store.root), identifier, intent)
+    assert second['stop_unconfirmed'] and second['stop_retry_deadline'] == 1180
+    assert not second.get('stop_rpc_at') and second['status'] == 'collecting'
+
+
+def test_acknowledged_legacy_uncertainty_gets_process_pending_state(job):
+    """Persisted 3661 states distinguish acknowledged delivery after upgrading."""
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    store.update(identifier, stop_rpc_confirmed=True, stop_unconfirmed=True,
+                 status='collecting', stop_rpc_at=1000)
+    state = runner.stop_retry_state(store, identifier, intent)
+    assert state['stop_rpc_confirmed'] and state['stop_process_pending']
+    assert not state['stop_unconfirmed'] and 'Stop acknowledged' in state['error']
+
+
+def test_partial_stop_transfer_resumes_only_within_original_window(job, monkeypatch):
+    """Restart retries may use remaining partial-transfer time, never a new allowance."""
+    import vast_job_runner as runner
+    store, identifier, intent = job
+    clock, windows = [1000.0], []
+    monkeypatch.setattr(runner.time, 'time', lambda: clock[0])
+
+    class Connection:
+        """Fail a short first transfer and exhaust only the remaining retry budget."""
+        def collect(self, final, timeout, **kwargs):
+            """Keep all state and artifacts below the isolated fixture root."""
+            assert final is False
+            windows.append(timeout)
+            clock[0] += 20 if len(windows) == 1 else timeout
+            raise OSError('isolated connection loss')
+
+    runner.publish_stopping_snapshot(Connection(), store, identifier, intent)
+    runner.publish_stopping_snapshot(Connection(), JobStore(store.root), identifier, intent)
+    runner.publish_stopping_snapshot(Connection(), store, identifier, intent)
+    assert windows == [180, 160]
+    assert store.read(identifier)['stop_partial_collection_at'] == 1000

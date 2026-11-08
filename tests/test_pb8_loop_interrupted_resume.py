@@ -70,6 +70,7 @@ def test_acknowledged_resume_retires_open_call_once_and_advances(record, monkeyp
 def test_resume_cannot_retire_a_request_while_its_controller_is_still_active(record, monkeypatch):
     """Acknowledge only after the old owned step has fully left its cross-process lock."""
     store, row = record
+    monkeypatch.setattr(api, 'RESUME_LOCK_WAIT_SECONDS', 0)
     store.update(OWNER, row['id'], lambda current: current.update(
         status='paused', pending_ai={'id': 'still-stopping', 'stage': 'interpret'}))
     original = store.read(OWNER, row['id'])
@@ -94,3 +95,72 @@ def test_live_running_request_is_not_presented_as_interrupted(record):
     store.update(OWNER, row['id'], lambda current: current.update(
         status='running', pending_ai={'id': 'working', 'stage': 'interpret'}))
     assert api.projection(store.read(OWNER, row['id'], fields=api._DISPLAY_FIELDS))['has_interrupted_ai'] is False
+
+
+@pytest.mark.parametrize('outcome', ['resume', 'cancel', 'stop'])
+def test_resume_waits_for_transient_lock_and_preserves_newer_control(record, monkeypatch, outcome):
+    """Short contention waits safely; cancellation/Stop cannot leave a delayed resume behind."""
+    store, row = record
+    store.update(OWNER, row['id'], lambda current: current.update(status='paused'))
+    original = store.read(OWNER, row['id'])
+    ai = SimpleNamespace(preflight=AsyncMock(return_value={}))
+    monkeypatch.setattr(api, '_controller', LoopController(store.root, store=store, backend=FakeBackend(), ai=ai))
+    monkeypatch.setattr(api, 'RESUME_LOCK_WAIT_SECONDS', 2)
+    fd = os.open(store.path(OWNER, row['id']).with_suffix('.controller'), os.O_CREAT | os.O_RDWR, 0o600)
+    real_flock = fcntl.flock
+    real_flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    released = False
+
+    def release():
+        """Release the synthetic controller only when the tested transition allows it."""
+        nonlocal released
+        if not released:
+            os.close(fd)
+            released = True
+
+    async def exercise():
+        """Coordinate actual flock contention without timing-dependent sleeps."""
+        loop = asyncio.get_running_loop()
+        busy = asyncio.Event()
+        def observed_flock(target, operation):
+            """Notify the test when resume really encounters the held claim."""
+            try:
+                return real_flock(target, operation)
+            except BlockingIOError:
+                loop.call_soon_threadsafe(busy.set)
+                raise
+        monkeypatch.setattr(api.fcntl, 'flock', observed_flock)
+        task = asyncio.create_task(api._loop_action_owned(OWNER, row['id'], api.LoopAction(action='resume')))
+        try:
+            await asyncio.wait_for(busy.wait(), 3)
+            assert store.read(OWNER, row['id'])['status'] == 'paused'
+            if outcome == 'cancel':
+                task.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await task
+                release()
+                assert store.read(OWNER, row['id']) == original
+            elif outcome == 'stop':
+                store.update(OWNER, row['id'], lambda current: current.update(
+                    status='stopping', control_generation=current['control_generation'] + 1))
+                release()
+                with pytest.raises(HTTPException):
+                    await asyncio.wait_for(task, 3)
+                current = store.read(OWNER, row['id'])
+                assert current['status'] == 'stopping'
+                assert current['control_generation'] == original['control_generation'] + 1
+            else:
+                release()
+                response = await asyncio.wait_for(task, 3)
+                assert json.loads(response.body)['status'] == 'running'
+                current = store.read(OWNER, row['id'])
+                assert current['control_generation'] == original['control_generation'] + 1
+                assert current['jobs'] == original['jobs'] and current['ai_calls'] == original['ai_calls']
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+    try:
+        asyncio.run(exercise())
+    finally:
+        release()

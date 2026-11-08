@@ -58,6 +58,8 @@ def variant_config_schema(record):
               for key in ('backtest', 'bot', 'live', 'optimize')},
               'required': ['backtest', 'bot', 'live', 'optimize'], 'additionalProperties': True}
     schema['properties']['optimize'] = worker_settings_schema(worker_reference(record))
+    if record.get('optimizer_research_version') == 1:
+        schema['properties']['optimize']['properties']['seed'] = {'const': None}
     fixed = {}
     if not record['settings']['scenario_enabled']:
         fixed.update(scenario_state(initial)['backtest'])

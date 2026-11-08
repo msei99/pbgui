@@ -320,6 +320,8 @@
   }
   function grid(parent) { var row = element('div', undefined, 'form-row cols-8 loop-grid'); parent.appendChild(row); return row; }
   function executionSummary() {
+    var patience=byId('patience'),research=['gpu','vast'].includes(byId('execution').value);
+    if(patience){patience.disabled=research;patience.closest('.form-group').querySelector('label').textContent=research?'Cycles without improvement · CPU only':'Cycles without improvement';}
     if (!options.vast) return;
     var target = byId('execution').value, hours = byId('hours');
     hours.max = target === 'vast' ? options.vast.hours : 168;
@@ -466,10 +468,47 @@
       else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
     });
   }
-  function reportTable(parent,headers,values) {
-    var wrap=element('div',undefined,'loop-table-scroll'), table=element('table',undefined,'tbl loop-table'),head=element('thead'),line=element('tr');
-    headers.forEach(function(text){line.appendChild(element('th',text));});head.appendChild(line);table.appendChild(head);var body=element('tbody');
-    values.forEach(function(values){var row=element('tr');values.forEach(function(value){row.appendChild(element('td',value===undefined||value===null?'—':String(value)));});body.appendChild(row);});table.appendChild(body);wrap.appendChild(table);parent.appendChild(wrap);return table;
+  function reportSortValue(value) {
+    if(typeof value==='number')return sortNumber(value);
+    if(value==null)return null;
+    var text=String(value).trim();
+    if(!text||['—','Unavailable','Not recorded','Not measured'].includes(text))return null;
+    var elapsed=text.match(/^(\d+)h (\d+)m (\d+)s$/);
+    if(elapsed)return Number(elapsed[1])*3600+Number(elapsed[2])*60+Number(elapsed[3]);
+    var parts=new Intl.NumberFormat().formatToParts(12345.6),decimal=parts.find(function(p){return p.type==='decimal';}),group=parts.find(function(p){return p.type==='group';});
+    var number=text;
+    if(group)number=number.split(group.value).join('');
+    if(decimal)number=number.replace(decimal.value,'.');
+    number=number.replace(/[\s\u00a0\u202f]/g,'').replace(/^[$€£]/,'').replace(/[%×h]$/,'');
+    return /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(number)?sortNumber(Number(number)):text;
+  }
+  function reportTable(parent,headers,values,sortValues) {
+    var wrap=element('div',undefined,'loop-table-scroll'),table=element('table',undefined,'tbl loop-table'),head=element('thead'),line=element('tr'),body=element('tbody');
+    var heading=parent.lastElementChild;while(heading&&heading.tagName!=='H4')heading=heading.previousElementSibling;
+    var key=JSON.stringify([selected,reportView,reportView==='cycle'?reportRound:null,reportTab,heading?heading.textContent:'',headers]);
+    var saved=workflow.report_sorts&&workflow.report_sorts[key],sort=saved&&Number.isInteger(saved.column)&&saved.column>=0&&saved.column<headers.length&&['asc','desc'].includes(saved.direction)?saved:null;
+    var tableIndex=parent.querySelectorAll('table').length,controls=[];
+    function applySort() {
+      Array.from(line.cells).forEach(function(cell,index){var active=sort&&sort.column===index;cell.setAttribute('aria-sort',active?(sort.direction==='asc'?'ascending':'descending'):'none');controls[index].textContent=headers[index]+(active?(sort.direction==='asc'?' ↑':' ↓'):'');});
+      if(!sort)return;
+      var ordered=Array.from(body.rows).sort(function(a,b){
+        var ai=Number(a.dataset.reportIndex),bi=Number(b.dataset.reportIndex);
+        var av=sortValues?sortValues[ai][sort.column]:reportSortValue(values[ai][sort.column]),bv=sortValues?sortValues[bi][sort.column]:reportSortValue(values[bi][sort.column]);
+        return compareSortValue(av,bv,sort.direction)||ai-bi;
+      });
+      var fragment=document.createDocumentFragment();ordered.forEach(function(row){fragment.appendChild(row);});body.appendChild(fragment);
+    }
+    headers.forEach(function(text,index){
+      var cell=element('th');cell.setAttribute('scope','col');
+      var control=button(cell,text,function(){
+        sort={column:index,direction:sort&&sort.column===index&&sort.direction==='asc'?'desc':'asc'};
+        var entries=Object.entries(workflow.report_sorts||{}).filter(function(pair){return pair[0]!==key;}).slice(-63);
+        entries.push([key,sort]);workflow.report_sorts=Object.fromEntries(entries);persistWorkflow();applySort();
+      });control.className='loop-sort';control.id='loop-report-sort-'+tableIndex+'-'+index;controls.push(control);line.appendChild(cell);
+    });
+    head.appendChild(line);table.appendChild(head);
+    values.forEach(function(cells,index){var row=element('tr');row.dataset.reportIndex=String(index);cells.forEach(function(value){row.appendChild(element('td',value===undefined||value===null?'—':String(value)));});body.appendChild(row);});
+    table.appendChild(body);wrap.appendChild(table);parent.appendChild(wrap);applySort();return table;
   }
   function goalTable(parent,goals) {
     if(!goals.length){parent.appendChild(element('p','No successful exact comparison recorded.','muted-line'));return;}
@@ -590,9 +629,18 @@
     parent.appendChild(element('p','Automatic backtests for your evaluation. These results are excluded from AI, JEV, goal scores, stopping decisions and learned knowledge.','muted-line'));
     parent.appendChild(element('p','Both report kinds evaluate eligible comparison candidates. The displayed result follows the CPU training winner, including the unchanged start. Historical runs may retain an earlier Holdout selection.','muted-line'));
     var jobs=(run.observer_jobs||[]).filter(function(job){return round==null||job.round===round;}).sort(function(a,b){return a.round-b.round||a.kind.localeCompare(b.kind);});
+    var viewKey=run.id+':'+(round==null?'all':round),views=workflow.evaluation_views||{},saved=views[viewKey]||{};
+    var chosen=new Set((Array.isArray(saved.selected)?saved.selected:[]).filter(function(operation){return jobs.some(function(job){return job.operation===operation&&evaluationComparable(job);});}));
+    function saveView(){var entries=Object.entries(views).filter(function(pair){return pair[0]!==viewKey;}).slice(-31);entries.push([viewKey,{hide_duplicates:!!saved.hide_duplicates,selected:Array.from(chosen)}]);workflow.evaluation_views=Object.fromEntries(entries);persistWorkflow();}
+    var tools=element('div',undefined,'panel-toolbar'),label=element('label',undefined,'chk-row'),hide=element('input');hide.type='checkbox';hide.id='loop-evaluation-deduplicate';hide.checked=!!saved.hide_duplicates;label.appendChild(hide);label.appendChild(element('span','Filter out duplicates'));tools.appendChild(label);
+    hide.addEventListener('change',function(){saved.hide_duplicates=hide.checked;saveView();reportSignature='';updateReport();});
+    var compareSelected=button(tools,'Compare selected',function(){openEvaluationComparison(run,'selected',Array.from(chosen));});compareSelected.id='loop-evaluation-compare-selected';
+    function selectedChanged(){saveView();compareSelected.disabled=chosen.size<2;compareSelected.textContent='Compare selected ('+chosen.size+')';}
+    selectedChanged();parent.appendChild(tools);
+    if(saved.hide_duplicates){var seen=new Set();jobs=jobs.filter(function(job,index){var key=job.kind+':'+(job.operation||job.name||String(index));if(seen.has(key))return false;seen.add(key);return true;});}
     if(!jobs.length){parent.appendChild(element('p',run.observer_enabled?'User evaluations are queued after the start comparison and each round’s exact comparison.':'No automatic user evaluations were recorded for this older run.','muted-line'));return;}
-    var table=reportTable(parent,['Round / period','Status','Legacy score','Duration','Gain','Drawdown','Recovery','ADG','Sharpe','Sortino','Fills'],jobs.map(function(job){var metrics=job.metrics||{};return [job.round<0?'Unchanged start · '+observerName(job):'Loop '+(job.round+1)+' · '+observerName(job),job.display_status||job.status,numeric(job.holdout_score),duration(job.run_started_at&&job.ended_at?job.ended_at-job.run_started_at:null)].concat(['gain','drawdown','recovery_days','adg','sharpe','sortino','trades'].map(function(metric){return observerValue(metrics[metric],metric);}));}));
-    Array.from(table.tBodies[0].rows).forEach(function(line,index){var job=jobs[index];backtestButton(line.cells[0],run,job);nativeLogButton(line.cells[0],run,[job]);});
+    var table=reportTable(parent,['Round / period','Status','Legacy score','Duration','Gain','Drawdown','Recovery','ADG','Sharpe','Sortino','Fills'],jobs.map(function(job){var metrics=job.metrics||{};return [job.round<0?'Unchanged start · '+observerName(job):'Loop '+(job.round+1)+' · '+observerName(job),job.display_status||job.status,numeric(job.holdout_score),duration(job.run_started_at&&job.ended_at?job.ended_at-job.run_started_at:null)].concat(['gain','drawdown','recovery_days','adg','sharpe','sortino','trades'].map(function(metric){return observerValue(metrics[metric],metric);}));}),jobs.map(function(job){var metrics=job.metrics||{};return [[job.round,observerName(job)],sortText(job.display_status||job.status),sortNumber(job.holdout_score),job.run_started_at&&job.ended_at?sortNumber(job.ended_at-job.run_started_at):null].concat(['gain','drawdown','recovery_days','adg','sharpe','sortino','trades'].map(function(metric){return sortNumber(metrics[metric]);}));}));
+    Array.from(table.tBodies[0].rows).forEach(function(line){var job=jobs[Number(line.dataset.reportIndex)];backtestButton(line.cells[0],run,job);nativeLogButton(line.cells[0],run,[job]);if(evaluationComparable(job))tableSelection(line,job.operation,function(){return chosen;},function(){},selectedChanged,true);});
     jobs.forEach(function(job){
       parent.appendChild(element('h4',(job.round<0?'Unchanged start':'Loop '+(job.round+1))+' · '+observerName(job)));
       if((job.windows||[]).length)reportTable(parent,['Window','Start','End','Exchanges'],job.windows.map(function(window){return [window.label||observerName(job),window.start_date,window.end_date,(window.exchanges||[]).join(', ')];}));
@@ -655,7 +703,7 @@
     }).catch(function(exc){if(token===diffGeneration){held.status='failed';if(exc.name!=='AbortError')output.replaceChildren(element('p',exc.message,'loop-error'));}});
   }
   function updateReport() {
-    if(!reportView||!reportDialog||reportSuspended)return;
+    if(!reportView||!reportDialog||reportSuspended||reportBody.querySelector('table[data-selecting]'))return;
     var row=rows.find(function(item){return item.id===selected;});if(!row)return;
     if(row.summary_only){
       reportTitle.textContent=reportView==='cycle'?'Round '+(reportRound+1)+' · Loading…':'Loading Loop report…';
@@ -698,7 +746,7 @@
       var jobs=row.jobs.filter(function(job){return job.round===reportRound;});
       if(reportTab==='overview'){
         var overview=element('div',undefined,'form-row cols-4 loop-summary');[['Status',cycle.status],['Duration',duration(cycle.duration_seconds)],['Backtests',cycle.completed_backtests+' / '+cycle.backtests],['AI selection',cycle.ai_evaluated?(cycle.winner_candidate_id||'No qualified winner'):'Not recorded']].forEach(function(pair){var card=element('div');card.appendChild(element('span',pair[0]));var val=element('strong',pair[1]);if(pair[0]==='Duration')val.dataset.reportDuration='';card.appendChild(val);overview.appendChild(card);});reportBody.appendChild(overview);
-        reportTable(reportBody,['Started','Finished','Timing'],[[dateText(cycle.started_at),cycle.active?'Running':dateText(cycle.ended_at),cycle.duration_estimated?'Estimated from legacy timestamps':'Recorded']]);
+        reportTable(reportBody,['Started','Finished','Timing'],[[dateText(cycle.started_at),cycle.active?'Running':dateText(cycle.ended_at),cycle.duration_estimated?'Estimated from legacy timestamps':'Recorded']],[[sortNumber(cycle.started_at),cycle.active?null:sortNumber(cycle.ended_at),cycle.duration_estimated?'Estimated from legacy timestamps':'Recorded']]);
         reportTable(reportBody,['Job','Kind','Status','Duration'],jobs.map(function(job){return [job.name,job.kind,job.status,duration(job.run_started_at&&job.ended_at?job.ended_at-job.run_started_at:null)];}));
         jobs.filter(function(job){return job.error||job.result_error;}).forEach(function(job){reportBody.appendChild(element('p',job.name+': '+(job.error||job.result_error),'loop-error'));});
       } else if(reportTab==='goals')goalTable(reportBody,cycle.goals||[]);
@@ -707,7 +755,7 @@
         var checks=jobs.filter(function(job){return ['validation','holdout'].includes(job.kind);});
         var comparison=row.comparison||{};reportTable(reportBody,['Comparison period','Exchanges'],[[[comparison.start_date,comparison.end_date].filter(Boolean).join(' → ')||'Not recorded',(comparison.exchanges||[]).join(', ')||'Not recorded']]);
         if(!checks.length)reportBody.appendChild(element('p','No comparison backtests. This round cannot authorize the next optimizer round.','loop-error'));
-        else {checks.forEach(function(job){var actions=element('div',undefined,'panel-toolbar');actions.appendChild(element('span',job.name));nativeLogButton(actions,row,[job]);backtestButton(actions,row,job);reportBody.appendChild(actions);});reportTable(reportBody,['Backtest','Type','Status','Started','Finished','Score'],checks.map(function(job){var obs=(cycle.observations||[]).find(function(item){return item.operation===job.operation;});return [job.name,job.kind,job.status,dateText(job.run_started_at),dateText(job.ended_at),numeric(obs&&obs.assessment?obs.assessment.score:null)];}));}
+        else {checks.forEach(function(job){var actions=element('div',undefined,'panel-toolbar');actions.appendChild(element('span',job.name));nativeLogButton(actions,row,[job]);backtestButton(actions,row,job);reportBody.appendChild(actions);});reportTable(reportBody,['Backtest','Type','Status','Started','Finished','Score'],checks.map(function(job){var obs=(cycle.observations||[]).find(function(item){return item.operation===job.operation;});return [job.name,job.kind,job.status,dateText(job.run_started_at),dateText(job.ended_at),numeric(obs&&obs.assessment?obs.assessment.score:null)];}),checks.map(function(job){var obs=(cycle.observations||[]).find(function(item){return item.operation===job.operation;});return [sortText(job.name),sortText(job.kind),sortText(job.status),sortNumber(job.run_started_at),sortNumber(job.ended_at),sortNumber(obs&&obs.assessment?obs.assessment.score:null)];}));}
         (cycle.observations||[]).forEach(function(obs){reportBody.appendChild(element('h4',obs.candidate_id));goalTable(reportBody,(obs.assessment.goals||[]).map(function(goal){return Object.assign({},goal,{metrics:goal.metric?[goal.metric]:[]});}));});
       } else {
         if(cycle.reason){reportBody.appendChild(element('h4','Cycle evaluation'));reportBody.appendChild(element('p',cycle.reason,'loop-analysis'));}
@@ -739,7 +787,7 @@
     reportSignature=JSON.stringify([reportView,reportRound,reportTab,diffOperation,diffBaseline,row],reportReplacer);
     reportBody.scrollTop=scroll;if(!reportOverlay.classList.contains('is-open')){reportOverlay.classList.add('is-open');reportOverlay.setAttribute('aria-hidden','false');reportWindow.fit();document.getElementById('loop-report-close').focus();}else if(focus){var focused=document.getElementById(focus);if(focused&&reportDialog.contains(focused))focused.focus({preventScroll:true});}
   }
-  function executionName(value){return {cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai',validation:'Local CPU'}[value]||'Unknown';}
+  function executionName(value){return {cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai',vast_cpu:'Vast CPU (reused)',validation:'Local CPU'}[value]||'Unknown';}
   function metricValue(value,goal){
     if(value==null)return '—';var metric=goal.metric||(goal.metrics||[])[0]||'';
     if(metric.includes('days'))return numeric(value)+' days ('+numeric(value*24)+' h)';
@@ -748,13 +796,26 @@
   }
   var resultsGeneration=0;
   function hasEvaluationResults(run,kind){return !!run&&(run.observer_jobs||[]).some(function(job){return job.kind===kind&&job.simulation_complete&&['complete','completed'].includes(job.status)&&job.log_available;});}
-  function openEvaluationComparison(run,kind){
-    if(!hasEvaluationResults(run,kind))return;
+  function evaluationComparable(job){return job&&/^[a-f0-9]{32}$/.test(job.operation||'')&&['observer_holdout','observer_full_range'].includes(job.kind)&&job.simulation_complete&&['complete','completed'].includes(job.status)&&job.log_available;}
+  function openEvaluationComparison(run,kind,operations){
+    if(kind==='selected'){
+      operations=Array.from(new Set(operations||[])).filter(function(operation){return (run.observer_jobs||[]).some(function(job){return job.operation===operation&&evaluationComparable(job);});});
+      if(operations.length<2)return;
+    }else if(!hasEvaluationResults(run,kind))return;
     try{sessionStorage.removeItem('pbgui.loopEvaluationComparison');}catch(_){}
     select(run.id);
     var origin=new URL(location.href),url=new URL(origin);
     url.pathname=url.pathname.replace(/\/optimize-v8\/main_page$/, '/backtest-v8/main_page');url.search='';url.hash='';
     url.searchParams.set('panel','results');url.searchParams.set('result_loop',run.id);url.searchParams.set('result_evaluation',kind);
+    if(kind==='selected'){
+      try{
+        var selectionId=Array.from(crypto.getRandomValues(new Uint8Array(16)),function(byte){return byte.toString(16).padStart(2,'0');}).join('');
+        var savedTargets=JSON.parse(sessionStorage.getItem('pbgui.loopEvaluationTargets')||'{}');
+        var targets=Object.fromEntries(Object.entries(savedTargets).slice(-15));targets[selectionId]={run:run.id,operations:operations};
+        sessionStorage.setItem('pbgui.loopEvaluationTargets',JSON.stringify(targets));
+        url.searchParams.set('result_selection',selectionId);url.searchParams.set('result_compare','1');
+      }catch(exc){error(new Error('Cannot preserve the selected evaluations for comparison: '+exc.message));return;}
+    }
     var back=new URL(origin);back.search='';['loop_id','loop_view','loop_cycle','loop_tab','loop_variant','loop_compare','loop_log_run','loop_log'].forEach(function(key){if(origin.searchParams.has(key))back.searchParams.set(key,origin.searchParams.get(key));});back.hash=state.panel;
     url.searchParams.set('loop_return',back.pathname+back.search+back.hash);leaveForBacktest(url,back);
   }
@@ -833,7 +894,27 @@
     reportTable(parent,['Field','Value'],fields);
     if(failure.history&&failure.history.length){parent.appendChild(element('h4','Failed request attempts'));reportTable(parent,['Attempt','Failed at','Error','Next retry pause'],failure.history.map(function(item){return [item.attempt,dateText(item.at),item.error,item.retry_delay==null?'No further retry':item.retry_delay+' seconds'];}));}
   }
+  function optimizerResearchSummary(parent,row){
+    if(row.optimizer_research_version!==1)return;
+    parent.appendChild(element('h4','Optimizer settings for deep search'));
+    var assessment=row.optimizer_assessment;
+    if(!assessment){parent.appendChild(element('p','Waiting for independent training measurements.','muted-line'));return;}
+    var groups=assessment.groups||[],recommendations=assessment.recommendations||[];
+    reportTable(parent,['Rank / settings','Trials','Qualified / completed','Technical failures','Metric coverage','Successful trials','Proxy budget','Measured search quality','Uncertainty'],recommendations.map(function(item,index){
+      var group=groups.find(function(value){return (value.operations||[]).includes(item.operation);})||{};
+      var values=(group.distribution||[]).map(function(value,i){var criterion=(assessment.criteria||[])[i]||{};return criterion.metric+' ('+criterion.reducer+'): '+Number(value.mean).toPrecision(6)+' · range '+Number(value.min).toPrecision(6)+'–'+Number(value.max).toPrecision(6);}).join('; ');
+      return [(index+1)+' · '+item.operation.slice(0,8),String(group.trial_count||0),String(group.qualified_count||0)+' / '+(group.validated_count||0),String(group.technical_failure_count||0),group.measurement_coverage==null?'Unavailable':(100*group.measurement_coverage).toFixed(0)+'%',group.successful_seed_rate==null?'Unavailable':(100*group.successful_seed_rate).toFixed(0)+'%',(group.budget||{}).mode==='proxy'?String(group.budget.value):'Configured limit',values||'Unavailable',group.uncertainty||'Unavailable'];
+    }));
+    parent.appendChild(element('p',assessment.reason,'loop-analysis'));
+    recommendations.forEach(function(item,index){parent.appendChild(element('p',(index+1)+'. '+item.reason,'loop-analysis'));});
+    if(recommendations.length)button(parent,'Download optimizer recommendations',async function(){
+      try{var payload=await request('/'+row.id+'/optimizer-configs'),url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,4)],{type:'application/json'})),link=element('a');link.href=url;link.download='pb8-optimizer-recommendations-'+row.id+'.json';link.click();setTimeout(function(){URL.revokeObjectURL(url);},1000);}catch(exc){error(exc);}
+    });
+  }
   function resultSummary(parent,row){
+    optimizerResearchSummary(parent,row);
+    if(row.decision_repair&&row.decision_repair.active)reportTable(parent,['Recovery','Details'],[['Automatic proposal correction',row.decision_repair.error],['Next attempt',dateText(row.decision_repair.retry_at)]]);
+    if(row.validation_recovery&&row.validation_recovery.active)reportTable(parent,['Recovery','Details'],[['Automatic CPU validation recovery',row.validation_recovery.error],['Attempts',row.validation_recovery.attempts],['Next retry',dateText(row.validation_recovery.retry_at)]]);
     var best=row.best,baseline=row.baseline,assessment=best&&best.assessment;
     var finalAssessment=row.final_validation&&row.final_validation[0]&&row.final_validation[0].assessment;
     var confirmation=row.status==='completed'?'Confirmed':row.final_validation&&row.final_validation.length?'Unconfirmed — inspect holdout goals':'Not confirmed';
@@ -848,12 +929,12 @@
     if(row.settings.run_limit_mode==='proxy')parent.appendChild(element('p','Proxy stopping is supervised from native progress. An already dispatched GPU batch can finish beyond the requested threshold.','muted-line'));
   }
   function render() { renderWorkflow(); updateReport(); }
-  function tableSelection(line, key, getSelection, repaint) {
-    line.tabIndex=0;line.classList.toggle('selected',getSelection().has(key));
-    function paint(){var selection=getSelection();line.closest('table').querySelectorAll('tr[data-selection]').forEach(function(row){row.classList.toggle('selected',selection.has(row.dataset.selection));});}
-    function pick(event){var table=line.closest('table');if(event.type==='click'&&table.dataset.dragged==='1'){delete table.dataset.dragged;repaint();return;}if(event.target.closest('button'))return;var selection=getSelection();if(!event.ctrlKey&&!event.metaKey)selection.clear();if(event.ctrlKey||event.metaKey){if(selection.has(key))selection.delete(key);else selection.add(key);}else selection.add(key);persistWorkflow();paint();repaint();}
+  function tableSelection(line, key, getSelection, repaint, changed, additive) {
+    line.tabIndex=0;line.classList.toggle('selected',getSelection().has(key));line.setAttribute('aria-selected',String(getSelection().has(key)));
+    function paint(){var selection=getSelection();line.closest('table').querySelectorAll('tr[data-selection]').forEach(function(row){row.classList.toggle('selected',selection.has(row.dataset.selection));row.setAttribute('aria-selected',String(selection.has(row.dataset.selection)));});if(changed)changed();}
+    function pick(event){var table=line.closest('table');if(event.type==='click'&&table.dataset.dragged==='1'){delete table.dataset.dragged;repaint();return;}if(event.target.closest('button'))return;var selection=getSelection();if(!additive&&!event.ctrlKey&&!event.metaKey)selection.clear();if(additive||event.ctrlKey||event.metaKey){if(selection.has(key))selection.delete(key);else selection.add(key);}else selection.add(key);persistWorkflow();paint();repaint();}
     line.addEventListener('click',pick);line.addEventListener('keydown',function(event){if(event.key===' '){event.preventDefault();pick(event);}});
-    line.addEventListener('pointerdown',function(event){if(event.button!==0||event.target.closest('button'))return;var table=line.closest('table'),selection=getSelection(),lines=Array.from(table.querySelectorAll('tbody tr[data-selection]'));delete table.dataset.dragged;table.dataset.selecting='1';table._loop_range={from:lines.indexOf(line),baseline:new Set(event.ctrlKey||event.metaKey?selection:[]),remove:(event.ctrlKey||event.metaKey)&&selection.has(key)};});
+    line.addEventListener('pointerdown',function(event){if(event.button!==0||event.target.closest('button'))return;var table=line.closest('table'),selection=getSelection(),lines=Array.from(table.querySelectorAll('tbody tr[data-selection]'));delete table.dataset.dragged;table.dataset.selecting='1';table._loop_range={from:lines.indexOf(line),baseline:new Set(additive||event.ctrlKey||event.metaKey?selection:[]),remove:(additive||event.ctrlKey||event.metaKey)&&selection.has(key)};});
     line.addEventListener('pointerenter',function(){var table=line.closest('table'),range=table._loop_range;if(table.dataset.selecting==='1'&&range){table.dataset.dragged='1';var selection=getSelection(),lines=Array.from(table.querySelectorAll('tbody tr[data-selection]')),to=lines.indexOf(line);selection.clear();range.baseline.forEach(function(value){selection.add(value);});lines.slice(Math.min(range.from,to),Math.max(range.from,to)+1).forEach(function(row){if(range.remove)selection.delete(row.dataset.selection);else selection.add(row.dataset.selection);});persistWorkflow();paint();}});
     line.dataset.selection=key;
   }
@@ -1357,7 +1438,7 @@
       // Its own revision remains pending, so the next poll catches up normally.
       if(current.updated_at>value.updated_at){
         var metadata=Object.assign({},current);
-        ['jobs','observer_jobs','history','cycles','best','_detail_error','_detail_blocked_revision',
+        ['jobs','observer_jobs','history','cycles','best','optimizer_assessment','validation_recovery','decision_repair','_detail_error','_detail_blocked_revision',
           '_detail_revision','_detail_updated_at','summary_only'].forEach(function(key){delete metadata[key];});
         metadata.settings=Object.assign({},value.settings,metadata.settings);
         value=Object.assign({},value,metadata);
@@ -1381,7 +1462,7 @@
       if(!old)return row;
       if(old.updated_at>row.updated_at)return old;
       if(old.summary_only){if(old.view_revision===row.view_revision){row._detail_error=old._detail_error;row._detail_blocked_revision=old._detail_blocked_revision;}return row;}
-      var metadata=Object.assign({},row);['jobs','observer_jobs','history','cycles','best'].forEach(function(key){delete metadata[key];});
+      var metadata=Object.assign({},row);['jobs','observer_jobs','history','cycles','best','optimizer_assessment','validation_recovery','decision_repair'].forEach(function(key){delete metadata[key];});
       metadata.settings=Object.assign({},old.settings,metadata.settings);
       var merged=Object.assign({},old,metadata,{summary_only:false});
       if(old._detail_revision===row.view_revision)merged.deletable=old.deletable;
