@@ -4190,3 +4190,37 @@ def test_approved_coin_tooltips_explain_empty_sides() -> None:
     page = (ROOT / 'frontend/v7_optimize.html').read_text()
     for side in ('long', 'short'):
         assert f'Coins approved for {side} trading. An empty side is disabled.' in page
+
+
+def test_pb8_runtime_warning_recovers_without_replaying_initialization() -> None:
+    """Retry transient metadata failures, coalesce requests and ignore disposed views."""
+    page = (ROOT / "frontend/v7_optimize.html").read_text()
+    function = _page_function(page, "recoverPb8RuntimeWarning")
+    _run_node(textwrap.dedent(f"""
+        const assert = browserAssert;
+        const window = {{setTimeout, clearTimeout}};
+        const optimizeEditorAdapter = {{isV8:true, metadataPath:'/metadata'}};
+        let warning=true, resolve, calls=0, applied=0, settings=0, configs=0;
+        const state = {{settingsDisposed:false,settingsLifecycle:0}};
+        const document = {{body:{{classList:{{contains:()=>warning}}}}}};
+        function apiFetch() {{calls++;return new Promise(r=>{{resolve=r;}});}}
+        function applyOptimizeMetadata() {{applied++;warning=false;}}
+        async function loadSettings() {{settings++;}}
+        async function loadConfigs(force,preserve) {{assert.equal(preserve,true);configs++;}}
+        function handlePb8RuntimeUnavailable() {{return true;}}
+        {function}
+        (async()=>{{
+          let first=recoverPb8RuntimeWarning();
+          await recoverPb8RuntimeWarning(); assert.equal(calls,1);
+          resolve({{}});await first;
+          assert.equal(applied,1);assert.equal(settings,1);assert.equal(configs,1);
+          await recoverPb8RuntimeWarning();assert.equal(calls,1);
+          warning=true;first=recoverPb8RuntimeWarning();
+          state.settingsLifecycle++;resolve({{}});await first;
+          assert.equal(applied,1);assert.equal(configs,1);
+          state.settingsDisposed=true;
+          await recoverPb8RuntimeWarning();assert.equal(calls,2);
+        }})().catch(error=>{{console.error(error);finishTest(1);}});
+    """))
+    assert 'recoverPb8RuntimeWarning();' in _page_function(page, 'scheduleOptimizeLiveResults')
+    assert 'state.runtimeRecoveryRequest.controller.abort()' in _page_function(page, 'attachEventHandlers')

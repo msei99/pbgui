@@ -5594,6 +5594,30 @@ async function loadOptimizeMetadata() {
   applyOptimizeMetadata(payload);
 }
 
+function recoverPb8RuntimeWarning() {
+  if (!optimizeEditorAdapter.isV8 || state.settingsDisposed || state.runtimeRecoveryRequest ||
+      !document.body.classList.contains('pb8-runtime-warning-visible')) return Promise.resolve();
+  var request = {controller: new AbortController(), lifecycle: state.settingsLifecycle};
+  state.runtimeRecoveryRequest = request;
+  request.timer = window.setTimeout(function() { request.controller.abort(); }, 8000);
+  return (async function() {
+    try {
+      var payload = await apiFetch(optimizeEditorAdapter.metadataPath, {signal: request.controller.signal});
+      if (state.runtimeRecoveryRequest !== request || state.settingsDisposed ||
+          request.lifecycle !== state.settingsLifecycle) return;
+      applyOptimizeMetadata(payload);
+      await Promise.all([loadSettings(), loadConfigs(false, true)]);
+    } catch (error) {
+      if (state.runtimeRecoveryRequest !== request || state.settingsDisposed ||
+          request.lifecycle !== state.settingsLifecycle || error.name === 'AbortError') return;
+      if (!handlePb8RuntimeUnavailable(error)) console.error('PB8 runtime recovery failed:', error);
+    } finally {
+      window.clearTimeout(request.timer);
+      if (state.runtimeRecoveryRequest === request) state.runtimeRecoveryRequest = null;
+    }
+  })();
+}
+
 async function authFetch(url, opts) {
   var init = opts || {};
   var headers = authenticatedHeaders(init.headers);
@@ -14700,6 +14724,7 @@ async function refreshOptimizePageData() {
 }
 
 function refreshOptimizePageOnReturn() {
+  recoverPb8RuntimeWarning();
   if (state.returnRefreshInFlight) return;
   state.returnRefreshInFlight = true;
   refreshOptimizePageData().catch(handleError).finally(function() {
@@ -15187,6 +15212,7 @@ function scheduleOptimizeLiveResults() {
   state.livePanelRefreshTimer = null;
   if (document.visibilityState === 'visible') {
     state.livePanelRefreshTimer = window.setInterval(function() {
+      recoverPb8RuntimeWarning();
       refreshLiveResultsDuringRun().catch(handleError);
     }, 8000);
   }
@@ -15201,6 +15227,10 @@ function attachEventHandlers() {
     if (state.configPollTimer) window.clearInterval(state.configPollTimer);
     state.configPollTimer = null;
     state.settingsDisposed = true;
+    if (state.runtimeRecoveryRequest) {
+      state.runtimeRecoveryRequest.controller.abort();
+      state.runtimeRecoveryRequest = null;
+    }
     state.settingsLifecycle += 1;
     state.settingsSaveSeq += 1;
     state.settingsSaving = false;
