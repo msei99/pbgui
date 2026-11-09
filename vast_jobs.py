@@ -33,13 +33,14 @@ from vast_worker_compatibility import config_for_worker
 
 SERVICE = "Vast"
 PROJECT = Path(__file__).resolve().parent
-IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1"
+IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:3aa5c16b22a62983ec5dc46862c21c2d959856bf2362d4d9b39e3ded61f000cf"
 REVISION = "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a"
 PREVIOUS_REVISION = "69227b75e808f8ce1f4b8949350b3311916bd377"
 ORIGINAL_REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
 # Persisted rental intents keep their own immutable image/revision pair.
 SUPPORTED_RENTAL_IMAGE_REVISIONS = {
     IMAGE: REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1": REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:15698800ffa48634708742425856608c403db26d6aeeb32d6cb5d05b15b0266d": REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:d966b601dedbf49641a85feb4b5c13963f855d998c7d465c02af89f73c272abf": REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:0e49bae53a7f104b2ead7ab3e9dcb2c5a83aa117291086f4ad87ca0a8fc367aa": REVISION,
@@ -523,6 +524,17 @@ class JobStore:
         from vast_market_cache import _load_local_markets
         from vast_ohlcv_integrity import validate_export, signature, seal_manifest
 
+        from optimize_convergence import validate_config as validate_convergence_config
+        gui = source.get('pbgui') or {}
+        runtime = (gui.get('optimize_runtime') or {}) if isinstance(gui, dict) else None
+        if not isinstance(runtime, dict):
+            raise VastError('Invalid per-job runtime settings', 422)
+        job_convergence = runtime.get('convergence_config')
+        if job_convergence is not None:
+            try:
+                job_convergence = validate_convergence_config(job_convergence)
+            except ValueError as exc:
+                raise VastError('Invalid per-job convergence settings', 422) from exc
         config = native_job_config(source, iterations, workers, use_adg)
         try:
             shards = select_shards(config, market_root, mapping_root)
@@ -603,7 +615,8 @@ class JobStore:
             write_json(directory / "intent.json", {"id": identifier, "image": IMAGE, "pb8_revision": REVISION,
                        "results_root": str(results_root.resolve()), "bundle_sha256": digest(directory / "input.tar.gz"),
                        "bundle_bytes": (directory / "input.tar.gz").stat().st_size,
-                       "manifest_sha256": digest(folder / 'manifest.json'), "source_config_sha256": source_sha256})
+                       "manifest_sha256": digest(folder / 'manifest.json'), "source_config_sha256": source_sha256,
+                       "convergence_config": job_convergence})
             return self.update(identifier, status="ready", input_bytes=(directory / "input.tar.gz").stat().st_size,
                                use_adg=use_adg, sweep_enabled=sweep is not None, input_progress={
                                    "stage": "complete", "files_completed": len(shards), "files_total": len(shards),

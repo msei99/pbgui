@@ -1,0 +1,33 @@
+{
+    "schema_version": 1,
+    "state": "locally_built_unpublished",
+    "built_at": "2026-11-09T21:30:20.529779612Z",
+    "image_tag": "pbgui-pb8-worker:b9d6692-ema-span-alias-candidate",
+    "image_id": "sha256:01ecc74e67223d385162b156e7d66dda4e81dbd13eec644ff70514b80b886c31",
+    "base_image": "ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1",
+    "base_revision": "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a",
+    "patch_sha256": "8007326868e03bc3ae2b08dd13878517e329fca48ba80f254da595af7e4bffc7",
+    "rust_source_fingerprint": "c0a7f37671251acbf73b9c6496a31a82199ef2c303bf14c20f680f3a518f2eb3",
+    "validation": {
+        "build_rust_backtest_tests": "45 passed",
+        "container_offline_smoke": {
+            "compiled_source_stamp_matches": true,
+            "gpu_source_sha256": "93a3ef0430d6e8664a3fbd48a10044e674faea58627da996d9209fbc827aec81",
+            "worker_sha256": "860f7203df65af0ce06e0bdcc002a265d22a5e312b4fddb65e81f02f1a11e7c0",
+            "worker_import": true,
+            "optimizer_imports": true
+        },
+        "container_real_candidate": {
+            "suite_scenarios": 4,
+            "base_image_shared_span_worst_drawdown": 0.5919052960184237,
+            "candidate_shared_span_worst_drawdown": 0.49987385313698685,
+            "gpu_proxy_worst_drawdown": 0.499873548746109,
+            "candidate_matches_distinct_span_result": true,
+            "distinct_span_result_unchanged_from_base_image": true
+        },
+        "gpu_hardware_test": "pending"
+    },
+    "active_pins_changed": false,
+    "published": false,
+    "rental_started": false
+}

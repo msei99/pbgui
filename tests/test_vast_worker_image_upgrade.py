@@ -38,7 +38,7 @@ def test_current_image_has_offline_layer_sizes():
     from vast_image_layers import IMAGE_LAYERS
     assert IMAGE in IMAGE_LAYERS
     import json
-    receipt = json.loads((Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark/worker_release_fresh_population_b9d6692.json').read_text())
+    receipt = json.loads((Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark/worker_release_ema_span_alias_b9d6692.json').read_text())
     assert IMAGE == 'ghcr.io/msei99/pbgui-pb8-worker@' + receipt['digest']
     assert IMAGE_LAYERS[IMAGE] == {key.split(':')[1][:12]: size for key, size in receipt['layers'].items()}
 
@@ -60,6 +60,25 @@ def test_cpu_hsl_overlay_preserves_verified_gpu_base_and_dependency_lock():
     from vast_calibration import COMPATIBLE_CALIBRATION_IMAGES
     assert old_image in SUPPORTED_RENTAL_IMAGE_REVISIONS
     assert old_image in COMPATIBLE_CALIBRATION_IMAGES
+
+
+def test_ema_span_alias_candidate_rebuilds_rust_on_a_known_worker_image():
+    """The backtest EMA backport keeps a known base image and pins its rebuilt Rust sources."""
+    import hashlib
+    import json
+    root = Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark'
+    candidate = json.loads((root / 'worker_candidate_ema_span_alias.json').read_text())
+    recipe = (root / 'Dockerfile.ema-span-alias').read_text()
+    assert SUPPORTED_RENTAL_IMAGE_REVISIONS[candidate['base_image']] == candidate['base_revision']
+    from vast_calibration import COMPATIBLE_CALIBRATION_IMAGES
+    assert candidate['base_image'] in COMPATIBLE_CALIBRATION_IMAGES
+    assert recipe.count('FROM ' + candidate['base_image']) == 2
+    assert '--locked' in recipe
+    assert candidate['patched_rust_source_fingerprint'] in recipe
+    assert 'cloud_worker.py' not in recipe
+    assert hashlib.sha256((root / candidate['patch']).read_bytes()).hexdigest() == candidate['patch_sha256']
+    assert hashlib.sha256((root / 'hsl_cpu_Cargo.lock').read_bytes()).hexdigest() == candidate['cargo_lock_sha256']
+    assert '!' + candidate['patch'] in (root / '.dockerignore').read_text().splitlines()
 
 
 def test_new_calibration_pin_keeps_previous_worker_image_known():

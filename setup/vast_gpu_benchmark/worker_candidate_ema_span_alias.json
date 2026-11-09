@@ -1,0 +1,14 @@
+{
+    "schema_version": 1,
+    "state": "unpublished_candidate",
+    "base_image": "ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1",
+    "base_revision": "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a",
+    "worker_image_tag": "pbgui-pb8-worker:b9d6692-ema-span-alias-candidate",
+    "patch": "ema_span_alias.patch",
+    "patch_sha256": "8007326868e03bc3ae2b08dd13878517e329fca48ba80f254da595af7e4bffc7",
+    "base_backtest_source_sha256": "766dc87f7424100de60e42a6901ce93a15006345e2a75b342f79e834f21dea04",
+    "cargo_lock_sha256": "e7edfdcac15bef84a0fb6e2ae57c691874dffa0f2d0760a0a1fdba666e3a5b5f",
+    "base_rust_source_fingerprint": "0f94231023292fcc96fd42c7301272509c963dfa45ec810e7b3a026cdf5a571e",
+    "patched_rust_source_fingerprint": "c0a7f37671251acbf73b9c6496a31a82199ef2c303bf14c20f680f3a518f2eb3",
+    "activation": "candidate only; active image pins unchanged"
+}

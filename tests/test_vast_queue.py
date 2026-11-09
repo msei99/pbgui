@@ -1191,3 +1191,18 @@ def test_worker_start_rejects_invalid_custom_idle_delay(queue,seconds):
     queue,_ = queue
     with pytest.raises(VastError,match='Idle timeout'):
         queue.start({'id':123},1,1,seconds)
+
+
+def test_per_job_convergence_does_not_change_rental_preferences(queue):
+    """Deep search uses frozen job controls without modifying shared rental defaults."""
+    queue, worker = queue
+    target = 'b'*32
+    intent = queue.store.read(target,'intent.json')
+    from optimize_convergence import DEFAULTS
+    config = {**DEFAULTS, 'convergence_enabled':True, 'convergence_patience':768}
+    intent['convergence_config'] = config
+    write_json(queue.store.directory(target)/'intent.json',intent)
+    before = queue.read()
+    assert worker_step(queue,worker,now=100) == target
+    assert queue.store.read(target)['convergence_config'] == config
+    assert queue.read() == before

@@ -48,6 +48,7 @@
     messageConversationId: '',
     resolvingProposalIds: new Set(),
     uiActionIds: new Set(),
+    uiActionAcks: new Map(),
     contextTimer: null,
     contextSignature: '',
     usageDisplayKey: '',
@@ -1014,13 +1015,37 @@
     }
   }
 
+  function acknowledgeHandledUiAction(actionId) {
+    var receipt = state.uiActionAcks.get(actionId);
+    if (!receipt || receipt.inFlight || Date.now() < receipt.retryAt) return;
+    receipt.inFlight = true;
+    return api('/conversations/' + encodeURIComponent(receipt.conversationId) + '/ui-actions/' + encodeURIComponent(actionId) + '/ack', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ context: collectContext() })
+    }).then(function () {
+      state.uiActionAcks.delete(actionId);
+      if (window.PBGuiAI && typeof window.PBGuiAI.completePageActionNavigation === 'function') {
+        window.PBGuiAI.completePageActionNavigation(actionId);
+      }
+    }).catch(function (error) {
+      // The click already completed. Retry only its receipt, never the action.
+      receipt.retryAt = Date.now() + 2000;
+      if (state.current === receipt.conversationId) setStatus(error && error.message ? error.message : 'PBGui action confirmation failed.', true);
+    }).finally(function () { receipt.inFlight = false; });
+  }
+
   function dispatchUiActions(conversationId, actions, busy) {
+    var pendingIds = new Set((actions || []).map(function (action) { return String((action || {}).action_id || ''); }));
+    state.uiActionAcks.forEach(function (receipt, actionId) {
+      if (receipt.conversationId === conversationId && !pendingIds.has(actionId)) state.uiActionAcks.delete(actionId);
+    });
     if (busy || !(actions || []).some(function (action) { return action && action.type === 'chat.quick_replies'; })) {
       Array.from(root.querySelectorAll('.pai-quick-replies')).forEach(function (item) { item.remove(); });
     }
     (actions || []).forEach(function (action) {
       var actionId = String((action || {}).action_id || '');
-      if (!actionId || state.uiActionIds.has(actionId)) return;
+      if (!actionId) return;
+      if (state.uiActionIds.has(actionId)) { acknowledgeHandledUiAction(actionId); return; }
       if (action.type === 'chat.quick_replies') {
         if (!busy) renderQuickReplies(conversationId, action);
         return;
@@ -1037,14 +1062,8 @@
       state.uiActionIds.add(actionId);
       if (action.browser_navigation) return; // Destination acknowledges after navigation.
       Promise.resolve(action.browser_completion).then(function () {
-        return api('/conversations/' + encodeURIComponent(conversationId) + '/ui-actions/' + encodeURIComponent(actionId) + '/ack', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ context: collectContext() })
-        });
-      }).then(function () {
-        if (window.PBGuiAI && typeof window.PBGuiAI.completePageActionNavigation === 'function') {
-          window.PBGuiAI.completePageActionNavigation(actionId);
-        }
+        state.uiActionAcks.set(actionId, { conversationId: conversationId, inFlight: false, retryAt: 0 });
+        return acknowledgeHandledUiAction(actionId);
       }).catch(function (error) {
         state.uiActionIds.delete(actionId);
         setStatus(error && error.message ? error.message : 'PBGui page action failed.', true);

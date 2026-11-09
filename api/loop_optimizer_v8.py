@@ -1245,6 +1245,56 @@ async def best_config(loop_id: str, session: SessionToken = Depends(require_auth
         raise _error(exc) from exc
 
 
+class LoopDeepSearch(BaseModel):
+    """Identify exactly one user-selected evaluation without accepting a config override."""
+    model_config = ConfigDict(extra='forbid')
+    operation: str = Field(pattern=r'^[a-f0-9]{32}$')
+
+
+def _deep_search_bundle(row, operation):
+    """Export a selected bot with its original search domain and training-only windows."""
+    from optimize_convergence import DEFAULTS
+    report = next((job for job in row.get('observer_jobs', []) if job['operation'] == operation), None)
+    if (not report or report.get('kind') not in {'observer_holdout', 'observer_full_range'}
+            or report.get('status') not in {'complete', 'completed'}
+            or not report.get('simulation_complete') or report.get('report_done') is False):
+        raise HTTPException(409, 'Select one complete user evaluation')
+    candidate_id = report.get('candidate_id')
+    validation = next((job for job in row.get('jobs', []) if job.get('kind') == 'validation'
+                       and job.get('round') == report.get('round')
+                       and (job.get('candidate') or {}).get('id') == candidate_id), None)
+    candidate = (validation or {}).get('candidate') or {}
+    optimizer_id = candidate.get('optimizer_job')
+    optimizer = next((job for job in row.get('jobs', [])
+                      if job.get('kind') == 'optimizer' and job.get('operation') == optimizer_id), None)
+    if optimizer is None and candidate_id not in {'baseline', 'starting_config'}:
+        raise HTTPException(409, 'The selected candidate search settings are no longer available')
+    config = copy.deepcopy((optimizer or {}).get('config') or row['initial_config'])
+    for section in ('bot', 'live'):
+        config[section] = copy.deepcopy(report['config'][section])
+    # A human may choose a Holdout/Full Range row; it never becomes a training window.
+    config['backtest'] = copy.deepcopy(row['comparison'])
+    convergence = {**DEFAULTS, 'convergence_enabled': True}
+    config['pbgui'] = {'execution': row['settings']['execution'], 'optimize_seed_mode': 'self',
+                      'starting_config': True,
+                      'optimize_runtime': {'mode': 'pareto_seed', 'source': '__self__',
+                                           'convergence_config': convergence}}
+    config.setdefault('optimize', {})['seed'] = None
+    return {'config': config, 'override_configs': copy.deepcopy(report.get('overrides') or {}),
+            'name': (row['settings'].get('config_name') or 'loop')[:80] + '_deep_search',
+            'source_operation': operation}
+
+
+@router.post('/{loop_id}/deep-search-config')
+async def deep_search_config(loop_id: str, body: LoopDeepSearch, session: SessionToken = Depends(require_auth)):
+    """Prepare an owner-scoped deep-search editor handoff; never queue or rent here."""
+    try:
+        row = await asyncio.to_thread(_controller.store.read_runtime, _owner(session), loop_id)
+        return JSONResponse(_deep_search_bundle(row, body.operation), headers={'Cache-Control': 'no-store'})
+    except Exception as exc:
+        raise _error(exc) from exc
+
+
 @router.post('/{loop_id}/action')
 async def loop_action(loop_id: str, body: LoopAction, session: SessionToken = Depends(require_auth)):
     return await _loop_action_owned(_owner(session), loop_id, body)

@@ -635,7 +635,20 @@
     var tools=element('div',undefined,'panel-toolbar'),label=element('label',undefined,'chk-row'),hide=element('input');hide.type='checkbox';hide.id='loop-evaluation-deduplicate';hide.checked=!!saved.hide_duplicates;label.appendChild(hide);label.appendChild(element('span','Filter out duplicates'));tools.appendChild(label);
     hide.addEventListener('change',function(){saved.hide_duplicates=hide.checked;saveView();reportSignature='';updateReport();});
     var compareSelected=button(tools,'Compare selected',function(){openEvaluationComparison(run,'selected',Array.from(chosen));});compareSelected.id='loop-evaluation-compare-selected';
-    function selectedChanged(){saveView();compareSelected.disabled=chosen.size<2;compareSelected.textContent='Compare selected ('+chosen.size+')';}
+    var deepSearch=button(tools,'Deep search',async function(){
+      if(chosen.size!==1)return;
+      deepSearch.disabled=true;
+      try{
+        var bundle=await request('/'+run.id+'/deep-search-config',{operation:Array.from(chosen)[0]});
+        var root=String(API_BASE).replace(/\/$/,'').replace(/\/api\/optimize-v8$/,'');
+        var response=await fetch(root+'/api/backtest-v8/optimize-draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:bundle.config,override_configs:bundle.override_configs})});
+        if(!response.ok)throw new Error('Could not prepare deep search ('+response.status+')');
+        var draft=await response.json(),url=new URL(location.href);url.search='';url.hash='';
+        url.searchParams.set('opt_draft_id',draft.draft_id);url.searchParams.set('draft_name',bundle.name);
+        location.href=url.href;
+      }catch(error){toast(error.message||String(error),'err');selectedChanged();}
+    });deepSearch.id='loop-evaluation-deep-search';deepSearch.title='Open selected config in Optimize with stop on stagnation enabled. Training windows and safety limits are preserved; review execution and budget before starting.';
+    function selectedChanged(){saveView();compareSelected.disabled=chosen.size<2;compareSelected.textContent='Compare selected ('+chosen.size+')';deepSearch.disabled=chosen.size!==1;}
     selectedChanged();parent.appendChild(tools);
     if(saved.hide_duplicates){var seen=new Set();jobs=jobs.filter(function(job,index){var key=job.kind+':'+(job.operation||job.name||String(index));if(seen.has(key))return false;seen.add(key);return true;});}
     if(!jobs.length){parent.appendChild(element('p',run.observer_enabled?'User evaluations are queued after the start comparison and each round’s exact comparison.':'No automatic user evaluations were recorded for this older run.','muted-line'));return;}

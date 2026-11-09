@@ -792,3 +792,13 @@ def test_original_cross_file_duplicate_price_precedence(tmp_path):
         original_payload(original, ['BTC'], end=START + 1440 * MINUTE)
     with pytest.raises(VastError, match='no usable selected'):
         export(root, paths, end=START + 1440 * MINUTE)
+
+
+def test_preparation_freezes_per_job_convergence(preparation):
+    """A reviewed standalone deep search keeps convergence controls in immutable intent."""
+    from optimize_convergence import DEFAULTS
+    p = preparation
+    config = {**DEFAULTS,'convergence_enabled':True}
+    p.config['pbgui'] = {'optimize_runtime':{'convergence_config':config}}
+    row = p.run()
+    assert p.store.read(row['id'],'intent.json')['convergence_config'] == config

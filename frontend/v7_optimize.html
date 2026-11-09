@@ -28,7 +28,7 @@
 <script src="/app/js/ai_loop_templates.js?v=18"></script>
 <script src="/app/js/pb8_loop_instructions.js?v=2"></script>
 <script src="/app/js/loop_gpu_replacement.js?v=1"></script>
-<script src="/app/js/pb8_loop_optimizer.js?v=97"></script>
+<script src="/app/js/pb8_loop_optimizer.js?v=98"></script>
 <link rel="stylesheet" href="/app/css/pb8_loop_optimizer.css?v=18">
 <style>
 :root {
@@ -5767,7 +5767,7 @@ function renderLocalConvergenceControls(config) {
   var runtime = (config.pbgui || {}).optimize_runtime || {};
   var settings = runtime.convergence_config || runtime;
   return '<div id="opted-local-convergence" class="form-row cols-8">'
-    + fieldSelect2('opted-convergence-enabled', 'Stop on stagnation (Local)', [{value:'false',label:'Off'},{value:'true',label:'On'}], settings.convergence_enabled === true ? 'true' : 'false', false, 'Local CPU/GPU only. Uses completed exact results, independently of rental settings.', 2)
+    + fieldSelect2('opted-convergence-enabled', 'Stop on stagnation', [{value:'false',label:'Off'},{value:'true',label:'On'}], settings.convergence_enabled === true ? 'true' : 'false', false, 'Uses completed exact Pareto results for this job, locally or on Vast. Iteration, rental time and cost limits still apply.', 2)
     + fieldNumber2('opted-convergence-min', 'Minimum exact evaluations', settings.convergence_min_exact == null ? 512 : settings.convergence_min_exact, 1, 'Warmup before fixing the Pareto comparison scale. Minimum 256.', 2)
     + fieldNumber2('opted-convergence-patience', 'Patience (exact evaluations)', settings.convergence_patience == null ? 512 : settings.convergence_patience, 1, 'Additional exact evaluations without sufficient improvement. Minimum 128.', 2)
     + fieldNumber2('opted-convergence-tolerance', 'Improvement tolerance (%)', settings.convergence_tolerance_pct == null ? 0.25 : settings.convergence_tolerance_pct, 0.001, 'Cumulative relative hypervolume improvement against the last accepted baseline. Above 0, at most 10%.', 2)

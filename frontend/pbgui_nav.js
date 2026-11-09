@@ -36,7 +36,12 @@
 
   function aiContextText(value, limit) {
     var text = String(value == null ? '' : value).trim().replace(/[\x00-\x1f\x7f]/g, ' ');
-    return text.slice(0, limit);
+    var cropped = text.slice(0, limit);
+    // Keep the existing UTF-16 length bound without splitting a valid emoji.
+    if (/[\uD800-\uDBFF]$/.test(cropped) && /[\uDC00-\uDFFF]/.test(text.charAt(limit))) cropped = cropped.slice(0, -1);
+    return cropped.replace(/[\uD800-\uDBFF][\uDC00-\uDFFF]|[\uD800-\uDFFF]/g, function (unit) {
+      return unit.length === 2 ? unit : '\uFFFD';
+    });
   }
 
   function aiContextSensitiveName(value) {
@@ -2170,7 +2175,7 @@
           return;
         }
         var script = document.createElement('script');
-        script.src = _appPath('/app/js/ai_drawer.js?v=101');
+        script.src = _appPath('/app/js/ai_drawer.js?v=102');
         script.onload = function () { _aiDrawerLoading = false; if (show && window.PBGuiAI && window.PBGuiAI.open) window.PBGuiAI.open(); window.dispatchEvent(new Event('pbgui:ai-ready')); };
         script.onerror = function () { _aiDrawerLoading = false; };
         document.head.appendChild(script);

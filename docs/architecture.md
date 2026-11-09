@@ -217,3 +217,5 @@ indexer or generated index bootstrap.
 
 See the [Node/npm removal audit](node_dependency_audit.md) and
 [browser test setup](../tests/README.md).
+
+- OHLCV AI Python analysis uses a trusted read-only broker for explicitly selected locally mapped markets and UTC minute ranges. It freezes numeric candles, explicit coverage gaps and optional sanitized PB8 config into the approved input; untrusted Python receives stdin only under the existing Landlock/Seccomp runtime, without Bubblewrap or AppArmor setup. No directory-wide mounts, implicit downloads, gap interpolation or silent sampling. Bounded requests split by coin/time while preserving calculation warmup.

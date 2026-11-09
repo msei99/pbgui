@@ -25,3 +25,7 @@
 !gpu_fresh_population.patch
 !worker_candidate_fresh_population.json
 !verify_fresh_population.py
+
+!Dockerfile.ema-span-alias
+!ema_span_alias.patch
+!worker_candidate_ema_span_alias.json

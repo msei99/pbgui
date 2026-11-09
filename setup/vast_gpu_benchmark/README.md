@@ -8,6 +8,26 @@ The current integration is in **PB8 Optimize**, with Cloud setup in Queue and GP
 selection in the editor. Multiple jobs share one rental and cached market data.
 See the [user guide](../../docs/help/48_vast_gpu.md).
 
+### EMA span alias worker candidate
+
+`Dockerfile.ema-span-alias` builds the unpublished local image
+`pbgui-pb8-worker:b9d6692-ema-span-alias-candidate` on the published fresh
+population worker. It applies only `ema_span_alias.patch`, the Rust backport of
+the upstream backtest fix: exact evaluations no longer read a never-updated
+volume or volatility EMA when another setting uses the same span. GPU sources,
+the PBGui worker and dependencies are retained; the Rust extension is rebuilt
+with the locked dependency set.
+
+The recipe verifies the patch, base `backtest.rs` and `Cargo.lock` checksums,
+pins the patched Rust source fingerprint and runs the Rust backtest tests.
+`worker_candidate_ema_span_alias.json` records these inputs and
+`worker_build_ema_span_alias.json` the local image ID with its network-disabled
+verification. Active image pins are unchanged until the image is published.
+
+```sh
+docker build -f setup/vast_gpu_benchmark/Dockerfile.ema-span-alias -t pbgui-pb8-worker:b9d6692-ema-span-alias-candidate setup/vast_gpu_benchmark
+```
+
 ### Fresh population worker
 
 The verified candidate is now published as
@@ -572,3 +592,7 @@ Vast's default automatic tmux attachment can break noninteractive SSH commands.
 The rental startup now creates `/root/.no_auto_tmux`. Strict SSH host-key checks
 remain enabled. A dedicated test public key was attached to the instance after
 the globally registered key was rejected by its SSH server.
+
+### Published EMA span-alias correction
+
+The candidate is now published as `ghcr.io/msei99/pbgui-pb8-worker:b9d6692-ema-span-alias-v1`, pinned at `sha256:3aa5c16b22a62983ec5dc46862c21c2d959856bf2362d4d9b39e3ded61f000cf`. See `worker_release_ema_span_alias_b9d6692.json` for anonymous manifest verification, exact layer sizes, Rust fingerprint and offline reproduction. The base PB8 revision remains unchanged; only the Rust backtest EMA publication is corrected. Existing rentals retain their saved image. CUDA validation is pending the authorized resumed optimizer run.

@@ -287,6 +287,7 @@ def test_tool_catalog_separates_reads_from_proposals(tmp_path: Path) -> None:
         "propose_research_jev_analysis",
         "propose_python_analysis",
         "propose_optimizer_run_python_analysis",
+        "propose_ohlcv_python_analysis",
         "propose_workspace_python_analysis",
         "get_python_analysis_result",
         "get_passivbot_installations",

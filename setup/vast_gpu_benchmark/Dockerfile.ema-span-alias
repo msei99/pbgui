@@ -1,0 +1,19 @@
+FROM rust:1.90-bookworm AS rust
+FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1 AS build
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+COPY ema_span_alias.patch worker_candidate_ema_span_alias.json /tmp/
+RUN cd /opt/passivbot \
+    && python -c 'import hashlib,json,pathlib; m=json.loads(pathlib.Path("/tmp/worker_candidate_ema_span_alias.json").read_text()); h=lambda p: hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest(); assert h("/tmp/"+m["patch"]) == m["patch_sha256"]; assert h("passivbot-rust/src/backtest.rs") == m["base_backtest_source_sha256"]; assert h("passivbot-rust/Cargo.lock") == m["cargo_lock_sha256"]' \
+    && patch --batch --forward -p1 < /tmp/ema_span_alias.patch \
+    && maturin build --manifest-path passivbot-rust/Cargo.toml --release --locked --out /tmp/wheels \
+    && python -m pip install --no-deps --force-reinstall /tmp/wheels/*.whl
+RUN cd /opt/passivbot && PYTHONPATH=/opt/passivbot/src python -c 'import passivbot_rust; from rust_utils import source_fingerprint, stamp_compiled_extensions, verify_loaded_runtime_extension; fp=source_fingerprint(); assert fp == "c0a7f37671251acbf73b9c6496a31a82199ef2c303bf14c20f680f3a518f2eb3", fp; stamp_compiled_extensions(fp); state=verify_loaded_runtime_extension(); assert state["runtime_compiled_source_stamp"] == fp'
+RUN cd /opt/passivbot/passivbot-rust && cargo test --release --locked --no-default-features --features abi3-py312 backtest::tests --lib
+FROM ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1
+COPY --from=build /opt/passivbot/passivbot-rust/src/ /opt/passivbot/passivbot-rust/src/
+COPY --from=build /usr/local/lib/python3.12/site-packages/passivbot_rust/ /usr/local/lib/python3.12/site-packages/passivbot_rust/
+LABEL pbgui.pb8.backtest-hotfix="ema-span-alias-v1"
+LABEL pbgui.pb8.rust-source-fingerprint="c0a7f37671251acbf73b9c6496a31a82199ef2c303bf14c20f680f3a518f2eb3"

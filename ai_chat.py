@@ -164,6 +164,7 @@ _CAPABILITY_ACTIVITY = {
     "propose_dashboard_layout": "Preparing a dashboard layout proposal",
     "propose_python_analysis": "Preparing a Python analysis proposal",
     "propose_optimizer_run_python_analysis": "Preparing complete-run Python analysis",
+    "propose_ohlcv_python_analysis": "Preparing local candle Python analysis",
     "propose_workspace_python_analysis": "Preparing read-only workspace Python analysis",
     "get_python_analysis_result": "Reading Python analysis results",
     "get_passivbot_installations": "Reading installed Passivbot versions",
@@ -198,6 +199,7 @@ _CAPABILITY_RESULT_ACTIVITY = {
     "propose_dashboard_layout": "Dashboard layout proposal prepared; model is processing results",
     "propose_python_analysis": "Python analysis proposal prepared; model is processing results",
     "propose_optimizer_run_python_analysis": "Complete-run Python proposal prepared; model is processing results",
+    "propose_ohlcv_python_analysis": "Candle Python proposal prepared; model is processing results",
     "propose_workspace_python_analysis": "Workspace Python proposal prepared; model is processing results",
     "get_python_analysis_result": "Python analysis result loaded; model is processing results",
     "get_passivbot_installations": "Installed Passivbot versions loaded; model is processing results",
@@ -2888,7 +2890,7 @@ class AIChatService:
                 conversation.service_tier = clean_service_tier
             conversation.ui_actions = [
                 action for action in conversation.ui_actions
-                if action.get("type") != "chat.quick_replies"
+                if action.get("type") not in {"chat.quick_replies", "page.perform_action"}
             ]
             self._compact_persisted_user_messages(conversation.messages)
             try:
@@ -3164,6 +3166,15 @@ class AIChatService:
             return {}
         if not isinstance(context, dict):
             raise AIChatError("Invalid page context")
+        # JSON permits isolated UTF-16 surrogates (e.g. a JS-truncated emoji).
+        # Normalize strings as each value is inspected; no unvalidated payload
+        # is recursively copied, and the existing schema/size checks still apply.
+        def text_value(value):
+            """Keep valid Unicode, replacing only malformed surrogate sequences."""
+            text = str(value or "")
+            if re.search(r"[\ud800-\udfff]", text):
+                text = text.encode("utf-16-le", "surrogatepass").decode("utf-16-le", "replace")
+            return text
         allowed = {
             "schema_version",
             "page_key",
@@ -3196,7 +3207,7 @@ class AIChatService:
                 raise AIChatError('Invalid current cloud job')
             result['current_cloud_job'] = dict(anchor)
         for key in ("page_key", "title", "guide_topic", "section"):
-            value = str(context.get(key) or "").strip()
+            value = text_value(context.get(key)).strip()
             if len(value) > 128 or any(ord(char) < 32 for char in value):
                 raise AIChatError("Invalid page context")
             if value:
@@ -3208,8 +3219,8 @@ class AIChatService:
         for item in pages:
             if not isinstance(item, dict) or set(item) - {"key", "title"}:
                 raise AIChatError("Invalid page context")
-            page_key = str(item.get("key") or "").strip()
-            page_title = str(item.get("title") or "").strip()
+            page_key = text_value(item.get("key")).strip()
+            page_title = text_value(item.get("title")).strip()
             if (
                 page_key != "/" and not re.fullmatch(r"[a-z][a-z0-9_.-]{0,127}", page_key)
                 or not page_title
@@ -3227,10 +3238,10 @@ class AIChatService:
         for item in entities:
             if not isinstance(item, dict) or set(item) - {"kind", "version", "name", "result_id", "resource"}:
                 raise AIChatError("Invalid page context")
-            projected = {key: str(item.get(key) or "").strip() for key in ("kind", "version", "name")}
+            projected = {key: text_value(item.get(key)).strip() for key in ("kind", "version", "name")}
             if any(len(value) > 128 or any(ord(char) < 32 for char in value) for value in projected.values()):
                 raise AIChatError("Invalid page context")
-            result_id = str(item.get("result_id") or "").strip()
+            result_id = text_value(item.get("result_id")).strip()
             if result_id:
                 if projected["kind"] != "optimizer_run" or not re.fullmatch(r"[A-Za-z0-9_.-]{1,200}", result_id):
                     raise AIChatError("Invalid page context")
@@ -3252,9 +3263,9 @@ class AIChatService:
         for item in evidence:
             if not isinstance(item, dict) or set(item) - {"kind", "title", "content"}:
                 raise AIChatError("Invalid page context")
-            kind = str(item.get("kind") or "").strip()
-            title = str(item.get("title") or "").strip()
-            content = AIChatService._redact_page_evidence(item.get("content"))
+            kind = text_value(item.get("kind")).strip()
+            title = text_value(item.get("title")).strip()
+            content = AIChatService._redact_page_evidence(text_value(item.get("content")))
             if kind != "log_excerpt" or not title or len(title) > 160 or not content:
                 raise AIChatError("Invalid page context")
             safe_evidence.append({"kind": kind, "title": title, "content": content})
@@ -3267,8 +3278,8 @@ class AIChatService:
         for item in actions:
             if not isinstance(item, dict) or set(item) - {"id", "entity_kind"}:
                 raise AIChatError("Invalid page context")
-            action_id = str(item.get("id") or "").strip()
-            entity_kind = str(item.get("entity_kind") or "").strip()
+            action_id = text_value(item.get("id")).strip()
+            entity_kind = text_value(item.get("entity_kind")).strip()
             if not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", action_id) or not re.fullmatch(
                 r"[A-Za-z0-9_.-]{1,128}", entity_kind
             ):
@@ -3294,11 +3305,11 @@ class AIChatService:
                 "requires_proposal",
             }:
                 raise AIChatError("Invalid page context")
-            control_id = str(item.get("id") or "").strip()
-            role = str(item.get("role") or "").strip()
-            control_name = str(item.get("name") or "").strip()
-            label = str(item.get("label") or "").strip()
-            control_context = str(item.get("context") or "").strip()
+            control_id = text_value(item.get("id")).strip()
+            role = text_value(item.get("role")).strip()
+            control_name = text_value(item.get("name")).strip()
+            label = text_value(item.get("label")).strip()
+            control_context = text_value(item.get("context")).strip()
             operations = item.get("operations") or []
             options = item.get("options") or []
             if (
@@ -3322,8 +3333,8 @@ class AIChatService:
             for option in options:
                 if not isinstance(option, dict) or set(option) - {"value", "label"}:
                     raise AIChatError("Invalid page context")
-                option_value = str(option.get("value") or "")
-                option_label = str(option.get("label") or "").strip()
+                option_value = text_value(option.get("value"))
+                option_label = text_value(option.get("label")).strip()
                 if len(option_value) > 160 or not option_label or len(option_label) > 160 or any(
                     ord(char) < 32 for char in option_value + option_label
                 ):
@@ -3337,7 +3348,7 @@ class AIChatService:
                 "operations": list(dict.fromkeys(operations)),
             }
             for key in ('visible_text', 'tooltip'):
-                value = str(item.get(key) or '').strip()
+                value = text_value(item.get(key)).strip()
                 if len(value) > 160 or any(ord(char) < 32 for char in value):
                     raise AIChatError('Invalid page context')
                 if value:
@@ -3359,7 +3370,7 @@ class AIChatService:
                 raise AIChatError("Invalid page context")
             safe_focused = {}
             for key in ("path", "label", "value", "validation"):
-                value = str(focused.get(key) or "").strip()
+                value = text_value(focused.get(key)).strip()
                 if len(value) > 256 or any(ord(char) < 32 for char in value):
                     raise AIChatError("Invalid page context")
                 if value:

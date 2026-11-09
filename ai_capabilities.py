@@ -278,6 +278,8 @@ class AICapabilityService:
                 "concurrent_approved_actions": _MAX_ACTIVE_APPROVALS,
                 "python_analysis_code_bytes": _MAX_ANALYSIS_CODE_BYTES,
                 "python_analysis_input_bytes": _MAX_ANALYSIS_INPUT_BYTES,
+                "python_ohlcv_analysis_input_bytes": 32 * 1024 * 1024,
+                "python_ohlcv_analysis_coin_minutes": 250_000,
                 "python_analysis_timeout_seconds": _ANALYSIS_TIMEOUT_SECONDS,
             },
         }
@@ -430,6 +432,7 @@ class AICapabilityService:
             "propose_research_jev_analysis": self._propose_research_jev_analysis,
             "propose_python_analysis": self._propose_python_analysis,
             "propose_optimizer_run_python_analysis": self._propose_optimizer_run_python_analysis,
+            "propose_ohlcv_python_analysis": self._propose_ohlcv_python_analysis,
             "propose_workspace_python_analysis": self._propose_workspace_python_analysis,
             "get_python_analysis_result": self._get_python_analysis_result,
             "get_passivbot_installations": self._get_passivbot_installations,
@@ -3010,6 +3013,9 @@ class AICapabilityService:
         conversation_id: str,
         args: dict[str, Any],
         max_input_bytes: int = _MAX_ANALYSIS_INPUT_BYTES,
+        *,
+        prepared_input: dict | None = None,
+        input_preview: dict | None = None,
     ) -> dict[str, Any]:
         """Create an approval-bound proposal for open Python over sanitized JSON."""
         code = args.get("code")
@@ -3018,7 +3024,8 @@ class AICapabilityService:
         code_bytes = code.encode("utf-8")
         if len(code_bytes) > _MAX_ANALYSIS_CODE_BYTES:
             raise AICapabilityError("Python analysis code is too large")
-        analysis_input = self._sanitize_config(args.get("input_data"))
+        analysis_input = (copy.deepcopy(prepared_input) if prepared_input is not None
+                          else self._sanitize_config(args.get("input_data")))
         input_bytes = json.dumps(
             analysis_input, allow_nan=False, separators=(",", ":")
         ).encode("utf-8")
@@ -3034,6 +3041,10 @@ class AICapabilityService:
             "input_summary": self._analysis_input_summary(analysis_input, len(input_bytes)),
             "may_start_immediately": False,
         }
+        if input_preview is not None:
+            preview.pop("input_data")
+            preview["input_resource"] = copy.deepcopy(input_preview)
+            preview["input_summary"] = copy.deepcopy(input_preview)
         proposal = ActionProposal(
             id=uuid4().hex,
             owner=owner,
@@ -3207,6 +3218,39 @@ class AICapabilityService:
         self._persist_proposal(proposal)
         result["preview"] = copy.deepcopy(proposal.preview)
         return result
+
+    async def _propose_ohlcv_python_analysis(
+        self, owner: str, conversation_id: str, args: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Freeze selected local candles for approved namespace-free Python analysis."""
+        from ai_ohlcv_analysis import MAX_INPUT_BYTES, candle_dataset
+
+        try:
+            dataset = await self._to_thread_uncancellable(candle_dataset, Path(PBGDIR) / "data", args)
+        except ValueError as exc:
+            raise AICapabilityError(str(exc)) from exc
+        config_name = args.get("config_name")
+        if config_name:
+            kind = args.get("config_kind", "run")
+            if kind not in {"run", "backtest"}:
+                raise AICapabilityError("config_kind must be run or backtest")
+            config = await self._to_thread_uncancellable(
+                self._get_managed_config, kind, {"version": "v8", "name": config_name}
+            )
+            dataset["config"] = config["config"]
+            dataset["override_configs"] = config["override_configs"]
+        encoded = json.dumps(dataset, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        if len(encoded) > MAX_INPUT_BYTES:
+            raise AICapabilityError("Candle dataset exceeds 32 MiB; split coins or UTC time ranges")
+        summary = {k: dataset[k] for k in ("kind", "exchange", "dataset", "start_time", "end_time_exclusive", "columns")}
+        summary.update({"bytes": len(encoded), "digest": self._digest(dataset),
+                        "series": [{"coin": item["coin"], "symbol": item["symbol"],
+                                    "coverage": item["coverage"]} for item in dataset["series"]],
+                        "config_name": config_name or None, "sandbox": "landlock_seccomp"})
+        return await self._propose_python_analysis(
+            owner, conversation_id, {"code": args.get("code")}, max_input_bytes=MAX_INPUT_BYTES,
+            prepared_input=dataset, input_preview=summary,
+        )
 
     async def _propose_workspace_python_analysis(
         self, owner: str, conversation_id: str, args: dict[str, Any]
@@ -5517,8 +5561,26 @@ class AICapabilityService:
                 "resources": ["pbgui://optimizer-run/{version}/{opaque-id}", "pbgui://pareto/{version}/{opaque-id}"],
             },
             {
+                "name": "propose_ohlcv_python_analysis",
+                "description": "Preferred offline candle analysis without Bubblewrap or AppArmor changes. PBGui reads only selected local markets and UTC minutes and freezes the complete numeric dataset for approval. No file access or network in Python; read json.load(sys.stdin). Input has columns and series[{coin,symbol,candles,coverage}], optional config and override_configs. Dates mean UTC midnight; end_time is EXCLUSIVE. Missing minutes are reported, never filled; no silent sampling. Maximum 250000 coin-minutes and 32 MiB: split larger questions by coin/time, retaining explicit EMA warmup in each selection. Use get_candle_inventory first. Do not use workspace Python for OHLCV.",
+                "schema": self._object_schema(
+                    {
+                        "exchange": {"type": "string", "enum": ["binance", "bybit", "okx", "bitget", "hyperliquid"]},
+                        "dataset": {"type": "string", "enum": ["1m", "1m_api"]},
+                        "coins": {"type": "array", "minItems": 1, "maxItems": 20, "items": {"type": "string", "maxLength": 64}},
+                        "start_time": {"type": "string", "maxLength": 32},
+                        "end_time": {"type": "string", "maxLength": 32},
+                        "config_name": {"type": "string", "maxLength": 128},
+                        "config_kind": {"type": "string", "enum": ["run", "backtest"]},
+                        "code": {"type": "string", "minLength": 1, "maxLength": _MAX_ANALYSIS_CODE_BYTES},
+                    },
+                    ["exchange", "coins", "start_time", "end_time", "code"],
+                ),
+                "effect": "execute",
+            },
+            {
                 "name": "propose_workspace_python_analysis",
-                "description": "Offline analysis only, never a substitute for requested web research. Propose sandboxed Python with approved read-only mounts for PBGui data, PB7, and PB8. Normal logs are readable; credential, API-key, token, password, session, cookie, SSH, private-key, .env, Git, virtual-environment, and symlink paths are always masked. No network or writes.",
+                "description": "Requires host Bubblewrap namespace support. Never use for OHLCV; use propose_ohlcv_python_analysis without AppArmor changes instead. Offline analysis only, never a substitute for requested web research. Propose sandboxed Python with approved read-only mounts for PBGui data, PB7, and PB8. Normal logs are readable; credential, API-key, token, password, session, cookie, SSH, private-key, .env, Git, virtual-environment, and symlink paths are always masked. No network or writes.",
                 "schema": self._object_schema(
                     {
                         "roots": {

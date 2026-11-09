@@ -2257,8 +2257,9 @@ def test_ambiguous_comparison_reaches_model_instead_of_fixed_backend_question(
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize('action_type', ['chat.quick_replies', 'page.perform_action'])
 def test_new_turn_dismisses_pending_model_clarification(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, action_type
 ) -> None:
     """Any accepted user answer should clear the old question without browser acknowledgement."""
     async def scenario() -> None:
@@ -2268,7 +2269,7 @@ def test_new_turn_dismisses_pending_model_clarification(
         conversation = await service._conversation(owner, "opencode-go", "model", None)
         await service._capture_ui_action(owner, conversation.id, {
             "ui_action": {
-                "type": "chat.quick_replies",
+                "type": action_type,
                 "target": {"page_key": "ai_chat"},
                 "payload": {
                     "question": "Which goal matters most?",
