@@ -54,7 +54,7 @@
       delegate_to: localhost
       vars:
         ansible_python_interpreter: "{{ ansible_playbook_python }}"
-      register: pb8_controller_head
+      register: pb8_preflight_head
       changed_when: false
       when: not pb8_branch_switch and pb8_install_profile == 'live'
 
@@ -71,7 +71,7 @@
           - --python
           - "{{ pb8venv }}/bin/python"
           - --current-commit
-          - "{{ (pb8_controller_head.stdout | from_json).commit }}"
+          - "{{ (pb8_preflight_head.stdout | from_json).commit }}"
       register: pb8_current_live_wheel
       changed_when: false
       when: not pb8_branch_switch and pb8_install_profile == 'live'

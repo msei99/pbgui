@@ -114,6 +114,11 @@ def test_pb8_live_update_skips_only_verified_normal_updates() -> None:
     assert names.index("Skip PB8 update for an already current live runtime") < names.index(
         "Prepare central PB8 wheels before runtime changes"
     )
+    assert tasks["Resolve official PB8 commit before checking the installed live runtime"]["register"] == "pb8_preflight_head"
+    preparation = yaml.safe_load(Path("tasks/pb8_live_wheels_prepare.yml").read_text())
+    resolve = next(task for task in preparation if task["name"] == "Resolve immutable PB8 wheel source commit on controller")
+    assert resolve["register"] == "pb8_controller_head"
+    assert resolve["when"] == "not pb8_branch_switch or pb8_target_commit == ''"
 
 
 def test_cleanup_waits_for_both_wheel_installs(tmp_path, monkeypatch):
