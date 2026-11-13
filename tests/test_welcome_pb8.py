@@ -90,6 +90,22 @@ def test_pb8_runtime_status_prefers_installed_stamped_extension(tmp_path: Path, 
     assert "site-packages" in status["rust_file"]
 
 
+def test_pb8_runtime_status_prefers_package_over_newer_unstamped_module(tmp_path: Path, monkeypatch) -> None:
+    """A duplicate extension in the Passivbot wheel must not hide the stamped Rust package."""
+    pb8_dir, python_file = _ready_pb8(tmp_path)
+    site_packages = python_file.parent.parent / "lib" / "python3.12" / "site-packages"
+    duplicate = site_packages / "passivbot_rust.cpython-312-x86_64-linux-gnu.so"
+    duplicate.write_bytes(b"")
+    monkeypatch.setattr(pbgui_purefunc, "pb8dir", lambda: str(pb8_dir))
+    monkeypatch.setattr(pbgui_purefunc, "pb8venv", lambda: str(python_file))
+
+    status = pbgui_purefunc.pb8_runtime_status()
+
+    assert status["ready"] is True
+    assert status["rust_stamped"] is True
+    assert status["rust_file"] == str(site_packages / "passivbot_rust" / "passivbot_rust.abi3.so")
+
+
 def test_pb8_runtime_status_rejects_wrong_schema_without_importing(tmp_path: Path, monkeypatch) -> None:
     """A non-V8 schema remains blocked without importing PB8 into the API process."""
     pb8_dir, python_file = _ready_pb8(tmp_path)

@@ -460,7 +460,8 @@ def pb8_runtime_status() -> dict:
     cli_exists = cli_file is not None and cli_file.is_file()
     cli_executable = cli_exists and os.access(cli_file, os.X_OK)
     src_rust_files = list(src_dir.glob("passivbot_rust*.so")) if src_dir and src_dir.is_dir() else []
-    installed_rust_files: list[Path] = []
+    installed_package_rust_files: list[Path] = []
+    installed_module_rust_files: list[Path] = []
     runtime_invalid_marker = Path(PBGDIR) / "data" / "locks" / "pb8-runtime-invalid"
     runtime_marked_invalid = runtime_invalid_marker.exists() or runtime_invalid_marker.is_symlink()
     if runtime_marked_invalid:
@@ -475,12 +476,16 @@ def pb8_runtime_status() -> dict:
             if not site_packages.is_dir():
                 continue
             for suffix in ("so", "pyd", "dll", "dylib"):
-                installed_rust_files.extend(site_packages.glob(f"passivbot_rust*.{suffix}"))
-                installed_rust_files.extend(site_packages.glob(f"passivbot_rust/passivbot_rust*.{suffix}"))
+                installed_module_rust_files.extend(site_packages.glob(f"passivbot_rust*.{suffix}"))
+                installed_package_rust_files.extend(site_packages.glob(f"passivbot_rust/passivbot_rust*.{suffix}"))
     src_rust_files = sorted(set(src_rust_files), key=str)
-    installed_rust_files = sorted(set(installed_rust_files), key=str)
+    installed_package_rust_files = sorted(set(installed_package_rust_files), key=str)
+    installed_module_rust_files = sorted(set(installed_module_rust_files), key=str)
+    installed_rust_files = installed_package_rust_files + installed_module_rust_files
     rust_files = sorted(set(src_rust_files + installed_rust_files), key=str)
-    preferred_rust_files = installed_rust_files or src_rust_files
+    # PB8's rust_utils resolves the installed package before a top-level module.
+    # Both wheels can install the same extension, but only the package copy is stamped.
+    preferred_rust_files = installed_package_rust_files or installed_module_rust_files or src_rust_files
     try:
         preferred_rust = max(preferred_rust_files, key=lambda path: path.stat().st_mtime) if preferred_rust_files else None
     except OSError:
