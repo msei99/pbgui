@@ -460,6 +460,18 @@ def check_receipt_location(receipt: Path) -> dict:
     return {'receipt': str(receipt), 'ready': True}
 
 
+def prepare_receipt_location(receipt: Path) -> dict:
+    """Create the private receipt directory before a PB7/PB8 runtime is stopped."""
+    if not receipt.is_absolute():
+        raise ValueError('Wheel receipt path must be absolute')
+    if receipt.is_symlink():
+        raise ValueError(f'Symlink wheel receipt path: {receipt}')
+    if receipt.exists() and not receipt.is_file():
+        raise ValueError('Wheel receipt is not a regular file')
+    private_directory(receipt.parent)
+    return check_receipt_location(receipt)
+
+
 def validate_runtime(bundle: Path, repo: Path, commit: str, product: str = 'pb8',
                      receipt: Path | None = None) -> dict:
     """Trust only a matching installed binary before writing its source stamp."""
@@ -529,7 +541,7 @@ def main() -> None:
     elif args.operation == 'build':
         result = build(args.archive, args.commit, json.loads(args.target), args.cache, args.bundle, args.product)
     elif args.operation == 'receipt':
-        result = check_receipt_location(args.receipt)
+        result = prepare_receipt_location(args.receipt)
     elif args.operation == 'capacity':
         result = require_install_capacity(args.bundle, args.repo, args.product)
     elif args.operation == 'cache':

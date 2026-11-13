@@ -239,6 +239,29 @@ def test_receipt_preflight_rejects_symlink_without_changing_directory_mode(tmp_p
     assert wheels.check_receipt_location(tmp_path / 'data' / 'new-state' / 'pb7-wheel.json')['ready']
 
 
+@pytest.mark.parametrize('product', ['pb7', 'pb8'])
+@pytest.mark.parametrize('existing_state', [False, True])
+def test_receipt_preflight_creates_private_state_before_runtime_changes(tmp_path, product, existing_state):
+    """The receipt command secures missing or group-writable legacy state directories."""
+    import sys
+
+    data = tmp_path / 'pbgui' / 'data'
+    data.mkdir(parents=True)
+    data.chmod(0o775)
+    if existing_state:
+        state = data / 'state'
+        state.mkdir()
+        state.chmod(0o775)
+    receipt = data / 'state' / f'{product}-wheel.json'
+    result = subprocess.run(
+        [sys.executable, 'pb8_wheels.py', 'receipt', '--receipt', str(receipt)],
+        capture_output=True, text=True, check=True,
+    )
+    assert json.loads(result.stdout)['ready'] is True
+    assert stat.S_IMODE(receipt.parent.stat().st_mode) == 0o700
+    assert stat.S_IMODE(data.stat().st_mode) == 0o775
+
+
 @pytest.mark.parametrize('playbook', ['vps-update-pb8.yml', 'master-update-pb8.yml'])
 def test_playbook_prepares_binaries_before_runtime_guard_and_never_compiles(playbook):
     """Masters and VPS targets install checked binaries before releasing their guard."""
