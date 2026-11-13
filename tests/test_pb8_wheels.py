@@ -296,6 +296,7 @@ def test_runtime_stamps_only_matching_installed_extension(tmp_path, monkeypatch,
     binary = tmp_path / 'installed.abi3.so'
     binary.write_bytes(b'wrong extension' if bad == 'binary' else b'test compiled extension')
     stamps = []
+    requirements = []
     helper = SimpleNamespace(
         source_fingerprint=lambda: 'c' * 64 if bad == 'source' else manifest['source_fingerprint'],
         prune_shadowing_local_extensions=lambda: None,
@@ -306,17 +307,48 @@ def test_runtime_stamps_only_matching_installed_extension(tmp_path, monkeypatch,
     monkeypatch.setattr(wheels.subprocess, 'check_output', lambda *a, **kw: ('c' * 40 if bad == 'commit' else COMMIT) + '\n')
     monkeypatch.setattr(wheels.importlib.util, 'spec_from_file_location', lambda *a: SimpleNamespace(loader=SimpleNamespace(exec_module=lambda module: None)))
     monkeypatch.setattr(wheels.importlib.util, 'module_from_spec', lambda spec: helper)
+    monkeypatch.setattr(wheels.importlib.util, 'find_spec', lambda name: SimpleNamespace(origin=str(tmp_path / 'procedures.py')))
+    monkeypatch.setattr(wheels, 'install_live_requirements', lambda *args: requirements.append(args))
     monkeypatch.setitem(sys.modules, 'passivbot_rust', SimpleNamespace())
     monkeypatch.chdir(tmp_path)
     if bad:
         with pytest.raises(ValueError):
             wheels.validate_runtime(bundle, repo, COMMIT, receipt=tmp_path / 'receipt.json')
         assert not stamps
+        assert not requirements
         assert not (tmp_path / 'receipt.json').exists()
     else:
         assert wheels.validate_runtime(bundle, repo, COMMIT, receipt=tmp_path / 'receipt.json') == {'verified': True}
+        assert len(requirements) == 1
         assert stamps == [(binary, manifest['source_fingerprint'])]
         assert json.loads((tmp_path / 'receipt.json').read_text())['extension_sha256'] == manifest['extension_sha256']
+
+
+def test_live_requirements_come_from_verified_commit(tmp_path):
+    """PB8's installed procedures receives the committed CCXT pin, not working-tree edits."""
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    subprocess.run(['git', 'init', '-q', str(repo)], check=True)
+    source = repo / 'requirements-live.txt'
+    source.write_text('ccxt==4.5.66\n', encoding='utf-8')
+    subprocess.run(['git', '-C', str(repo), 'add', 'requirements-live.txt'], check=True)
+    subprocess.run([
+        'git', '-C', str(repo), '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+        'commit', '-qm', 'Pin ccxt',
+    ], check=True)
+    commit = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    source.write_text('ccxt==9.9.9\n', encoding='utf-8')
+    venv = tmp_path / 'venv'
+    site = venv / 'lib' / 'python3.12' / 'site-packages'
+    site.mkdir(parents=True)
+    procedures = site / 'procedures.py'
+    procedures.write_text('# installed wheel module\n', encoding='utf-8')
+
+    destination = wheels.install_live_requirements(repo, commit, procedures, venv)
+
+    assert destination == venv / 'lib' / 'python3.12' / 'requirements-live.txt'
+    assert destination.read_text(encoding='utf-8') == 'ccxt==4.5.66\n'
+    assert wheels.install_live_requirements(repo, commit, procedures, venv) == destination
 
 
 def test_pb7_bundle_cannot_be_used_as_pb8(tmp_path):

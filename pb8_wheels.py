@@ -472,6 +472,49 @@ def prepare_receipt_location(receipt: Path) -> dict:
     return check_receipt_location(receipt)
 
 
+def install_live_requirements(repo: Path, commit: str, procedures_path: Path, venv_root: Path) -> Path:
+    """Place the commit-bound CCXT pin where installed PB8 procedures expects it."""
+    if not re.fullmatch(r'[0-9a-f]{40}', commit):
+        raise ValueError('Invalid PB8 source commit')
+    actual = subprocess.check_output(
+        ['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True, timeout=15,
+    ).strip()
+    if actual != commit:
+        raise ValueError('PB8 checkout differs from selected source commit')
+    procedure = procedures_path.resolve(strict=True)
+    venv = venv_root.resolve(strict=True)
+    if procedures_path.is_symlink() or procedure.name != 'procedures.py' or not procedure.is_relative_to(venv):
+        raise ValueError('PB8 procedures is outside the installed virtualenv')
+    source_object = f'{commit}:requirements-live.txt'
+    size = int(subprocess.check_output(
+        ['git', '-C', str(repo), 'cat-file', '-s', source_object], text=True, timeout=15,
+    ).strip())
+    if not 0 < size <= 64 * 1024:
+        raise ValueError('PB8 live requirements size is invalid')
+    content = subprocess.check_output(
+        ['git', '-C', str(repo), 'show', source_object], timeout=15,
+    )
+    if len(content) != size or not re.search(rb'(?m)^ccxt==[0-9][A-Za-z0-9._+-]*\s*$', content):
+        raise ValueError('PB8 live requirements lack a valid CCXT pin')
+    destination = procedure.parent.parent / 'requirements-live.txt'
+    if destination.is_symlink():
+        raise ValueError('Symlink PB8 live requirements path')
+    if destination.is_file() and destination.read_bytes() == content:
+        return destination
+    descriptor, temporary = tempfile.mkstemp(prefix='.requirements-live-', dir=destination.parent)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, 'wb') as handle:
+            handle.write(content)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, destination)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+    return destination
+
+
 def validate_runtime(bundle: Path, repo: Path, commit: str, product: str = 'pb8',
                      receipt: Path | None = None) -> dict:
     """Trust only a matching installed binary before writing its source stamp."""
@@ -491,6 +534,11 @@ def validate_runtime(bundle: Path, repo: Path, commit: str, product: str = 'pb8'
     module_path = helpers._compiled_path_from_loaded_module()
     if not module_path or digest(module_path) != manifest['extension_sha256']:
         raise ValueError('Loaded Rust binary differs from verified wheel')
+    if product == 'pb8':
+        procedures_spec = importlib.util.find_spec('procedures')
+        if procedures_spec is None or not procedures_spec.origin:
+            raise ValueError('Installed PB8 procedures module is missing')
+        install_live_requirements(repo, commit, Path(procedures_spec.origin), Path(sys.prefix))
     helpers.write_source_stamp(module_path, manifest['source_fingerprint'])
     result = helpers.verify_loaded_runtime_extension(fingerprint=manifest['source_fingerprint'])
     if receipt is not None:
