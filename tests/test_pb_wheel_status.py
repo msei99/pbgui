@@ -12,6 +12,20 @@ import pb_wheel_status as status
 COMMIT = "a" * 40
 
 
+def make_prepared_bundle(path: Path, product: str = "pb7") -> Path:
+    """Create a small hashed bundle for isolated cleanup tests."""
+    path.mkdir()
+    artifacts = {}
+    for name in ("passivbot.whl", "passivbot_rust.whl", "Cargo.lock"):
+        content = name.encode()
+        (path / name).write_bytes(content)
+        artifacts[name] = hashlib.sha256(content).hexdigest()
+    (path / "manifest.json").write_text(json.dumps({
+        "format": 1, "product": product, "commit": COMMIT, "artifacts": artifacts,
+    }))
+    return path
+
+
 def make_runtime(home, product, monkeypatch):
     """Create an isolated checkout, venv binary and source-bound receipt."""
     repo = home / "software" / product
@@ -88,6 +102,70 @@ def test_cleanup_rejects_symlinked_rust_source(tmp_path, monkeypatch):
     (repo / "passivbot-rust").symlink_to(other, target_is_directory=True)
     assert status.cleanup_vps_rust(pbgdir)["cleaned"] is False
     assert (other / "target").exists()
+
+
+def test_prepared_wheel_cleanup_retires_rust_before_capacity_check(tmp_path, monkeypatch):
+    """A verified PB7 bundle can retire its old build tools before installation."""
+    home = tmp_path / "mani"
+    pbgdir = home / "software/pbgui"
+    repo, python, _ = make_runtime(home, "pb7", monkeypatch)
+    (pbgdir / "pbgui.ini").write_text(
+        f"[main]\nrole = vps\npb7dir = {repo}\npb7venv = {python}\n")
+    (pbgdir / "data/state/pb7-wheel.json").unlink()
+    (repo / "passivbot-rust/target").mkdir(parents=True)
+    (home / ".rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    bundle = make_prepared_bundle(tmp_path / "bundle")
+
+    result = status.cleanup_vps_rust(
+        pbgdir, prepared_product="pb7", prepared_bundle=bundle, prepared_commit=COMMIT)
+
+    assert result["cleaned"] is True
+    assert not (home / ".rustup").exists()
+    assert not (repo / "passivbot-rust/target").exists()
+
+
+def test_prepared_wheel_cleanup_preserves_rust_for_unconverted_pb8(tmp_path, monkeypatch):
+    """A prepared PB7 wheel cannot retire tools while PB8 still needs them."""
+    home = tmp_path / "mani"
+    pbgdir = home / "software/pbgui"
+    pb7repo, pb7python, _ = make_runtime(home, "pb7", monkeypatch)
+    pb8repo, _pb8python, _ = make_runtime(home, "pb8", monkeypatch)
+    (pbgdir / "pbgui.ini").write_text(
+        f"[main]\nrole = vps\npb7dir = {pb7repo}\npb7venv = {pb7python}\n")
+    (pbgdir / "data/state/pb7-wheel.json").unlink()
+    (pbgdir / "data/state/pb8-wheel.json").unlink()
+    (home / ".rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    bundle = make_prepared_bundle(tmp_path / "bundle")
+
+    result = status.cleanup_vps_rust(
+        pbgdir, prepared_product="pb7", prepared_bundle=bundle, prepared_commit=COMMIT)
+
+    assert result["cleaned"] is False
+    assert "pb8 has no verified wheel install" in result["reason"]
+    assert (home / ".rustup").exists()
+    assert pb8repo.exists()
+
+
+def test_prepared_wheel_cleanup_rejects_modified_bundle(tmp_path, monkeypatch):
+    """A changed artifact cannot authorize early Rust removal."""
+    home = tmp_path / "mani"
+    pbgdir = home / "software/pbgui"
+    repo, python, _ = make_runtime(home, "pb7", monkeypatch)
+    (pbgdir / "pbgui.ini").write_text(
+        f"[main]\nrole = vps\npb7dir = {repo}\npb7venv = {python}\n")
+    (pbgdir / "data/state/pb7-wheel.json").unlink()
+    (home / ".rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu").mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
+    bundle = make_prepared_bundle(tmp_path / "bundle")
+    (bundle / "passivbot.whl").write_bytes(b"modified")
+
+    result = status.cleanup_vps_rust(
+        pbgdir, prepared_product="pb7", prepared_bundle=bundle, prepared_commit=COMMIT)
+
+    assert result["cleaned"] is False
+    assert (home / ".rustup").exists()
 
 
 @pytest.mark.parametrize("playbook", [

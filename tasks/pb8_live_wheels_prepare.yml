@@ -155,6 +155,14 @@
     executable: "{{ pbgui_python }}"
   changed_when: false
 
+- name: Retire unneeded VPS Rust tools before PB8 capacity check
+  script:
+    cmd: "pb_wheel_status.py {{ pbgdir | quote }} --prepare-product pb8 --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --commit {{ pb8_wheel_commit.stdout | quote }}"
+    executable: "{{ pbgui_python }}"
+  register: pb8_prepared_rust_cleanup
+  changed_when: "(pb8_prepared_rust_cleanup.stdout | from_json).cleaned | default(false)"
+  when: pb8_install_profile == 'live'
+
 - name: Seed reusable wheel cache on target masters
   script:
     cmd: "pb8_wheels.py cache --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --cache {{ (pbgdir ~ '/data/cache/pb8-wheels') | quote }}"

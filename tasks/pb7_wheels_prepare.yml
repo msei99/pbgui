@@ -78,6 +78,14 @@
     executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
   changed_when: false
 
+- name: Retire unneeded VPS Rust tools before PB7 capacity check
+  script:
+    cmd: "pb_wheel_status.py {{ pbgdir | quote }} --prepare-product pb7 --bundle {{ (pb7_wheel_remote_stage.path ~ '/bundle') | quote }} --commit {{ (pb7_wheel_source_commit | default(pb7_ref)) | quote }}"
+    executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
+  register: pb7_prepared_rust_cleanup
+  changed_when: "(pb7_prepared_rust_cleanup.stdout | from_json).cleaned | default(false)"
+  when: pb7_install_profile == 'live'
+
 - name: Seed reusable PB7 cache on target masters
   script:
     cmd: "pb8_wheels.py cache --product pb7 --bundle {{ (pb7_wheel_remote_stage.path ~ '/bundle') | quote }} --cache {{ (pbgdir ~ '/data/cache/pb7-wheels') | quote }}"

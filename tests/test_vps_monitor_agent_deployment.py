@@ -180,6 +180,9 @@ if [[ -n "${FAKE_CRASH_LOOP_UNIT:-}" ]]; then
   [[ -f "$path" ]] && current="$(cat "$path")"
   printf '%s\n' "$((current + 1))" > "$path"
 fi
+if [[ -n "${FAKE_IDLE_COIN_DATA:-}" ]]; then
+  printf 'inactive\n' > "$FAKE_SYSTEMD_STATE/active/pbgui-pbcoindata.service"
+fi
 """,
     )
 
@@ -470,6 +473,30 @@ def test_setup_systemd_action_failure_prints_unit_diagnostics(tmp_path: Path) ->
     calls = calls_path.read_text(encoding="utf-8")
     assert "--user show pbgui-monitor-agent.service --no-pager" in calls
     assert "--user status pbgui-monitor-agent.service --no-pager -l" in calls
+
+
+def test_setup_systemd_accepts_agent_managed_coindata_idle_stop(tmp_path: Path) -> None:
+    """A clean consumer-idle stop must not abort an otherwise healthy VPS update."""
+
+    env, pbgui_dir, python_bin, _calls_path = _fake_systemd_environment(tmp_path)
+    env = {**env, "FAKE_IDLE_COIN_DATA": "1"}
+
+    result = _run_setup(env, pbgui_dir, python_bin, enable="monitor-agent,pbcoindata")
+
+    assert result.returncode == 0, result.stderr
+    assert "stopped cleanly while the monitor agent manages consumer demand" in result.stdout
+
+
+def test_setup_systemd_rejects_unmanaged_coindata_stop(tmp_path: Path) -> None:
+    """A clean stop is not excused without a running monitor agent."""
+
+    env, pbgui_dir, python_bin, _calls_path = _fake_systemd_environment(tmp_path)
+    env = {**env, "FAKE_IDLE_COIN_DATA": "1"}
+
+    result = _run_setup(env, pbgui_dir, python_bin, enable="pbcoindata")
+
+    assert result.returncode == 1
+    assert "failed the 12-second stability check" in result.stderr
 
 
 def test_setup_systemd_detects_delayed_restart_increment(tmp_path: Path) -> None:

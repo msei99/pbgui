@@ -41,8 +41,41 @@ def wheel_installed(pbgdir: Path, product: str, repo: Path, python: Path) -> boo
         return False
 
 
-def cleanup_vps_rust(pbgdir: Path) -> dict:
-    """Remove PBGui Rust build data only when every installed bot uses wheels."""
+def prepared_bundle_verified(bundle: Path, product: str, commit: str) -> bool:
+    """Check the transferred manifest without relying on target PBGui imports."""
+    manifest_path = bundle / "manifest.json"
+    try:
+        if (bundle.is_symlink() or manifest_path.is_symlink()
+                or manifest_path.stat().st_size > 65536):
+            return False
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        artifacts = manifest.get("artifacts")
+        if (manifest.get("format") != 1 or manifest.get("product", "pb8") != product
+                or not re.fullmatch(r"[0-9a-f]{40}", commit)
+                or manifest.get("commit") != commit
+                or not isinstance(artifacts, dict) or len(artifacts) != 3):
+            return False
+        for name, expected in artifacts.items():
+            if (not isinstance(name, str) or Path(name).name != name
+                    or name in {".", ".."} or not isinstance(expected, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", expected)):
+                return False
+            path = bundle / name
+            if path.is_symlink() or not path.is_file():
+                return False
+            with path.open("rb") as handle:
+                if hashlib.file_digest(handle, "sha256").hexdigest() != expected:
+                    return False
+        return True
+    except (OSError, ValueError, TypeError, AttributeError, json.JSONDecodeError):
+        return False
+
+
+def cleanup_vps_rust(
+    pbgdir: Path, *, prepared_product: str | None = None,
+    prepared_bundle: Path | None = None, prepared_commit: str | None = None,
+) -> dict:
+    """Retire Rust after wheel installs or before a verified wheel conversion."""
     pbgdir = pbgdir.resolve(strict=True)
     home = Path.home().resolve()
     if pbgdir.name != "pbgui" or not pbgdir.is_relative_to(home):
@@ -52,6 +85,11 @@ def cleanup_vps_rust(pbgdir: Path) -> dict:
     role = config.get("main", "role", fallback="").strip().lower()
     if role not in {"vps", "slave"}:
         return {"cleaned": False, "reason": "Rust cleanup is restricted to VPS runners"}
+    if prepared_product is not None:
+        if prepared_product not in {"pb7", "pb8"} or prepared_bundle is None or prepared_commit is None:
+            return {"cleaned": False, "reason": "Incomplete prepared wheel selection"}
+        if not prepared_bundle_verified(prepared_bundle, prepared_product, prepared_commit):
+            return {"cleaned": False, "reason": "Prepared wheel verification failed"}
     installed = []
     for product in ("pb7", "pb8"):
         repo_text = config.get("main", f"{product}dir", fallback="").strip()
@@ -64,9 +102,11 @@ def cleanup_vps_rust(pbgdir: Path) -> dict:
             return {"cleaned": False, "reason": f"Configured {product} checkout is missing"}
         if repo.is_symlink() or not repo.resolve().is_relative_to(home):
             return {"cleaned": False, "reason": f"Unsafe {product} checkout path"}
-        if not wheel_installed(pbgdir, product, repo, executable):
+        if product != prepared_product and not wheel_installed(pbgdir, product, repo, executable):
             return {"cleaned": False, "reason": f"{product} has no verified wheel install"}
         installed.append((product, repo))
+    if prepared_product is not None and prepared_product not in {product for product, _ in installed}:
+        return {"cleaned": False, "reason": "Prepared product checkout is missing"}
     if not installed:
         return {"cleaned": False, "reason": "No PB7/PB8 runtime is installed"}
     try:
@@ -115,13 +155,23 @@ def main() -> None:
     parser.add_argument("--check-product", choices=["pb7", "pb8"])
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--python", type=Path)
+    parser.add_argument("--prepare-product", choices=["pb7", "pb8"])
+    parser.add_argument("--bundle", type=Path)
+    parser.add_argument("--commit")
     args = parser.parse_args()
     if args.check_product:
+        if args.prepare_product or args.bundle or args.commit:
+            parser.error("--check-product cannot be combined with prepared wheel cleanup")
         if args.repo is None or args.python is None:
             parser.error("--check-product requires --repo and --python")
         result = {"installed": wheel_installed(args.pbgdir, args.check_product, args.repo, args.python)}
     else:
-        result = cleanup_vps_rust(args.pbgdir)
+        if args.prepare_product and (args.bundle is None or args.commit is None):
+            parser.error("--prepare-product requires --bundle and --commit")
+        result = cleanup_vps_rust(
+            args.pbgdir, prepared_product=args.prepare_product,
+            prepared_bundle=args.bundle, prepared_commit=args.commit,
+        )
     print(json.dumps(result))
 
 

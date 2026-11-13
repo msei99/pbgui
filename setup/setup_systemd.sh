@@ -446,6 +446,20 @@ if [[ "$START_SERVICES" == true ]]; then
     [[ "$restarts_after" =~ ^[0-9]+$ ]] || restarts_after=0
     printf 'unit=%s active=%s sub=%s result=%s status=%s restarts_before=%s restarts_after=%s\n' \
       "$unit" "$active_state" "$sub_state" "$result_state" "$exec_status" "${restarts_before[$unit]}" "$restarts_after"
+    # The monitor agent intentionally stops PBCoinData on VPS runners without
+    # active consumers. A clean stop during this probe is not a service crash.
+    if [[ "$unit" == pbgui-pbcoindata.service &&
+          ( "$active_state" == inactive || "$active_state" == deactivating ) &&
+          "$result_state" == success && "${exec_status:-0}" == 0 &&
+          "$restarts_after" -eq "${restarts_before[$unit]}" ]]; then
+      for managed_service in "${enabled[@]}"; do
+        if [[ "$managed_service" == monitor-agent &&
+              "$(show_unit_property pbgui-monitor-agent.service ActiveState)" == active ]]; then
+          warn "$unit was stopped cleanly while the monitor agent manages consumer demand."
+          continue 2
+        fi
+      done
+    fi
     if [[ "$active_state" != active || "$sub_state" != running || "$result_state" != success || "${exec_status:-0}" != 0 || "$restarts_after" -gt "${restarts_before[$unit]}" ]]; then
       err "$unit failed the 12-second stability check."
       show_unit_diagnostics "$unit"
