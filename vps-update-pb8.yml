@@ -43,6 +43,64 @@
       set_fact:
         pb8_install_profile: "{{ 'full' if (pb8_role_probe.stdout | trim | lower) == 'master' else 'live' }}"
 
+    - name: Resolve official PB8 commit before checking the installed live runtime
+      command:
+        argv:
+          - "{{ ansible_playbook_python }}"
+          - "{{ playbook_dir }}/pb8_wheels.py"
+          - resolve
+          - --url=https://github.com/enarjord/passivbot.git
+          - --branch=master
+      delegate_to: localhost
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      register: pb8_controller_head
+      changed_when: false
+      when: not pb8_branch_switch and pb8_install_profile == 'live'
+
+    - name: Check whether the selected PB8 live wheel is already installed
+      command:
+        argv:
+          - "{{ pbgui_python }}"
+          - "{{ pbgdir }}/pb_wheel_status.py"
+          - "{{ pbgdir }}"
+          - --check-product
+          - pb8
+          - --repo
+          - "{{ pb8dir }}"
+          - --python
+          - "{{ pb8venv }}/bin/python"
+          - --current-commit
+          - "{{ (pb8_controller_head.stdout | from_json).commit }}"
+      register: pb8_current_live_wheel
+      changed_when: false
+      when: not pb8_branch_switch and pb8_install_profile == 'live'
+
+    - name: Check whether PBRun is active before skipping PB8
+      command:
+        argv: [systemctl, --user, is-active, pbgui-pbrun.service]
+      register: pb8_current_pbrun
+      changed_when: false
+      failed_when: false
+      when: not pb8_branch_switch and pb8_install_profile == 'live'
+
+    - name: Report already current PB8 live runtime
+      debug:
+        msg: "PB8 live wheel already matches official master; skipping download, reinstall and bot restart."
+      when:
+        - not pb8_branch_switch
+        - pb8_install_profile == 'live'
+        - (pb8_current_live_wheel.stdout | from_json).installed | bool
+        - pb8_current_pbrun.rc == 0
+
+    - name: Skip PB8 update for an already current live runtime
+      meta: end_host
+      when:
+        - not pb8_branch_switch
+        - pb8_install_profile == 'live'
+        - (pb8_current_live_wheel.stdout | from_json).installed | bool
+        - pb8_current_pbrun.rc == 0
+
     - name: Measure PB8 disk state before changes
       command:
         argv:

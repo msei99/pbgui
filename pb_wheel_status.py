@@ -5,6 +5,7 @@ import configparser
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -38,6 +39,47 @@ def wheel_installed(pbgdir: Path, product: str, repo: Path, python: Path) -> boo
         with binaries[0].open("rb") as handle:
             return hashlib.file_digest(handle, "sha256").hexdigest() == data["extension_sha256"]
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        return False
+
+
+def pb8_live_current(pbgdir: Path, repo: Path, python: Path, expected_commit: str) -> bool:
+    """Skip a live reinstall only when the selected checkout and runtime are intact."""
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_commit) or not wheel_installed(pbgdir, "pb8", repo, python):
+        return False
+    config = configparser.ConfigParser()
+    try:
+        config.read(pbgdir / "pbgui.ini")
+    except (OSError, configparser.Error):
+        return False
+    if (config.get("main", "pb8dir", fallback="") != str(repo)
+            or config.get("main", "pb8venv", fallback="") != str(python)):
+        return False
+    marker = pbgdir / "data/locks/pb8-runtime-invalid"
+    venv = python.parent.parent
+    site = venv / "lib/python3.12/site-packages"
+    source_requirements = repo / "requirements-live.txt"
+    installed_requirements = venv / "lib/python3.12/requirements-live.txt"
+    cli = python.parent / "passivbot"
+    rust_binaries = list((site / "passivbot_rust").glob("passivbot_rust*.so"))
+    try:
+        if (marker.exists() or marker.is_symlink()
+                or not cli.is_file() or not os.access(cli, os.X_OK)
+                or not (site / "procedures.py").is_file()
+                or len(rust_binaries) != 1
+                or not rust_binaries[0].with_name(f"{rust_binaries[0].name}.rust-src-sha256").is_file()
+                or source_requirements.is_symlink() or installed_requirements.is_symlink()
+                or source_requirements.read_bytes() != installed_requirements.read_bytes()):
+            return False
+        actual = subprocess.check_output(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            text=True, stderr=subprocess.DEVNULL, timeout=10,
+        ).strip()
+        changes = subprocess.check_output(
+            ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=no"],
+            text=True, stderr=subprocess.DEVNULL, timeout=10,
+        ).strip()
+        return actual == expected_commit and not changes
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
@@ -158,14 +200,22 @@ def main() -> None:
     parser.add_argument("--prepare-product", choices=["pb7", "pb8"])
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--commit")
+    parser.add_argument("--current-commit")
     args = parser.parse_args()
     if args.check_product:
         if args.prepare_product or args.bundle or args.commit:
             parser.error("--check-product cannot be combined with prepared wheel cleanup")
         if args.repo is None or args.python is None:
             parser.error("--check-product requires --repo and --python")
-        result = {"installed": wheel_installed(args.pbgdir, args.check_product, args.repo, args.python)}
+        if args.current_commit and args.check_product != "pb8":
+            parser.error("--current-commit requires --check-product pb8")
+        result = {"installed": (
+            pb8_live_current(args.pbgdir, args.repo, args.python, args.current_commit)
+            if args.current_commit else wheel_installed(args.pbgdir, args.check_product, args.repo, args.python)
+        )}
     else:
+        if args.current_commit:
+            parser.error("--current-commit requires --check-product pb8")
         if args.prepare_product and (args.bundle is None or args.commit is None):
             parser.error("--prepare-product requires --bundle and --commit")
         result = cleanup_vps_rust(

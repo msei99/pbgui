@@ -59,6 +59,63 @@ def test_receipt_requires_matching_checkout_and_binary(tmp_path, monkeypatch):
     assert not status.wheel_installed(pbgdir, "pb7", repo, python)
 
 
+def test_pb8_live_skip_requires_current_commit_and_complete_runtime(tmp_path, monkeypatch):
+    """An old, incomplete or interrupted live install must still run the update."""
+    repo, python, binary = make_runtime(tmp_path, "pb8", monkeypatch)
+    pbgdir = tmp_path / "software/pbgui"
+    (pbgdir / "pbgui.ini").write_text(f"[main]\npb8dir = {repo}\npb8venv = {python}\n")
+    requirements = b"ccxt==4.5.66\n"
+    (repo / "requirements-live.txt").write_bytes(requirements)
+    installed = python.parent.parent / "lib/python3.12/requirements-live.txt"
+    installed.write_bytes(requirements)
+    site = binary.parent.parent
+    (site / "procedures.py").write_text("")
+    binary.with_name(f"{binary.name}.rust-src-sha256").write_text("b" * 64)
+    cli = python.parent / "passivbot"
+    cli.write_text("#!/bin/sh\n")
+    cli.chmod(0o755)
+
+    def git_output(argv, **_kwargs):
+        """Model the clean detached checkout produced by the normal installer."""
+        if "rev-parse" in argv:
+            return COMMIT
+        return ""
+
+    monkeypatch.setattr(status.subprocess, "check_output", git_output)
+    assert status.pb8_live_current(pbgdir, repo, python, COMMIT)
+    assert not status.pb8_live_current(pbgdir, repo, python, "c" * 40)
+    installed.write_bytes(b"ccxt==4.0.0\n")
+    assert not status.pb8_live_current(pbgdir, repo, python, COMMIT)
+    installed.write_bytes(requirements)
+    marker = pbgdir / "data/locks/pb8-runtime-invalid"
+    marker.parent.mkdir(parents=True)
+    marker.write_text("failed")
+    assert not status.pb8_live_current(pbgdir, repo, python, COMMIT)
+    marker.unlink()
+    monkeypatch.setattr(status.subprocess, "check_output", lambda argv, **kwargs: (
+        " M src/rust_utils.py" if "status" in argv else git_output(argv, **kwargs)
+    ))
+    assert not status.pb8_live_current(pbgdir, repo, python, COMMIT)
+
+
+def test_pb8_live_update_skips_only_verified_normal_updates() -> None:
+    """The fast path precedes wheel preparation and excludes branch switches."""
+    play = yaml.safe_load(Path("vps-update-pb8.yml").read_text())[0]
+    tasks = {task["name"]: task for task in play["tasks"]}
+    names = list(tasks)
+    skip = tasks["Skip PB8 update for an already current live runtime"]
+    assert skip["meta"] == "end_host"
+    assert "not pb8_branch_switch" in skip["when"]
+    assert "pb8_current_live_wheel" in str(skip["when"])
+    assert "pb8_current_pbrun.rc == 0" in skip["when"]
+    assert names.index("Skip PB8 update for an already current live runtime") < names.index(
+        "Measure PB8 disk state before changes"
+    )
+    assert names.index("Skip PB8 update for an already current live runtime") < names.index(
+        "Prepare central PB8 wheels before runtime changes"
+    )
+
+
 def test_cleanup_waits_for_both_wheel_installs(tmp_path, monkeypatch):
     """A mixed source/wheel VPS keeps Rust until the second bot is converted."""
     home = tmp_path / "mani"

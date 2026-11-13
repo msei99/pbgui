@@ -31,7 +31,9 @@
     ansible_python_interpreter: "{{ ansible_playbook_python }}"
   register: pb8_controller_head
   changed_when: false
-  when: not pb8_branch_switch or pb8_target_commit == ''
+  when:
+    - not pb8_branch_switch or pb8_target_commit == ''
+    - pb8_controller_head.stdout is not defined
 
 - name: Pin resolved PB8 wheel source commit
   set_fact:
