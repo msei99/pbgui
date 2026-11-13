@@ -206,6 +206,17 @@
     </div>
     <p id="cloud-throughput-sample" class="muted" role="status">Waiting for timestamped optimizer counters.</p>
     <div id="cloud-convergence" class="optlog-summary-grid" hidden>
+      <form id="job-convergence-form" class="optlog-card" style="grid-column:1/-1">
+        <div class="fields">
+          <label><span tabindex="0" data-tip="Apply stopping settings to this running job. Saving starts a fresh observation window from the next verified exact Pareto snapshot; optimizer inputs and rental limits stay unchanged.">Stop on stagnation</span><select id="job-convergence-enabled"><option value="false">Off</option><option value="true">On</option></select></label>
+          <label>Minimum exact<input id="job-convergence-min" type="number" min="256" max="10000000" step="1" required></label>
+          <label>Patience<input id="job-convergence-patience" type="number" min="128" max="10000000" step="1" required></label>
+          <label>Improvement %<input id="job-convergence-tolerance" type="number" min="0.000001" max="10" step="any" required></label>
+          <button id="job-convergence-save" type="submit">Apply to this job</button>
+          <button id="job-convergence-discard" type="button">Discard changes</button>
+        </div>
+        <div id="job-convergence-message" class="muted" role="status"></div>
+      </form>
       <div class="optlog-card"><div class="optlog-label"><span data-tip="Quality of the exact feasible Pareto front, measured on a fixed scale. This is a stopping heuristic, not proof that no better configuration exists.">Convergence</span></div><div id="convergence-phase" class="optlog-value"></div></div>
       <div class="optlog-card"><div class="optlog-label"><span data-tip="Current exact CPU count minus the count at the last accepted Pareto improvement. This is not elapsed time or GPU proxy count. The improvement baseline is checked after verified snapshots; this live count can therefore be ahead of the Stagnation bar, which uses the last checked snapshot. A dash means no baseline is available yet.">Since last improvement ⓘ</span></div><div id="convergence-since" class="optlog-value"></div></div>
       <div class="optlog-card"><div class="optlog-label"><span id="convergence-help" data-tip="Before the minimum is reached, the bar counts initial exact evaluations. Afterwards it counts exact evaluations without a significant improvement against the patience limit. Reaching the limit requests a graceful stop and final result collection. A significant improvement resets this counter. This is not overall run progress.">Stagnation ⓘ</span></div><div id="convergence-progress" class="optlog-value"></div><progress id="convergence-bar" max="100" value="0" aria-label="Stagnation patience used"></progress></div>

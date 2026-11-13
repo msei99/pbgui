@@ -20,6 +20,8 @@ Der Standard-Menüeintrag **System -> VPS Manager** öffnet die eigenständige *
 
 ---
 
+Die Karte **Updates** im Host-Detail zaehlt aktuell installierbare Updates. Von apt zurueckgestellte Pakete stehen separat in der Statuszeile und bleiben in den Details einsehbar. Ausschliesslich zurueckgestellte Pakete faerben die Karte nicht rot und markieren **Update Linux** nicht als ausstehend; geplante Neuinstallationen und Entfernungen loesen weiterhin die Warnung aus. Veraltete oder nicht verfuegbare Paketdaten behalten ihren Warnhinweis.
+
 ## Übersichtstabelle
 
 Die Hauptansicht zeigt eine Tabelle mit allen Servern (Master + VPS) und ihrem aktuellen Status.
@@ -62,13 +64,15 @@ Die Detailkoepfe fuer Master und VPS wiederholen die Versionskarten fuer PBGui, 
 
 Wenn eine PB8-Installation oder ein Update vor der Validierung endet, bleibt der Checkout im VPS Manager sichtbar, wird aber als nicht verfuegbar markiert. Die Overview-Zelle zeigt eine rote Warnung, die Detailansicht meldet **PB8 Update Required** mit dem gespeicherten Grund, und die dedizierte Aktion **Update PB8** bleibt hervorgehoben, bis ein erfolgreiches Update den Runtime-Invalid-Marker entfernt.
 
-Die normale Aktion **Update PB8** setzt PB8 absichtlich auf einen Detached Checkout des verifizierten Upstream-`master`-Commits zurueck. Wenn dieser Detached Commit exakt der verifizierten Upstream-Revision entspricht, zeigt VPS Manager `master` statt des technischen Git-Zustands `unknown` an. Die explizite Ansicht **PB8 Branch** kann stattdessen einen validierten v8-Branch oder Commit aus dem konfigurierten Upstream oder einer Custom-Remote/einem Fork verfolgen.
+Die normale Aktion **Update PB8** setzt PB8 absichtlich auf einen Detached Checkout des verifizierten Upstream-`master`-Commits zurueck. Wenn dieser Detached Commit exakt der verifizierten Upstream-Revision entspricht, zeigt VPS Manager `master` statt des technischen Git-Zustands `unknown` an. **PB8 Versions** kann einen gewaehlten Branch aus dem offiziellen Repository oder einem auf dem steuernden Master konfigurierten Fork installieren.
 
 Vor PB8-Updates erscheint einmalig ein Migrationshinweis, auch bei kombinierten PBGui/PB8-Aktionen und Sammelupdates mit PB8-Hosts. Nach dem Update die betroffenen PB8-Run-Configs öffnen, die markierten Migrationsänderungen prüfen und **Save** drücken, um die neue Config-Version zu erzeugen und zu senden. Alte HSL-Configs können beim Neustart scheitern, bis der aktualisierte Host die migrierte Config erhält. Die v8.6-HSL-Migration entfernt gelbe/orange Stufen; Configs mit aktivem HSL erneut backtesten. Optional zuerst eine VPS ohne PB8-Bots aktualisieren, Bots dorthin verschieben und ihre migrierten Configs speichern, dann die freigewordene VPS aktualisieren und den Ablauf wiederholen. Der Hinweis fügt keinen weiteren Migrationsassistenten hinzu und ändert die Config-Versionierung nicht.
 
 **Import Cluster Nodes** liest den lokal materialisierten `cluster_nodes`-State und importiert nicht-lokale Nodes mit SSH-Metadaten, unabhängig vom Cluster-Sync-Modus. Deaktivierte Cluster-Sync-Nodes können trotzdem in den VPS Manager importiert werden; disabled bedeutet nur, dass PBCluster nicht über diesen Node replizieren soll. Importiert werden nur sichere lokale VPS-Manager-Metadaten wie Hostname, SSH-Host, SSH-User, SSH-Port und Remote PBGui Dir; Passwörter und Private Keys werden nicht importiert. CMC-Secrets sind keine VPS-Manager-Felder: Cluster Sync materialisiert versiegelte Pool-Generationen getrennt. Wenn lokale `/etc/hosts`-Einträge fehlen oder auf eine andere IP zeigen, zeigt die Import-Vorschau die nötigen Host-Eintragsänderungen und fragt beim Anwenden nach dem lokalen sudo-Passwort, bevor sie geschrieben werden. Das Modal fragt das VPS-User-Passwort pro importiertem Host ab; Zeilen ohne Passwort werden übersprungen, während eingegebene Passwörter einmalig genutzt werden, um Remote-Settings zu lesen, den Monitoring-SSH-Key zu installieren und das Passwort nur in der aktuellen Browser/API-Session für spätere SSH-Aktionen zu halten. Beim Neuladen der Vorschau bleiben diese ungespeicherten Passwortentwuerfe erhalten; nach einem fehlgeschlagenen Importstart kehrt das Modal zur Vorschau zurueck, damit der Request korrigiert und wiederholt werden kann.
 
 Die Seite haelt eine Live-WebSocket-Verbindung fuer Uebersicht, Fortschritt und Branch-Status offen. Der persistente VPSMonitor-Dienst prueft die Upstream-Branch-Heads fuer PBGui, PB7 und PB8 alle 60 Sekunden im Hintergrund, behaelt den letzten gueltigen Stand ueber API-Neustarts hinweg und kennzeichnet ihn bei einem temporaeren Git-Fehler als stale. Die Update-Farben fuer Master und VPS aktualisieren sich deshalb automatisch, auch bei geschlossener Seite. PB7s verifizierter gepinnter Commit gilt weiterhin als aktuell, auch wenn Upstream `master` weiterlaeuft. Vollstaendige Branch-Historien und Custom-Remote-/Fork-Commits werden nur bei einer entsprechenden Branch-Management-Anfrage geladen. Die Browser-Authentifizierung verwendet ausschliesslich das Cookie; PBGui rendert den Session-Token weder in diese Seite noch sendet es einen Browser-Bearer-Header.
+
+Der PBGui-Hintergrund-Check liest immer das offizielle Repository, unabhaengig vom gewaehlten `origin` des steuernden Masters. Ein Host mit einer anderen PBGui-Quelle zeigt **custom source** statt eines irrefuehrenden offiziellen Update-Status. Der Monitor-Agent uebermittelt nur diese Einstufung, niemals die Remote-URL oder Zugangsdaten. Hosts mit aelteren Agent-Metadaten nutzen bis zu ihrem PBGui-Update noch den bisherigen Vergleich.
 
 Die lokale Master-Zeile zeigt immer die vom aktuell laufenden API-Prozess importierte PBGui-Version. Ein stale Monitor-Agent-Cache kann weiterhin letzte bekannte Package- oder PB7/PB8-Details liefern, aber die lokale PBGui-Version nicht mehr durch einen veralteten Wert ersetzen. Update-Button-Farben bleiben Commit-basiert und benoetigen einen verifizierten gecachten Upstream-Head; stale Cache-Text allein behauptet niemals, dass ein Update verfuegbar ist.
 
@@ -98,9 +102,9 @@ Sidebar-Aktionen:
 | **Back to Master Overview** | Von Branch-/Log-Unteransichten zurück zur normalen Master-Detailansicht |
 | **Task Logs** | Den dedizierten Shared-Log-Viewer für gespeicherte Master-Playbook-Logs öffnen |
 | **Host Logs** | Den dedizierten Shared-Log-Viewer für lokale Service-Logs und dateibasierte Ziele öffnen |
-| **PBGui Branch** | Die PBGui-Branch-Verwaltung öffnen |
+| **PBGui Versions** | Die PBGui-Versionsauswahl öffnen |
 | **PB7 Branch** | Die PB7-Branch-Verwaltung öffnen |
-| **PB8 Branch** | Bei installiertem PB8 die PB8-Branch-Verwaltung öffnen |
+| **PB8 Versions** | Einen offiziellen oder konfigurierten Fork-Branch waehlen und PB8 installieren |
 | **Update PBGui and PB7 / Update PBGui and PB8** | PBGui zusammen mit der gewählten Runtime aktualisieren; kombinierte PB7+PB8-Hosts bieten beide Aktionen an |
 | **Update PBGui** | Nur PBGui aktualisieren |
 | **Install PB7 / Update PB7** | Eine fehlende PB7-Runtime installieren oder den vorhandenen PB7-Checkout und dessen Virtualenv aktualisieren |
@@ -111,21 +115,23 @@ Sidebar-Aktionen:
 
 Der **Master**-Inhaltsbereich enthält zusätzlich:
 - ein Live-Statusraster für CoinData / letzten Command
-- **PBGui Branch Management** für Branch- oder Commit-Wechsel
+- **PBGui Versions** zum Suchen, Auswählen und Installieren von Branches aus konfigurierten Master-Remotes
 - **PB7 Branch Management** mit optionaler Custom-Remote- / Fork-URL
-- **PB8 Branch Management** fuer installierte PB8-Checkouts mit unabhaengiger Branch-/Commit-Auswahl und optionaler Custom-Remote- / Fork-URL
+- **PB8 Versions** zur Auswahl eines Branches aus dem offiziellen Repository oder einem auf dem steuernden Master konfigurierten Fork und dessen Installation
 - einen **Monitor**-Bereich mit Server-Metriken plus runtime-gekennzeichneter PB7-/PB8-Aktivitaet aus laufenden Prozessen und Cluster-Sync-Zielzustand
 - einen **Progress**-Bereich mit getrennten Status-Buckets; sobald eine Sidebar-Aktion einen Master-Ansible-Task startet, schaltet die Hauptfläche auf den gemeinsamen **Command Log Viewer** um, und **Home** bringt zurück zur normalen Master-Ansicht
 
 Die Bot-Tabellen unter **Monitor** und **Remote Monitor** zeigen neben jedem Bot-Namen ein **PB7**- oder **PB8**-Badge, auch nach Live-Aktualisierungen. Damit bleibt die Runtime auch bei gleichnamigen PB7- und PB8-Bots erkennbar.
 
-Das Aendern eines lokalen PB7- oder PB8-Branches aktualisiert sofort die angezeigte Source und das Target und aktiviert **Switch Local Branch**, wenn sie abweichen. Der Remote-Branch darf auf **Use local branch target** bleiben; in diesem Modus holt PBGui denselben Branch-Namen vom ausgewaehlten Remote.
+Die PB7-Branch-Verwaltung zeigt Source und Target und aktiviert **Switch Local Branch**, wenn sie abweichen. Der Remote-Branch darf auf **Use local branch target** bleiben; PBGui holt dann denselben Branch-Namen vom ausgewaehlten Remote. **PB8 Versions** laedt die verfuegbaren Branches automatisch in eine durchsuchbare Tabelle, sortiert nach dem Commit-Zeitpunkt des Branch-Heads (neueste zuerst). Waehle bei mehreren Quellen ein Repository, suche und markiere eine Zeile und klicke **Install PB8**. Das funktioniert auch, wenn PB8 noch nicht installiert ist.
+
+Für einen älteren PB8-Stand von `master` oder einem anderen Branch wähle den Branch und danach unter **Commit** einen Eintrag oder füge die vollständige 40-stellige SHA ein. **Load older commits** lädt jeweils 50 weitere Einträge. Die Auswahl bleibt nach einem Browser-Reload erhalten. Das Ziel prüft vor dem Checkout, ob der Commit zum Branch gehört; der steuernde Master baut das Wheel für genau diesen Commit.
 
 Im Cluster-Modus synchronisieren **Update PBGui** und PBGui-Branch-Wechsel die lokale PBCluster-systemd-User-Unit und starten PBCluster neu. PBCluster ist außerdem in lokaler Service-Überwachung und Service-Control sichtbar. Ein manueller `git pull` startet PBCluster nicht neu; nutze danach `systemctl --user restart pbgui-pbcluster.service`.
 
-PB8 verwendet `<install_dir>/pb8` und `<install_dir>/venv_pb8`, validiert PB8-CLI, Rust-Erweiterung, V8-Config-Schema und Source-Fingerprint und speichert danach `pb8dir` und `pb8venv` in `pbgui.ini`. Lokale und entfernte Master erhalten das vollstaendige PB8-Profil fuer Backtest und Optimize. Verwaltete VPS-Runner erhalten nur das minimale Live-Profil, verwenden pip ohne Download-Cache, entfernen nach der Validierung das temporaere Rust-Buildverzeichnis und aktivieren den gemeinsamen PBRun-Controller fuer PB8-Live-Supervision. Ein vorhandener verwalteter PB8-Live-Bot wird genau einmal nach erfolgreicher vollstaendiger Update-Validierung neu gestartet, damit er die neue PB8-Version laedt; ein fehlgeschlagenes Update loest diesen Restart nicht aus. Eine erste Remote-PB8-Installation verlangt mindestens 3 GiB freien Speicher. Eine bereits validierte PB8-Runtime bleibt auch unterhalb dieser Erstinstallationsreserve aktualisierbar. Das Playbook protokolliert vor und nach beiden Operationen freien Speicher sowie die Groessen von Checkout und Venv. Die RAM-Groesse ist keine Installationssperre.
+PB8 verwendet `<install_dir>/pb8` und `<install_dir>/venv_pb8`, validiert PB8-CLI, Rust-Erweiterung, V8-Config-Schema und Source-Fingerprint und speichert danach `pb8dir` und `pb8venv` in `pbgui.ini`. Lokale und entfernte Master erhalten das vollstaendige PB8-Profil fuer Backtest und Optimize. Verwaltete VPS-Runner erhalten nur das minimale Live-Profil, verwenden pip ohne Download-Cache und aktivieren den gemeinsamen PBRun-Controller fuer PB8-Live-Supervision. Ein vorhandener verwalteter PB8-Live-Bot wird genau einmal nach erfolgreicher vollstaendiger Update-Validierung neu gestartet, damit er die neue PB8-Version laedt; ein fehlgeschlagenes Update loest diesen Restart nicht aus. Eine erste Remote-PB8-Installation verlangt mindestens 3 GiB freien Speicher. Eine bereits validierte PB8-Runtime bleibt auch unterhalb dieser Erstinstallationsreserve aktualisierbar. Das Playbook protokolliert vor und nach beiden Operationen freien Speicher sowie die Groessen von Checkout und Venv. Die RAM-Groesse ist keine Installationssperre.
 
-Auch eine erste Remote-PB7-Installation verlangt mindestens 3 GiB freien Speicher. Der VPS Manager deaktiviert **Install PB7**, wenn frische Telemetrie weniger Platz meldet; das Playbook wiederholt die Pruefung vor rustup- oder Git-Downloads. Bereits validierte PB7-Installationen bleiben unterhalb der Erstinstallationsreserve updatefaehig.
+Eine erste Remote-PB7-Installation verlangt vor dem Git-Checkout mindestens 512 MiB freien Speicher. Das Playbook prueft zusaetzlich den Platz fuer entpackte Wheels und Abhaengigkeiten, bevor Bots gestoppt werden. Der steuernde Master baut und kopiert die PB7-Wheels; auf der VPS laufen weder rustup noch ein Rust-Build. Bestehende Installationen bleiben unterhalb der Erstinstallationsreserve aktualisierbar, wenn die Binaer-Kapazitaetspruefung besteht. Die PB7/PB8-Versionsspalte zeigt **Wheel update**, bis Checkout und installierte Rust-Binaerdatei zu einem geprueften Wheel-Nachweis passen. Sobald beide installierten Runtimes per Wheel verifiziert sind, entfernt das VPS-Update ihre Rust-Buildverzeichnisse, unbenoetigte Rust/Cargo-Toolchain und Caches des Accounts sowie das alte Ubuntu-Paket `rustup`. Eine fremde Toolchain oder ein fremdes Cargo-Programm verhindert die gemeinsame Bereinigung; Master behalten ihre Build-Werkzeuge.
 
 Bulk-Updates in der Overview richten sich danach, was auf jeder ausgewaehlten VPS installiert ist. **Update Passivbot (PB7/PB8)** und **Update PBGui + Passivbot (PB7/PB8)** senden PB7-only-Hosts an PB7-Playbooks, PB8-only-Hosts an PB8-Playbooks und kombinierte Hosts an geordnete PB7+PB8-Playbooks. Gemischte Selektionen behalten damit einen gemeinsamen parallelen oder sequenziellen Rollout, ohne PB7-Tasks auf PB8-only-Hosts anzuwenden. Rollout-Aktion, Modus, Debug- und Reboot-Auswahl werden sofort gespeichert und nach einem Seiten-Reload wiederhergestellt.
 Kombinierte lokale Master-PBGui-/Runtime-Updates verschieben den API-Neustart, bis alle importierten Runtime-Updates und Validierungsschritte abgeschlossen sind. Das Command Log bleibt waehrenddessen offen und erhaelt seinen Endstatus, bevor die API neu startet.
@@ -152,9 +158,9 @@ Sidebar-Aktionen:
 | **Task Logs** | Den dedizierten Shared-Log-Viewer für alle gespeicherten VPS-Playbook-Logs inklusive Historie öffnen |
 | **Host Logs** | Den dedizierten Shared-Log-Viewer für VPS-Service-Logs und dateibasierte Ziele öffnen |
 | **Change VPS** | Die VPS-Konfigurationsansicht für gespeicherte Host-Einstellungen öffnen |
-| **PBGui Branch** | Die PBGui-Branch-Verwaltung öffnen |
+| **PBGui Versions** | Die PBGui-Versionsauswahl öffnen |
 | **PB7 Branch** | Die PB7-Branch-Verwaltung öffnen |
-| **PB8 Branch** | Bei installiertem PB8 die PB8-Branch-Verwaltung öffnen |
+| **PB8 Versions** | Einen offiziellen oder konfigurierten Fork-Branch waehlen und PB8 installieren |
 | **Initialize** | Ersteinrichtungs-Assistent starten |
 | **Delete VPS** | Diesen VPS aus PBGui entfernen |
 | **Update PBGui** | PBGui auf diesem VPS aktualisieren |
@@ -166,14 +172,14 @@ Sidebar-Aktionen:
 | **Reboot VPS** | VPS neu starten |
 | **Cleanup VPS** | Alte Pakete und Logs entfernen |
 
-PB8-Updates mit Vollprofil waehlen optionale GPU-Abhaengigkeiten auf dem Zielhost: `gpu-mps` auf Apple Silicon und `gpu-cuda` unter Linux/WSL2 mit funktionierendem NVIDIA-Treiber und kompatibler PB8-Version. CPU-Hosts behalten das CPU-Vollprofil, und reine VPS-Live-Profile installieren keine GPU-Pakete. Den NVIDIA-Treiber vor dem PB8-Update installieren. Runtime-Pruefungen und GPU-Einstellungen beschreibt **PBv8 Optimize**.
+Binaere PB8-Updates mit Vollprofil waehlen optionale `gpu-cuda`-Abhaengigkeiten auf unterstuetzten Linux-/WSL2-Zielen mit funktionierendem NVIDIA-Treiber und kompatibler PB8-Version. CPU-Hosts behalten das CPU-Vollprofil, und reine VPS-Live-Profile installieren keine GPU-Pakete. Den NVIDIA-Treiber vor dem PB8-Update installieren. Die separate GPU-Auswahl des Installers unterstuetzt auch `gpu-mps` auf Apple Silicon; der zentrale Linux-Wheel-Updatepfad unterstuetzt Apple Silicon nicht. Runtime-Pruefungen und GPU-Einstellungen beschreibt **PBv8 Optimize**.
 
 Der **VPS**-Inhaltsbereich enthält zusätzlich:
 - ein Setup-/Konfigurationsraster für Passwort, Swap und Firewall-Felder; **Apply VPS Changes** speichert Änderungen lokal und wendet geänderte Swap- und Firewall-Einstellungen auf der VPS an
 - **Apply VPS Changes** bleibt bei gültigen Einstellungen auch für bereits gespeicherte Zielwerte verfügbar, damit ein abgebrochener Swap-Resize erneut gestartet werden kann. PBGui fragt bei Bedarf das VPS-Benutzerpasswort ab und vergleicht vor dem Resize den Zielwert mit dem aktiven Swap. **Read VPS settings** lädt die tatsächliche entfernte Swap-Größe; bei Lesefehlern bleibt die gespeicherte Größe erhalten.
 - Nach einem Browser-Neuladen wartet Change VPS auf die gespeicherte Konfiguration, bevor die bearbeitbaren Felder einschließlich der gespeicherten Swap-Größe erscheinen.
 - Nach dem Anwenden von Swap- oder Firewall-Änderungen öffnet die Task-Ansicht das Log des konkreten Laufs, einschließlich bereits geschriebener Ausgabe.
-- **PBGui Branch Management**, **PB7 Branch Management** und bei installierter Runtime **PB8 Branch Management** mit demselben Switch-/Update-Workflow wie beim Master
+- **PBGui Versions**, **PB7 Branch Management** und **PB8 Versions** mit demselben Versionsinstallations-Workflow wie beim Master
 - einen **Remote Monitor** mit Server-Metriken plus runtime-gekennzeichneter PB7-/PB8-Aktivitaet aus detaillierten Prozessmetriken und Cluster-Sync-Fallbacks
 - einen **Progress**-Bereich mit getrennten Status-Buckets für Init-, Setup- und Update-Läufe; für die vollständige Ansible-Ausgabe werden die Sidebar-Aktionsknöpfe auf den gemeinsamen **Command Log Viewer** umgeschaltet
 
@@ -181,7 +187,9 @@ Im Cluster-Modus synchronisieren **Update PBGui** und PBGui-Branch-Wechsel auf e
 
 Kombinierte PBGui-/Runtime-Updates verschieben den API-Neustart ueber eine transiente systemd-Unit, bis der vollstaendige Ansible-Runner beendet ist. Die Restart-Unit deaktiviert systemds eigene Environment-Expansion, damit Bash-PID-/Startzeit-Pruefungen unveraendert bleiben und keinen spaeteren PB7-/PB8-Installationsschritt desselben Playbooks beenden koennen.
 
-Die PB7- und PB8-Branch-Verwaltung fuehren getrennten Browser-State und getrennte Remote-Caches. In beiden Runtime-Ansichten kann eine bekannte Remote gewaehlt oder eine Fork-URL eingegeben werden. Danach lassen sich Remote-Branches und Commits laden, der lokale Ziel-Branch waehlen und die passend beschriftete Switch-/Update-Aktion starten. Fehlt der gewaehlte Source-Branch auf einer geladenen Remote, bleibt die Aktion deaktiviert. Live-Statusupdates bauen das Branch-Panel nicht neu auf, solange einer seiner Selektoren geoeffnet ist. **Update PB8** ohne Branch-Management-Auswahl stellt weiterhin den verifizierten Upstream-`master` wieder her; **PB8 Branch** ist nur fuer das bewusste Tracking eines anderen validierten v8-Branches oder Commits gedacht.
+Die PB7-Branch-Verwaltung behaelt ihre Remote- und Commit-Felder. **PB8 Versions** listet stattdessen automatisch Branches aus dem offiziellen Passivbot-Repository und den auf dem steuernden Master konfigurierten Fork-Remotes ohne Zugangsdaten. Die Tabelle sortiert nach dem Commit-Zeitpunkt des Branch-Heads, neueste zuerst; CI- oder Pull-Request-Status werden nicht angezeigt. Falls Zeitstempel fehlen, steht **Unknown** beim Datum und die Namen bleiben waehlbar. Der installierte Branch ist nach Moeglichkeit die anfaengliche Auswahl. Waehle bei Bedarf das Repository, suche oberhalb der Tabelle, markiere eine Zeile, waehle einen Commit und klicke **Install PB8**. Die Suche ignoriert Gross-/Kleinschreibung und erfasst alle Branches ueber alle Seiten; ein exakt passender Name steht zuerst. Repository, Branch, Commit, Suche und Seite bleiben nach einem Browser-Reload erhalten. Der steuernde Master loest den Branch-Head auf oder pinnt den gewaehlten Commit, baut oder verwendet sein Wheel und uebertraegt das gepruefte Paket zum Ziel; die VPS baut kein Rust. Live-Statusupdates erhalten die Auswahl. Die normale Aktion **Update PB8** stellt weiterhin den verifizierten Upstream-`master` wieder her.
+
+PB8-Versionsinstallationen werden auch bei direkten API-Anfragen gegen diese Quellen auf dem steuernden Master geprueft. **PBGui Versions** speichert nach erfolgreicher Installation das gewaehlte Repository als `origin` des Ziel-Checkouts. Spaetere normale **Update PBGui**-Aktionen folgen diesem Repository und dem aktuellen Branch. Das offizielle PBGui-Repository bleibt waehlbar, auch wenn `origin` auf dem steuernden Master auf einen Fork zeigt. Wurde ein Fork vor dieser Aenderung installiert, waehle und installiere die Version einmal erneut, damit die Quelle fuer weitere Updates gespeichert wird.
 
 Die Sidebar trennt die Log-Workflows jetzt bewusst von der normalen Host-Ansicht:
 - Utility-Aktionen wie **Task Logs**, **Host Logs**, **Change VPS**, **Initialize** oder **Delete VPS** bleiben oberhalb eines Trenners, während die ausführbaren Ansible-Playbook-Knöpfe darunter gruppiert sind
@@ -239,7 +247,7 @@ Der Sichtbarkeitszustand bleibt auch bei Live-Updates erhalten, sodass ein geöf
    - VPS-Eintrag zuerst speichern
    - **Initialize & Setup VPS** in der Add-Ansicht ausführen oder den Host später öffnen und die Ersteinrichtung auf der **Change VPS**-Seite abschließen
 3. Das Formular **Step 4: Initialize & Setup your VPS** und die **Save VPS Entry**-Vorgaben ausfüllen.
-4. **PB7** fuer den aktuellen Runner-Stack, **PB8 Live only (no PB7)** fuer einen sauberen minimalen PB8-Runner oder **PB7 + PB8** fuer beide Runtimes waehlen. Das Kombiprofil installiert zuerst PB7 mit PBRun und danach das PB8-Live-Profil. PB8-only ueberspringt PB7-Checkout und PB7-Virtualenv, aktiviert aber den gemeinsam genutzten PBRun-Controller, und jedes Profil mit PB8 benoetigt mindestens 3 GiB freien Speicher fuer den PB8-Build.
+4. **PB7** fuer den aktuellen Runner-Stack, **PB8 Live only (no PB7)** fuer einen sauberen minimalen PB8-Runner oder **PB7 + PB8** fuer beide Runtimes waehlen. Das Kombiprofil installiert zuerst PB7 mit PBRun und danach das PB8-Live-Profil. PB8-only ueberspringt PB7-Checkout und PB7-Virtualenv, aktiviert aber den gemeinsam genutzten PBRun-Controller, und jedes Profil mit PB8 benoetigt mindestens 3 GiB freien Speicher fuer die erste PB8-Installation.
 5. Mit **Save VPS** den Eintrag anlegen oder aktualisieren.
 6. Mit **Initialize & Setup VPS** den Bootstrap-Lauf direkt aus der Add-Ansicht starten. Die UI bleibt waehrend Initialisierung und Setup im Task-Log des aktuellen Hosts. Bei PB8-only und beim Kombiprofil laufen PB8-Clone, Virtualenv-Installation und Validierung als zweiter Play desselben Setup-Jobs und erscheinen im selben Setup-Log.
 7. Nach erfolgreichem Setup registriert PBGui den Host lokal als Cluster-Node-Kandidat. Klicke auf der VPS-Detailseite **Add to Cluster**, um das Onboarding abzuschliessen. PBGui oeffnet ein Fortschrittsfenster fuer Registrierung, SSH-Repair, Identity-Pruefung, Pull-/Push-Synchronisation, Materialisierung und PBRun-Start. Das Fenster kann waehrend des aktiven Onboardings nicht geschlossen werden; der API-eigene Job laeuft bei Reload oder Navigation weiter und wird beim erneuten Oeffnen der VPS-Detailseite wieder angezeigt.
@@ -263,13 +271,68 @@ Nach einer VPS-Neuinstallation aendert sich der SSH-Host-Key. Der Preflight auf 
 Der PBGui-Update-Workflow startet PBCluster für Cluster-Mode-Hosts neu und installiert/startet `pbgui-monitor-agent.service` auf VPS-Hosts. Agent-basierter Paket- und Collector-Status kann bis zum nächsten 30-Sekunden-Collector-Zyklus stale bleiben. Wenn du einen Host manuell per `git pull` aktualisierst, starte PBCluster und den Monitor-Agent dort danach mit `systemctl --user restart pbgui-pbcluster.service pbgui-monitor-agent.service` neu.
 
 ### Auf einen Feature-Branch wechseln
-1. Master oder VPS-Detailansicht öffnen
-2. **Branch Management** aufklappen → Zielbranch auswählen → **Switch Branch** klicken
+1. Master- oder VPS-Detailansicht öffnen und **PBGui Versions** wählen.
+2. Repository und Branch auswählen, dann unter **Commit** den neuesten oder einen älteren Eintrag wählen. Alternativ die vollständige 40-stellige Commit-SHA einfügen.
+3. **Install PBGui** klicken. **Load older commits** lädt jeweils 50 weitere Einträge.
 
-PBGui-Branch-Wechsel nutzen dieselbe PBCluster-Service-Synchronisierung und denselben Restart wie PBGui-Updates.
+**PBGui Versions** listet Branches aus den Git-Remotes ohne Zugangsdaten, die auf dem steuernden Master konfiguriert sind. Die Tabelle sortiert nach dem Commit-Zeitpunkt des Branch-Heads, neueste zuerst, mit 25 Eintraegen pro Seite und exakten Suchtreffern zuerst. Der installierte Branch ist nach Moeglichkeit anfangs ausgewaehlt. Repository, Branch, Commit, Suche und Seite bleiben bei Live-Updates und nach Browser-Reload erhalten. Falls Zeitstempel fehlen, bleiben die Branch-Namen mit Datum **Unknown** waehlbar. Das Ziel holt den ausgewaehlten Branch und prüft vor dem Wechsel, ob ein älterer Commit zu diesem Branch gehört. Das bestehende PBGui-Branch-Playbook kuemmert sich um Abhaengigkeiten und Service-Neustarts. Das normale **Update PBGui** folgt weiterhin dem konfigurierten Origin des Ziels.
 
 ### API-Keys materialisieren
 - Verwende **System -> Cluster Sync**, um `api-keys.json` auf erreichbaren Nodes zu prüfen und zu materialisieren.
 - CMC-Pool-Credentials sind getrennte versiegelte Generationen. Sie werden unter **Services -> PBCoinData -> Pool** verwaltet und durch Cluster Sync materialisiert; es gibt keine CMC-Keys pro VPS.
 
 Die Swap-Prüfung vor dem Anwenden der Einstellungen unterstützt SSH-Schlüssel und verlangt kein zusätzliches VPS-Passwort. Auch PBGui- und PB8-Updates verwenden die eingerichtete SSH-Anmeldung; die vorgeschaltete Swap-Prüfung darf keine Passwortpflicht hinzufügen.
+
+Abgeschlossene Updates werden automatisch anhand ihres aktuellen Laufprotokolls abgeglichen. Overview und History verwenden den Abschlussbericht; verspätete Rückmeldungen eines älteren Laufs dürfen keinen neueren Lauf abschließen.
+
+
+### Binaere PB8-Updates auf Mastern und VPS
+
+**Update PB8** und kombinierte PBGui/PB8-Updates bereiten passende Binaerpakete
+auf dem steuernden PBGui-Master vor, bevor der PB8-Quellstand des Ziels geaendert
+wird. Docker ist nicht erforderlich. Ein neuer Build braucht auf dem Build-Master
+Rust/Cargo 1.90.0, einen C-Compiler, Python 3.12, Paket-Downloads und einige GiB
+temporaeren Platz. Vier gepruefte Cache-Eintraege bleiben insgesamt erhalten.
+Bei einem normalen PB8-Update ermittelt der steuernde Master den offiziellen
+Passivbot-`master`-Stand selbst. Bei **PB8 Versions** loest er den Branch-Head
+des gewaehlten Repositories selbst auf. Das Ziel muss
+diesen Commit bestaetigen, bevor Bots gestoppt werden. Der Master erstellt das
+Quellarchiv selbst. Ein gewaehlter Fork-Stand fuehrt seinen Build-Code als
+PBGui-Benutzer auf dem steuernden Master aus. Die Repository-Auswahl kommt vom
+steuernden Master, nie vom VPS-Checkout. Ein eigener Fork erscheint, nachdem
+sein Git-Remote ohne Zugangsdaten auf diesem Master konfiguriert ist. PBGui
+kennt die tatsaechliche `origin`-URL des Ziels nicht automatisch. Ohne Source-URL
+bricht der Branchwechsel vor dem Bot-Stopp ab.
+
+Auch neue lokale und entfernte GUI-Masterinstallationen verwenden gepruefte PB7-
+und PB8-Wheels und speichern fuer beide Runtimes einen Nachweis. Bei einem
+entfernten Master baut oder verwendet der steuernde Master beide Wheels, uebertraegt
+sie mit ihren Manifesten und bindet den PB8-Checkout an den exakten Quell-Commit
+des Wheels. Der empfangende Master uebernimmt die Pakete in seinen Cache fuer
+spaetere VPS-Updates. Der alte PB7-Python-3.12-Wartungseinstieg verwendet nun das
+normale Wheel-Update. **Update Linux** installiert auf einer Wheel-VPS entfernte
+Rust-Werkzeuge nicht erneut.
+
+Beim Update eines weiteren Masters werden die Wheels auch in dessen Cache
+uebernommen. Beispielsweise kann magicnucpro manibot02 aktualisieren; danach kann
+manibot02 passende VPS mit den empfangenen Wheels ohne erneuten Build und ohne
+lokalen Compiler aktualisieren. Beide Master muessen PBGui mit diesem Wheel-Weg
+verwenden. Ein anderer PB8-Quellstand oder ein unpassendes Ziel braucht einen
+neuen Build.
+
+Der erste Binaerpfad unterstuetzt Linux x86_64, Python 3.12 und glibc ab 2.28
+(einschliesslich Ubuntu 22.04). Andere Plattformen werden vor Laufzeitaenderungen
+klar abgewiesen. Forschungs-Master verwenden denselben Binaerpfad mit ihren
+Full-/optionalen GPU-Abhaengigkeiten. Die fertigen Wheels werden auf die glibc
+des Ziels geprueft; ein Build auf neuerem Ubuntu garantiert fuer sich allein
+keine Kompatibilitaet mit aelteren VPS.
+
+VPS laden binaere Abhaengigkeiten vorher herunter und pruefen den entpackten
+Platzbedarf. Scheitern Downloads oder der Build auf dem Master, bleibt die aktive
+VPS-Laufzeit unveraendert. Nach der Installation werden Commit, Cargo.lock,
+Rust-Fingerprint und Hash der geladenen Erweiterung geprueft, bevor PB8 wieder
+freigegeben wird. Auf Live-VPS gibt es keinen automatischen Rust-Build als
+Ausweichweg. Vorhandene Rust-Toolchains bleiben erhalten; sie duerfen erst nach
+einer Pruefung aller installierten PB7/PB8-Wheel-Nachweise und fremder Cargo-
+Nutzung entfernt werden. Master behalten ihre Build-Werkzeuge fuer neue
+Quellstaende.

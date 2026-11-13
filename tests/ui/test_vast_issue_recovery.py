@@ -1970,15 +1970,16 @@ def test_collect_hidden_completion_refreshes_selected_panel_on_return(cloud_page
     assert page.evaluate('resultReads===0 && paretoReads===0')
     assert page.evaluate('state.livePanelRefreshPending === true')
     page.evaluate("testVisibility='visible';document.dispatchEvent(new Event('visibilitychange'))")
-    page.wait_for_function("!state.returnRefreshInFlight && !state.livePanelRefreshInFlight && resultReads>0 && (state.panel!=='paretos'||paretoReads>0)")
+    page.wait_for_function("!state.returnRefreshInFlight && !state.livePanelRefreshInFlight && (state.panel==='paretos' ? paretoReads>0 : resultReads>0)")
     assert page.evaluate("state.panel") == panel
     assert page.evaluate("state.selectedResultPath") == '/test/existing-result'
     assert page.evaluate("state.selectedResultName") == 'retained selection'
     assert page.evaluate("state.selectedParetos.has('candidate-a')")
     assert page.evaluate('state.queue.length') == 0
-    assert page.evaluate('state.results[0].name') == 'new published candidate'
     if panel == 'paretos':
         assert page.locator('#test-front').inner_text() == 'new published candidate'
+    else:
+        assert page.evaluate('state.results[0].name') == 'new published candidate'
     assert page.locator('#test-draft').input_value() == 'unsaved draft'
     assert page.locator('#test-filter').input_value() == 'candidate'
     assert page.locator('#test-scroll').evaluate('node=>node.scrollTop') == 77

@@ -612,6 +612,12 @@ def test_cached_release_status_is_shared_by_master_and_vps_with_pb7_pin_preserve
 
     assert service._build_master_pbgui_github_status("main", "1" * 40) == "✅"
     assert service._build_remote_pbgui_github_status({"pbgb": "main", "pbgc": "0" * 40}).startswith("❌")
+    assert service._build_master_pbgui_github_status(
+        "main", "1" * 40, source_kind="custom"
+    ) == "Custom source"
+    assert service._build_remote_pbgui_github_status({
+        "pbgb": "main", "pbgc": "0" * 40, "pbgsource": "custom",
+    }) == "Custom source"
     assert service._build_master_pb7_github_status("master", "2" * 40) == "✅"
     assert service._build_remote_pb7_github_status({
         "pb7b": "unknown", "pb7c": service_mod.PB7_PINNED_COMMIT,
@@ -697,6 +703,14 @@ def test_pb8_runtime_blocker_propagates_to_master_and_vps_status(monkeypatch: py
     assert vps_status["pb8_runtime_blocked"] is True
     assert vps_status["pb8_runtime_reason"] == reason
     assert vps_status["pb8_update_available"] is True
+
+    summary.update(pb8_runtime_blocked=False, pb8_runtime_ready=True,
+                   pb8_wheel_required=True, pb7_wheel_required=True, pb7_installed=True)
+    assert service._build_master_status(False)["pb8_update_available"] is True
+    assert service._build_master_status(False)["pb7_update_available"] is True
+    vps_status = service._build_vps_status(vps, host_state, quick=True)
+    assert vps_status["pb8_update_available"] is True
+    assert vps_status["pb7_update_available"] is True
 
 
 def test_unknown_credential_capability_remains_none_in_playbook_vars() -> None:

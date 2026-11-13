@@ -396,6 +396,42 @@ def test_host_meta_accepts_complete_optional_pb8_contract_and_rejects_partial_da
         monitor_mod._validate_monitor_agent_payload("host_meta.json", payload, now=1001.0)
 
 
+@pytest.mark.parametrize("source_kind", ["official", "custom", "unknown"])
+def test_host_meta_accepts_pb_gui_source_kind(source_kind: str) -> None:
+    """Rolling agent upgrades accept a bounded source classification."""
+    payload = _valid_payloads(1000.0)["host_meta.json"]
+    payload["pbgsource"] = source_kind
+    monitor_mod._validate_monitor_agent_payload("host_meta.json", payload, now=1001.0)
+
+
+@pytest.mark.parametrize("source_kind", [None, [], {}, "https://token@example.test/repo"])
+def test_host_meta_rejects_unclassified_pb_gui_source(source_kind: object) -> None:
+    """A remote host cannot inject a raw URL or non-scalar source value."""
+    payload = _valid_payloads(1000.0)["host_meta.json"]
+    payload["pbgsource"] = source_kind
+    with pytest.raises(MonitorAgentPayloadError, match="PBGui source kind"):
+        monitor_mod._validate_monitor_agent_payload("host_meta.json", payload, now=1001.0)
+
+
+@pytest.mark.parametrize(("remote_url", "expected"), [
+    ("https://github.com/msei99/pbgui.git", "official"),
+    ("git@github.com:msei99/pbgui.git", "official"),
+    ("ssh://git@github.com/msei99/pbgui.git", "official"),
+    ("https://github.com/example/pbgui.git", "custom"),
+    ("https://token@github.com/msei99/pbgui.git", "custom"),
+    ("", "unknown"),
+])
+def test_host_meta_classifies_origin_without_exposing_url(remote_url: str, expected: str) -> None:
+    """The embedded agent reports only the source kind, never credentials."""
+    script = monitor_mod.HOST_META_SCRIPT.split("\n", 1)[1].rsplit("\nPY", 1)[0]
+    tree = ast.parse(script)
+    helper = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "pbgui_source_kind")
+    namespace: dict[str, Any] = {}
+    exec(compile(ast.Module(body=[helper], type_ignores=[]), "<host-meta-helper>", "exec"), namespace)
+    assert namespace["pbgui_source_kind"](remote_url) == expected
+    assert "result['pbgsource'] = pbgui_source_kind(" in script
+
+
 def test_host_meta_accepts_pb8_installation_blocker_contract() -> None:
     """PB8 install state and its bounded repair reason survive host-meta validation."""
     payload = _valid_payloads(1000.0)["host_meta.json"]

@@ -1266,7 +1266,7 @@ body.view-mode .editor-cell.auto-height .cell-inline-preview { min-height: 0 !im
         _ensureRenderScript(function () {
           /* ── Top N number input ── */
           var topNCtrl = document.createElement('input');
-          topNCtrl.type = 'number'; topNCtrl.min = 1; topNCtrl.max = 500; topNCtrl.step = 1;
+          topNCtrl.type = 'number'; topNCtrl.min = 1; topNCtrl.max = 1000; topNCtrl.step = 1;
           topNCtrl.value = topN;
           topNCtrl.className = 'dt-ctrl-num';
           topNCtrl.addEventListener('change', function () {

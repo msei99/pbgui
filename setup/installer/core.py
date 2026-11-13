@@ -35,6 +35,7 @@ from master_update_lock import (
 )
 from secure_files import atomic_write_private_text, ensure_private_directory
 from pb8_gpu_install import pb8_gpu_extras
+import pb8_wheels
 
 from .ssh import SSHConnection
 
@@ -436,8 +437,8 @@ def _run_streaming_command(
     *,
     cwd: Path | None = None,
     env: dict[str, str] | None = None,
-) -> None:
-    """Run a long command while forwarding combined output line by line."""
+) -> str:
+    """Run a long command, forwarding output and retaining a bounded tail."""
     command = [str(arg) for arg in args]
     log("$ " + shlex.join(command))
     proc = subprocess.Popen(
@@ -454,12 +455,105 @@ def _run_streaming_command(
     for raw_line in proc.stdout:
         line = raw_line.rstrip("\r\n")
         output.append(line)
+        if len(output) > 300:
+            output.pop(0)
         if line:
             log(line)
     returncode = proc.wait()
     if returncode != 0:
         message = "\n".join(output[-30:]).strip()
         raise RuntimeError(message or f"Command failed with exit code {returncode}: {shlex.join(command)}")
+    return "\n".join(output)
+
+
+def _prepare_master_wheel(
+    repo: Path, product: str, target: dict, stage: Path, cache: Path,
+    python312: str | Path, log: LogCallback,
+) -> tuple[str, Path, dict]:
+    """Build or reuse a source-bound wheel bundle before changing a bot runtime."""
+    commit = _run_command(["git", "-C", repo, "rev-parse", "HEAD"], log).splitlines()[-1]
+    archive = stage / f"{product}-source.tar"
+    bundle = stage / f"{product}-bundle"
+    _run_command(
+        [python312, _installer_root() / "pb8_wheels.py", "source", "--commit", commit,
+         "--archive", archive], log,
+    )
+    log(f"Preparing verified {product.upper()} wheels for {commit[:12]}...")
+    output = _run_streaming_command(
+        [python312, _installer_root() / "pb8_wheels.py", "build", "--product", product,
+         "--archive", archive, "--commit", commit, "--target", json.dumps(target),
+         "--cache", cache, "--bundle", bundle], log,
+    )
+    manifest = None
+    for line in output.splitlines():
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict) and {"python_wheel", "rust_wheel"} <= candidate.keys():
+            manifest = candidate
+            break
+    if manifest is None:
+        raise RuntimeError(f"{product.upper()} wheel builder returned no manifest")
+    _run_command(
+        [python312, _installer_root() / "pb8_wheels.py", "verify", "--product", product,
+         "--bundle", bundle, "--commit", commit], log,
+    )
+    return commit, bundle, manifest
+
+
+def _install_master_wheel(
+    product: str, repo: Path, venv: Path, pbgui_dir: Path, commit: str,
+    bundle: Path, manifest: dict, log: LogCallback,
+) -> None:
+    """Install binary dependencies and both wheels, then validate the runtime."""
+    python = venv / "bin" / "python"
+    wheel_tool = pbgui_dir / "pb8_wheels.py"
+    receipt = pbgui_dir / "data" / "state" / f"{product}-wheel.json"
+    _run_command([python, wheel_tool, "receipt", "--receipt", receipt], log)
+    extras = "full" if product == "pb7" else pb8_gpu_extras(repo)
+    requirement = f"{bundle / manifest['python_wheel']}[{extras}]"
+    _run_command([python, "-m", "pip", "download", "--only-binary=:all:",
+                  "--dest", bundle, "--find-links", bundle, requirement], log, timeout=1800)
+    _run_command([python, wheel_tool, "capacity", "--product", product,
+                  "--bundle", bundle, "--repo", repo], log)
+    _run_command([python, "-m", "pip", "install", "--no-index", "--only-binary=:all:",
+                  "--find-links", bundle, requirement], log, timeout=1800)
+    _run_command([python, "-m", "pip", "install", "--no-index", "--only-binary=:all:",
+                  "--no-deps", "--force-reinstall", bundle / manifest["python_wheel"],
+                  bundle / manifest["rust_wheel"]], log, timeout=1800)
+    shutil.copy2(bundle / "Cargo.lock", repo / "passivbot-rust" / "Cargo.lock")
+    _run_command([python, wheel_tool, "runtime", "--product", product, "--bundle", bundle,
+                  "--repo", repo, "--commit", commit, "--receipt", receipt], log)
+    _run_command([venv / "bin" / "passivbot", "--help"], log)
+
+
+def _clone_installer_wheel_source(product: str, stage: Path, log: LogCallback) -> Path:
+    """Resolve the exact upstream source that a remote master will install."""
+    repo = stage / f"{product}-source"
+    if product == "pb7":
+        _run_command(["git", "clone", "--filter=blob:none", "--no-checkout",
+                      "https://github.com/enarjord/passivbot.git", repo], log, timeout=900)
+        _run_command(["git", "-C", repo, "fetch", "origin", PB7_PINNED_COMMIT], log, timeout=900)
+        _run_command(["git", "-C", repo, "checkout", "--detach", PB7_PINNED_COMMIT], log)
+    else:
+        _run_command(["git", "clone", "--filter=blob:none", "--depth", "1", "--branch",
+                      "master", "https://github.com/enarjord/passivbot.git", repo], log, timeout=900)
+    verify_passivbot_major(repo, 7 if product == "pb7" else 8)
+    return repo
+
+
+def _remote_installer_wheel_target(conn: SSHConnection) -> dict:
+    """Probe the remote ABI without installing or changing anything."""
+    lines: list[str] = []
+    if conn.run_stream("uname -m; getconf GNU_LIBC_VERSION", log=lines.append, timeout=30) != 0:
+        raise RuntimeError("Could not determine remote wheel compatibility")
+    values = [line.strip() for line in lines if line.strip()]
+    machine = next((line for line in values if line == "x86_64"), "")
+    libc = next((line.split(" ", 1)[1] for line in values if line.startswith("glibc ")), "")
+    target = {"system": "Linux", "machine": machine, "python": [3, 12], "libc": ["glibc", libc]}
+    pb8_wheels.require_target(target)
+    return target
 
 
 def _require_command(name: str, hint: str = "") -> str:
@@ -1223,8 +1317,6 @@ def _run_local_master_install_impl(config: LocalMasterConfig, log: LogCallback, 
     log("Creating Python virtualenvs...")
     _run_command([python312, "-m", "venv", pb7_venv], log)
     _run_command([pb7_venv / "bin" / "python", "-m", "pip", "install", "--upgrade", "pip"], log)
-    _run_command([pb7_venv / "bin" / "python", "-m", "pip", "install", "-r", pb7_dir / "requirements.txt"], log)
-    _run_command([pb7_venv / "bin" / "python", "-m", "pip", "install", "maturin"], log)
     _run_command([python312, "-m", "venv", pb8_venv], log)
     _run_command([pb8_venv / "bin" / "python", "-m", "pip", "install", "--upgrade", "pip"], log)
 
@@ -1235,53 +1327,26 @@ def _run_local_master_install_impl(config: LocalMasterConfig, log: LogCallback, 
     _run_command([pbgui_venv / "bin" / "python", "-m", "pip", "install", "--upgrade", "pip"], log)
     _run_command([pbgui_venv / "bin" / "python", "-m", "pip", "install", "-r", pbgui_requirements], log)
 
-    log("Building passivbot-rust...")
+    log("Preparing master wheel builder...")
     if not shutil.which("rustup"):
         _run_command(["bash", "-lc", "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"], log)
     cargo_env = Path.home() / ".cargo" / "env"
     _run_command(["bash", "-lc", f"source {shlex.quote(str(cargo_env))} && rustup toolchain install 1.90.0 && rustup default 1.90.0"], log)
-    _run_command(
-        [
-            "bash",
-            "-lc",
-            "source "
-            + shlex.quote(str(cargo_env))
-            + " && source "
-            + shlex.quote(str(pb7_venv / "bin" / "activate"))
-            + " && cd "
-            + shlex.quote(str(pb7_dir / "passivbot-rust"))
-            + " && maturin develop --release",
-        ],
-        log,
-    )
-    _run_command(
-        [
-            "bash",
-            "-lc",
-            "source "
-            + shlex.quote(str(pb7_venv / "bin" / "activate"))
-            + " && cd "
-            + shlex.quote(str(pb7_dir))
-            + " && python -c \"import sys; sys.path.insert(0, 'src'); from rust_utils import stamp_compiled_extensions, source_fingerprint; stamp_compiled_extensions(source_fingerprint()); print('Rust source stamp updated.')\"",
-        ],
-        log,
-    )
-    pb8_extras = pb8_gpu_extras(pb8_dir)
-    log(f"Installing Passivbot v8 profile: {pb8_extras}...")
-    _run_command(
-        [
-            "bash",
-            "-lc",
-            "source "
-            + shlex.quote(str(cargo_env))
-            + " && "
-            + shlex.quote(str(pb8_venv / "bin" / "python"))
-            + " -m pip install --upgrade -e "
-            + shlex.quote(f"{pb8_dir}[{pb8_extras}]"),
-        ],
-        log,
-        timeout=1800,
-    )
+    target = pb8_wheels.probe()
+    pb8_wheels.require_target(target)
+    with tempfile.TemporaryDirectory(prefix="pbgui-master-wheels-") as temporary:
+        stage = Path(temporary)
+        pb7_commit, pb7_bundle, pb7_manifest = _prepare_master_wheel(
+            pb7_dir, "pb7", target, stage, pbgui_dir / "data/cache/pb7-wheels", python312, log,
+        )
+        pb8_commit, pb8_bundle, pb8_manifest = _prepare_master_wheel(
+            pb8_dir, "pb8", target, stage, pbgui_dir / "data/cache/pb8-wheels", python312, log,
+        )
+        log("Installing verified PB7 and PB8 wheels...")
+        _install_master_wheel("pb7", pb7_dir, pb7_venv, pbgui_dir,
+                              pb7_commit, pb7_bundle, pb7_manifest, log)
+        _install_master_wheel("pb8", pb8_dir, pb8_venv, pbgui_dir,
+                              pb8_commit, pb8_bundle, pb8_manifest, log)
     _validate_pb8_install(pb8_dir, pb8_venv, log)
 
     log("Writing PBGui configuration...")
@@ -1380,6 +1445,7 @@ def run_remote_master_install(config: RemoteMasterConfig, log: LogCallback, arti
     remote_systemd_setup = f"/tmp/pbgui_setup_systemd_{token}.sh"
     remote_config = f"/tmp/pbgui_remote_master_config_{token}.json"
     remote_result = f"/tmp/pbgui_remote_master_result_{token}.json"
+    remote_wheels = f"/tmp/pbgui_remote_master_wheels_{token}"
 
     payload = config.__dict__.copy()
     payload["pb7_ref"] = PB7_PINNED_COMMIT
@@ -1387,7 +1453,7 @@ def run_remote_master_install(config: RemoteMasterConfig, log: LogCallback, arti
     payload["uploaded_setup_systemd_path"] = remote_systemd_setup
 
     log(f"Connecting to {config.ssh_username}@{config.remote_host}:{config.ssh_port} ...")
-    with SSHConnection(
+    with tempfile.TemporaryDirectory(prefix="pbgui-remote-master-wheels-") as stage_name, SSHConnection(
         host=config.remote_host,
         port=config.ssh_port,
         username=config.ssh_username,
@@ -1395,6 +1461,29 @@ def run_remote_master_install(config: RemoteMasterConfig, log: LogCallback, arti
         accept_unknown_host=config.accept_unknown_host,
         expected_host_key_fingerprint=config.accepted_host_key_fingerprint,
     ) as conn:
+        stage = Path(stage_name)
+        target = _remote_installer_wheel_target(conn)
+        python312 = _require_command("python3.12", "Wheel preparation needs Python 3.12 on the controlling master.")
+        bundles: dict[str, Path] = {}
+        commits: dict[str, str] = {}
+        for product in ("pb7", "pb8"):
+            repo = _clone_installer_wheel_source(product, stage, log)
+            commit, bundle, _manifest = _prepare_master_wheel(
+                repo, product, target, stage, root / "data/cache" / f"{product}-wheels", python312, log,
+            )
+            bundles[product] = bundle
+            commits[product] = commit
+        payload["pb8_ref"] = commits["pb8"]
+        payload["pb7_bundle_path"] = f"{remote_wheels}/pb7"
+        payload["pb8_bundle_path"] = f"{remote_wheels}/pb8"
+        if conn.run_stream(f"mkdir -m 700 {remote_wheels} && mkdir -m 700 {remote_wheels}/pb7 {remote_wheels}/pb8",
+                           log=log, timeout=30) != 0:
+            raise RuntimeError("Could not stage remote wheel bundles")
+        for product, bundle in bundles.items():
+            for file in sorted(bundle.iterdir()):
+                if file.is_file():
+                    conn.put_file(file, f"{remote_wheels}/{product}/{file.name}")
+        log("Transferred verified PB7 and PB8 wheel bundles to remote master.")
         conn.put_text(remote_config, json.dumps(payload, indent=2), mode=0o600)
         conn.put_file(script_path, remote_script, mode=0o700)
         conn.put_file(systemd_setup_path, remote_systemd_setup, mode=0o700)
@@ -1435,7 +1524,7 @@ def run_remote_master_install(config: RemoteMasterConfig, log: LogCallback, arti
         except Exception as exc:
             log(f"Warning: could not download TOTP QR text: {exc}")
 
-        conn.run_stream(f"rm -f {remote_script} {remote_systemd_setup} {remote_config} {remote_result}", log=lambda _msg: None, timeout=30)
+        conn.run_stream(f"rm -f {remote_script} {remote_systemd_setup} {remote_config} {remote_result} && rm -rf {remote_wheels}", log=lambda _msg: None, timeout=30)
 
         if rc != 0:
             raise RemoteInstallError(f"Remote bootstrap failed with exit code {rc}.", result=result)

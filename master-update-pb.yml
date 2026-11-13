@@ -17,33 +17,13 @@
     pb7dir: "{{ pb7dir }}"
     pb7venv: "{{ pb7venv }}"
     pb7_ref: "{{ lookup('file', playbook_dir + '/pb7_ref.txt') | trim }}"
+    pb7_install_profile: full
     # user_pw: "{{ user_pw }}"
 
   tasks:
     - name: display facts
       debug:
         var: ansible_facts
-      tags: debug,never
-
-    - name: remove stable toolchain if exists
-      shell: |
-        source ~/.profile || source ~/.bashrc || true
-        rustup toolchain uninstall stable 1.78.0
-      args:
-        executable: /bin/bash
-      ignore_errors: yes
-
-    - name: Update rust
-      shell: |
-        source ~/.profile || source ~/.bashrc || true
-        rustup update 1.90.0
-      args:
-        executable: /bin/bash
-      register: update_rust
-
-    - name: print update_rust
-      debug:
-        var: update_rust
       tags: debug,never
 
     - name: Get current pbgui branch
@@ -54,9 +34,19 @@
       changed_when: false
       when: pbgdir != ""
 
+    - name: Get selected PBGui source
+      command:
+        argv: [git, remote, get-url, origin]
+      args:
+        chdir: "{{ pbgdir }}"
+      register: current_pbgui_source
+      changed_when: false
+      when: pbgdir != ""
+      no_log: true
+
     - name: clone pbgui repository
       git:
-        repo: https://github.com/msei99/pbgui.git
+        repo: "{{ current_pbgui_source.stdout }}"
         dest: "{{ pbgdir }}"
         version: "{{ current_pbgui_branch.stdout }}"
         refspec: "+refs/heads/{{ current_pbgui_branch.stdout }}:refs/remotes/origin/{{ current_pbgui_branch.stdout }}"
@@ -64,6 +54,7 @@
         force: yes
       when: pbgdir != ""
       register: pbgui_repo
+      no_log: true
 
     - name: Reconcile pbgui requirements
       command:
@@ -188,6 +179,22 @@
       changed_when: false
       when: pb7dir != ""
 
+    - name: Inspect installed PB7 wheel receipt
+      command:
+        argv: ["{{ pbgui_python | default(ansible_playbook_python) }}", "{{ pbgdir }}/pb_wheel_status.py", "{{ pbgdir }}", --check-product, pb7, --repo, "{{ pb7dir }}", --python, "{{ pb7venv }}/bin/python"]
+      register: pb7_wheel_status
+      changed_when: false
+      when: pb7dir != ""
+
+    - name: Decide whether PB7 requires an update
+      set_fact:
+        pb7_update_required: "{{ 'checkout_required=true' in pb7_preflight.stdout or not ((pb7_wheel_status.stdout | from_json).installed | bool) }}"
+      when: pb7dir != ""
+
+    - name: Prepare central PB7 wheels before runtime changes
+      include_tasks: tasks/pb7_wheels_prepare.yml
+      when: pb7dir != "" and pb7_update_required
+
     - name: Stop PBRun before changing PB7 checkout
       command:
         argv:
@@ -195,8 +202,9 @@
           - "{{ pbgdir }}/starter.py"
           - --stop
           - PBRun
-      changed_when: false
-      when: pb7dir != "" and 'checkout_required=true' in pb7_preflight.stdout
+      changed_when: true
+      notify: restart pb7
+      when: pb7dir != "" and pb7_update_required
 
     - name: Stop PB7 processes before changing checkout
       command:
@@ -213,7 +221,7 @@
           - --venv
           - "{{ pb7venv }}"
       changed_when: false
-      when: pb7dir != "" and 'checkout_required=true' in pb7_preflight.stdout
+      when: pb7dir != "" and pb7_update_required
 
     - name: Checkout verified pinned Passivbot v7
       command:
@@ -229,8 +237,17 @@
           - --checkout
       register: pb7_repo
       changed_when: "'checkout_changed=true' in pb7_repo.stdout"
-      when: pb7dir != ""
+      when: pb7dir != "" and pb7_update_required
+
+    - name: Install and validate central PB7 wheels
+      include_tasks: tasks/pb7_wheels_install.yml
+      when: pb7dir != "" and pb7_update_required
+
+    - name: Schedule PB7 restart after validated wheel update
+      command: /bin/true
+      changed_when: true
       notify: restart pb7
+      when: pb7dir != "" and pb7_update_required
 
     - name: print pb7_repo
       debug:
@@ -261,69 +278,18 @@
         PBGUI_RESTART_ACTIVE_ONLY: "1"
       listen: "restart pbgui"
 
-    - name: Stop PBRun before PB7 rebuild
-      command:
-        argv:
-          - "{{ pbgui_python | default(ansible_playbook_python) }}"
-          - "{{ pbgdir }}/starter.py"
-          - --stop
-          - PBRun
-      changed_when: false
-      listen: "restart pb7"
-      ignore_errors: yes
+    - name: Clean controller PB7 wheel staging
+      file:
+        path: "{{ pb7_wheel_master_stage.path }}"
+        state: absent
+      delegate_to: localhost
+      when: pb7_wheel_master_stage is defined and pb7_wheel_master_stage.path is defined
 
-    - name: kill all pb7 processes
-      command:
-        argv:
-          - python3
-          - "{{ pbgdir }}/pb7_guard.py"
-          - --repo
-          - "{{ pb7dir }}"
-          - --ref
-          - "{{ pb7_ref }}"
-          - --expected-major
-          - "7"
-          - --stop-processes
-          - --venv
-          - "{{ pb7venv }}"
-      changed_when: false
-      listen: "restart pb7"
-      ignore_errors: yes
-
-    - name: Install pb7 requirements
-      pip:
-        virtualenv: "{{ pb7venv }}"
-        requirements: "{{ pb7dir }}/requirements.txt"
-        extra_args: --upgrade pip
-      listen: "restart pb7"
-
-    - name: Build passivbot-rust with maturin
-      command:
-        argv:
-          - "{{ pb7venv }}/bin/maturin"
-          - develop
-          - --release
-      args:
-        chdir: "{{ pb7dir }}/passivbot-rust"
-      environment:
-        VIRTUAL_ENV: "{{ pb7venv }}"
-        PATH: "{{ pb7venv }}/bin:{{ lookup('env', 'HOME') }}/.cargo/bin:{{ lookup('env', 'PATH') }}"
-      listen: "restart pb7"
-
-    - name: Write rust source stamp after maturin build
-      command:
-        argv:
-          - "{{ pb7venv }}/bin/python"
-          - -c
-          - |
-            import sys
-            sys.path.insert(0, 'src')
-            from rust_utils import stamp_compiled_extensions, source_fingerprint
-            stamp_compiled_extensions(source_fingerprint())
-            print('Rust source stamp updated.')
-      args:
-        chdir: "{{ pb7dir }}"
-      listen: "restart pb7"
+    - name: Clean target PB7 wheel staging
+      file:
+        path: "{{ pb7_wheel_remote_stage.path }}"
+        state: absent
+      when: pb7_wheel_remote_stage is defined and pb7_wheel_remote_stage.path is defined
 
     - name: Make sure PBRun ist running
       command:

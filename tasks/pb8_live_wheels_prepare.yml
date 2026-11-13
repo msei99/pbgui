@@ -1,0 +1,190 @@
+---
+# Fetch upstream source on the controller before the runtime guard/checkout.
+- name: Require selected PB8 remote URL for branch switch
+  assert:
+    that:
+      - pb8_remote_url_value != ''
+    fail_msg: "Selected PB8 remote URL is missing. Choose its URL in Branch Management before switching; the controller will not use the official upstream as a fallback."
+  when: pb8_branch_switch
+
+- name: Inspect target PB8 interpreter before binary preparation
+  stat:
+    path: "{{ pb8venv }}/bin/python"
+  register: pb8_wheel_python
+
+- name: Probe PB8 binary compatibility before changes
+  script:
+    cmd: pb8_wheels.py probe
+    executable: "{{ (pb8venv ~ '/bin/python') if pb8_wheel_python.stat.exists else 'python3.12' }}"
+  register: pb8_wheel_target
+  changed_when: false
+
+- name: Select PB8 source URL from the controller request
+  set_fact:
+    pb8_wheel_source_url: "{{ pb8_remote_url_value if pb8_branch_switch else 'https://github.com/enarjord/passivbot.git' }}"
+
+- name: Resolve immutable PB8 wheel source commit on controller
+  command:
+    argv: ["{{ ansible_playbook_python }}", "{{ playbook_dir }}/pb8_wheels.py", resolve, "--url={{ pb8_wheel_source_url }}", "--branch={{ pb8_source_branch_value if pb8_branch_switch else 'master' }}"]
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  register: pb8_controller_head
+  changed_when: false
+  when: not pb8_branch_switch or pb8_target_commit == ''
+
+- name: Pin resolved PB8 wheel source commit
+  set_fact:
+    pb8_wheel_commit: "{{ {'stdout': (pb8_controller_head.stdout | from_json).commit} }}"
+  when: not pb8_branch_switch or pb8_target_commit == ''
+
+- name: Pin explicitly selected PB8 wheel source commit
+  set_fact:
+    pb8_wheel_commit: "{{ {'stdout': pb8_target_commit} }}"
+  when: pb8_branch_switch and pb8_target_commit != ''
+
+- name: Read target official PB8 head for confirmation
+  command:
+    argv: [git, rev-parse, "refs/remotes/pbgui-pb7-pin/master^{commit}"]
+  args:
+    chdir: "{{ pb8dir }}"
+  register: pb8_target_head
+  changed_when: false
+  when: not pb8_branch_switch
+
+- name: Require target PB8 commit to match controller selection
+  assert:
+    that:
+      - pb8_wheel_commit.stdout is match('^[0-9a-f]{40}$')
+      - (pb8_resolved_commit.stdout if pb8_branch_switch else pb8_target_head.stdout) == pb8_wheel_commit.stdout
+    fail_msg: "PB8 target commit differs from the controller-selected source; no runtime was stopped."
+
+- name: Create private master wheel staging
+  tempfile:
+    state: directory
+    prefix: pbgui-pb8-wheel-
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  register: pb8_wheel_master_stage
+  notify: Clean master PB8 wheel staging
+
+- name: Create private runner wheel staging
+  tempfile:
+    state: directory
+    prefix: pbgui-pb8-wheel-
+  register: pb8_wheel_remote_stage
+  notify: Clean runner PB8 wheel staging
+
+- name: Fetch selected PB8 source on the controller
+  command:
+    argv: ["{{ ansible_playbook_python }}", "{{ playbook_dir }}/pb8_wheels.py", source, "--url={{ pb8_wheel_source_url }}", "--commit={{ pb8_wheel_commit.stdout }}", "--archive={{ pb8_wheel_master_stage.path }}/source.tar"]
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  changed_when: false
+
+- name: Transfer trusted PB8 source for GPU profile selection
+  copy:
+    src: "{{ pb8_wheel_master_stage.path }}/source.tar"
+    dest: "{{ pb8_wheel_remote_stage.path }}/source.tar"
+    mode: "0600"
+  when: pb8_install_profile == 'full'
+
+- name: Extract selected source for target GPU profile detection
+  script:
+    cmd: "pb8_wheels.py extract --archive {{ (pb8_wheel_remote_stage.path ~ '/source.tar') | quote }} --repo {{ (pb8_wheel_remote_stage.path ~ '/source') | quote }}"
+    executable: "{{ pbgui_python }}"
+  when: pb8_install_profile == 'full'
+  changed_when: false
+
+- name: Select PB8 GPU dependencies on target host
+  script:
+    cmd: "pb8_gpu_install.py {{ (pb8_wheel_remote_stage.path ~ '/source') | quote }} --gpu {{ pb8_gpu_profile | default('auto') | quote }}"
+    executable: "{{ pbgui_python }}"
+  register: pb8_gpu_dependencies
+  changed_when: false
+  when: pb8_install_profile == 'full'
+
+- name: Validate PB8 GPU dependency profile
+  assert:
+    that:
+      - pb8_gpu_dependencies.stdout | trim in ['full', 'full,gpu-mps', 'full,gpu-cuda']
+  when: pb8_install_profile == 'full'
+
+- name: Select binary dependency extras
+  set_fact:
+    pb8_wheel_extras: "{{ '[' ~ (pb8_gpu_dependencies.stdout | trim) ~ ']' if pb8_install_profile == 'full' else '' }}"
+
+- name: Prepare verified PB8 wheels on the master
+  command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/pb8_wheels.py"
+      - build
+      - --archive
+      - "{{ pb8_wheel_master_stage.path }}/source.tar"
+      - --commit
+      - "{{ pb8_wheel_commit.stdout }}"
+      - --target
+      - "{{ pb8_wheel_target.stdout }}"
+      - --cache
+      - "{{ playbook_dir }}/data/cache/pb8-wheels"
+      - --bundle
+      - "{{ pb8_wheel_master_stage.path }}/bundle"
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  register: pb8_wheel_build
+  changed_when: false
+
+- name: Read prepared PB8 wheel manifest
+  set_fact:
+    pb8_wheel_manifest: "{{ pb8_wheel_build.stdout | from_json }}"
+
+- name: Transfer verified PB8 binaries to the runner
+  copy:
+    src: "{{ pb8_wheel_master_stage.path }}/bundle/"
+    dest: "{{ pb8_wheel_remote_stage.path }}/bundle/"
+    mode: "0600"
+    directory_mode: "0700"
+
+- name: Verify transferred PB8 artifacts before changing the live runtime
+  script:
+    cmd: "pb8_wheels.py verify --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --commit {{ pb8_wheel_commit.stdout | quote }}"
+    executable: "{{ pbgui_python }}"
+  changed_when: false
+
+- name: Seed reusable wheel cache on target masters
+  script:
+    cmd: "pb8_wheels.py cache --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --cache {{ (pbgdir ~ '/data/cache/pb8-wheels') | quote }}"
+    executable: "{{ pbgui_python }}"
+  when: pb8_install_profile == 'full'
+  changed_when: false
+
+- name: Download binary PB8 dependencies before changing the runtime
+  command:
+    argv:
+      - "{{ pbgui_python }}"
+      - -m
+      - pip
+      - download
+      - "--only-binary=:all:"
+      - --dest
+      - "{{ pb8_wheel_remote_stage.path }}/bundle"
+      - --find-links
+      - "{{ pb8_wheel_remote_stage.path }}/bundle"
+      - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.python_wheel }}{{ pb8_wheel_extras }}"
+  changed_when: false
+
+- name: Check unpacked binary installation capacity before runtime changes
+  script:
+    cmd: "pb8_wheels.py capacity --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --repo {{ pb8dir | quote }}"
+    executable: "{{ pbgui_python }}"
+  changed_when: false
+
+- name: Check PB8 receipt path before runtime changes
+  script:
+    cmd: "pb8_wheels.py receipt --receipt {{ (pbgdir ~ '/data/state/pb8-wheel.json') | quote }}"
+    executable: "{{ pbgui_python }}"
+  changed_when: false

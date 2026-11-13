@@ -93,7 +93,7 @@ def test_vast_controls_from_real_menu_preserve_shell_and_guide(unconfirmed):
                 page.locator('#collect-job').click()
                 page.wait_for_function("document.getElementById('queue-message').textContent.includes('Pareto results collected')")
             assert sum(method == 'POST' and url.endswith('/collect') for method, url in calls) == int(not unconfirmed)
-            assert any('/app/js/vast.js?v=183' in url for _, url in calls)
+            assert any('/app/js/vast.js?v=184' in url for _, url in calls)
             location_before = page.url
             page.locator('#pbgui-guide-btn').click()
             page.wait_for_function("document.getElementById('pbgui-shared-help-ovl')?.getAttribute('aria-hidden')==='false'")
@@ -733,7 +733,8 @@ def test_convergence_dashboard_progress_and_completion():
             assert 'awaiting' not in page.locator('#convergence-sample').inner_text()
             assert page.locator('#convergence-progress').inner_text() == '0 / 512 exact evaluations'
             page.evaluate('job.convergence_config.convergence_enabled=false; renderCloudDashboard(job)')
-            assert page.locator('#cloud-convergence').evaluate('node => node.hidden')
+            assert not page.locator('#cloud-convergence').evaluate('node => node.hidden')
+            assert page.locator('#convergence-phase').inner_text() == 'Disabled'
             page.evaluate('''() => {
                 state.cloudLogId = 'worker-observed';
                 state.logFile = '';

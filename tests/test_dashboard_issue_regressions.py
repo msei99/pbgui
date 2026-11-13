@@ -45,6 +45,23 @@ def client():
         yield test_client
 
 
+@pytest.mark.parametrize("top,expected_status", [(1000, 200), (1001, 422)])
+def test_top_dashboard_accepts_saved_thousand_symbol_limit(client, monkeypatch, top, expected_status):
+    """Saved ALL TOP dashboards load 1,000 symbols while larger requests stay bounded."""
+    select_top = Mock(return_value=[("2026-11-12", "BTCUSDT", 1.0)])
+    monkeypatch.setattr(dashboard, "_period_to_range", lambda _: (0, 1, "2026-11-12", "2026-11-12"))
+    monkeypatch.setattr(dashboard, "_get_db", lambda: SimpleNamespace(select_top=select_top))
+
+    response = client.get("/api/dashboard/top_data", params={"users": "ALL", "period": "ALL_TIME", "top": top})
+
+    assert response.status_code == expected_status
+    if expected_status == 200:
+        assert response.json()["rows"] == [["2026-11-12", "BTCUSDT", 1.0]]
+        select_top.assert_called_once_with(["ALL"], 0, 1, 1000)
+    else:
+        select_top.assert_not_called()
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 @pytest.mark.parametrize("users,expected", [("alice", 1000.0), ("ALL", 1500.0)])
 def test_adg_balance_updates_do_not_accumulate_snapshots(monkeypatch, legacy, users, expected):

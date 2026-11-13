@@ -1240,7 +1240,7 @@ def test_master_overview_row_is_online_without_remote_helper(monkeypatch: pytest
         "pb8installed": True, "pb8ready": True, "pb8blocked": False,
     }
     service._get_local_agent_contract = lambda: ({"reboot_required": False, "available": True, "upgrades": 0}, {})
-    service._build_master_pbgui_github_status = lambda branch, commit: ""
+    service._build_master_pbgui_github_status = lambda branch, commit, **_kwargs: ""
     service._build_master_pb7_github_status = lambda branch, commit: ""
     service._build_pb8_github_status = lambda commit: ""
     monkeypatch.setattr(service_mod, "load_ini", lambda section, parameter: "")
@@ -2806,7 +2806,7 @@ def test_remote_linux_update_waits_for_other_apt_owners() -> None:
     """Remote apt tasks tolerate unattended-upgrades lock contention."""
     remote_playbook = Path("vps-update.yml").read_text(encoding="utf-8")
 
-    assert remote_playbook.count("lock_timeout: 300") == 4
+    assert remote_playbook.count("lock_timeout: 300") == 2
 
 
 def test_remote_linux_update_refreshes_package_cache_after_optional_reboot() -> None:
@@ -3245,7 +3245,7 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     if playbook_path == "vps-update-pb.yml":
         assert "setup/vps_service_control.sh restart PBCluster PBCoinData PBMonitorAgent" in playbook
         assert "Restart PBRun after PBGui-only update" in playbook
-        assert "when: not (pb7_repo.changed | default(false))" in playbook
+        assert "when: not (pb7_update_required | default(false) | bool)" in playbook
     else:
         assert "setup/vps_service_control.sh restart PBCluster PBRun PBCoinData PBMonitorAgent" in playbook
     assert "setup/vps_service_control.sh restart PBCluster PBRun PBRemote PBCoinData" not in playbook

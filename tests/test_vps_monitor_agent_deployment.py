@@ -658,32 +658,20 @@ def test_custom_pb7_paths_with_metacharacters_never_enter_shell_source(payload: 
     assert 'grep "{{ pb7dir }}' not in source
 
 
-@pytest.mark.parametrize(
-    ("playbook_name", "venv_expression"),
-    [
-        ("master-update-pb.yml", "{{ pb7venv }}"),
-        ("vps-update-pb.yml", "{{ install_dir }}/venv_pb7"),
-        ("vps-setup.yml", "{{ install_dir }}/venv_pb7"),
-    ],
-)
-def test_argv_maturin_builds_receive_explicit_virtualenv(
-    playbook_name: str,
-    venv_expression: str,
-) -> None:
-    """Safe argv-based maturin tasks identify their target venv without shell activation."""
-
+@pytest.mark.parametrize("playbook_name", ["master-update-pb.yml", "vps-update-pb.yml"])
+def test_pb7_updates_install_prebuilt_wheels(playbook_name: str) -> None:
+    """Master and VPS updates install the prepared binary wheel."""
     source = (ROOT / playbook_name).read_text(encoding="utf-8")
-    block = source.split("- name: Build passivbot-rust with maturin", 1)[1].split("\n    - name:", 1)[0]
+    assert "include_tasks: tasks/pb7_wheels_prepare.yml" in source
+    assert "include_tasks: tasks/pb7_wheels_install.yml" in source
+    assert "Build passivbot-rust with maturin" not in source
 
-    assert "      command:\n        argv:" in block
-    assert f'        VIRTUAL_ENV: "{venv_expression}"' in block
-    assert f'        PATH: "{venv_expression}/bin:' in block
-    assert "shell: |" not in block
-    assert "/bin/activate" not in block
-    if playbook_name == "master-update-pb.yml":
-        assert "ansible_env.PATH" not in block
-        assert "lookup('env', 'HOME')" in block
-        assert "lookup('env', 'PATH')" in block
+
+def test_vps_setup_uses_pb7_wheel_update_playbook() -> None:
+    """Fresh VPS setup reaches the same wheel installer as normal updates."""
+    source = (ROOT / "vps-setup.yml").read_text(encoding="utf-8")
+    assert "import_playbook: vps-update-pb7.yml" in source
+    assert "Build passivbot-rust with maturin" not in source
 
 
 @pytest.mark.parametrize(

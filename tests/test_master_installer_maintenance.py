@@ -9,6 +9,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -21,6 +22,88 @@ from master_update_lock import (
 )
 from setup.installer import core
 import vps_manager_core as vps_core
+import vps_manager_service as vps_service
+
+
+def test_fresh_master_wheel_install_uses_offline_binaries_and_receipt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh master's bot runtime comes from the verified bundle, not a local source build."""
+    repo = tmp_path / "pb7"
+    (repo / "passivbot-rust").mkdir(parents=True)
+    bundle = tmp_path / "bundle"
+    bundle.mkdir()
+    (bundle / "Cargo.lock").write_text("locked\n", encoding="utf-8")
+    commands: list[list[str]] = []
+    monkeypatch.setattr(core, "_run_command", lambda args, _log, **_kwargs: commands.append([str(x) for x in args]) or "")
+    core._install_master_wheel(
+        "pb7", repo, tmp_path / "venv_pb7", tmp_path / "pbgui", "a" * 40,
+        bundle, {"python_wheel": "passivbot-7-cp312.whl", "rust_wheel": "passivbot_rust-7-cp312.whl"},
+        lambda _line: None,
+    )
+    operations = [" ".join(command) for command in commands]
+    assert next(i for i, value in enumerate(operations) if "pip download" in value) < next(
+        i for i, value in enumerate(operations) if " capacity " in value
+    ) < next(i for i, value in enumerate(operations) if "pip install" in value)
+    assert any("--no-index" in value and "--force-reinstall" in value for value in operations)
+    assert any(" runtime --product pb7 " in value and "pb7-wheel.json" in value for value in operations)
+    assert (repo / "passivbot-rust" / "Cargo.lock").read_text(encoding="utf-8") == "locked\n"
+
+
+def test_remote_master_wheel_probe_rejects_unsupported_abi() -> None:
+    """A remote master with an incompatible ABI is rejected before wheel transfer."""
+    class Remote:
+        """Minimal read-only SSH probe fixture."""
+
+        def run_stream(self, _command, *, log, timeout):
+            """Return an ARM/glibc probe without touching a remote machine."""
+            log("aarch64")
+            log("glibc 2.35")
+            return 0
+
+    with pytest.raises(ValueError, match="Linux x86_64"):
+        core._remote_installer_wheel_target(Remote())
+
+
+def test_wheel_prepare_parses_manifest_after_builder_diagnostics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Builder stderr after JSON output cannot hide the verified wheel names."""
+    commit = "b" * 40
+    manifest = {"python_wheel": "python.whl", "rust_wheel": "rust.whl"}
+    commands = []
+
+    def run(args, _log, **_kwargs):
+        """Return the relevant Git and builder protocol output."""
+        commands.append(args)
+        if "rev-parse" in args:
+            return commit
+        if "build" in args:
+            return json.dumps(manifest) + "\nDownloaded build dependency"
+        return ""
+
+    monkeypatch.setattr(core, "_run_command", run)
+    monkeypatch.setattr(core, "_run_streaming_command", run)
+    actual_commit, bundle, actual_manifest = core._prepare_master_wheel(
+        tmp_path / "pb8", "pb8", {"system": "Linux"}, tmp_path,
+        tmp_path / "cache", "python3.12", lambda _line: None,
+    )
+    assert actual_commit == commit
+    assert bundle == tmp_path / "pb8-bundle"
+    assert actual_manifest == manifest
+    assert any("source" in command and "--commit" in command for command in commands)
+    assert not any("archive" in command and command[0] == "git" for command in commands)
+
+
+def test_installer_streams_wheel_build_output() -> None:
+    """Long wheel builds report progress before their final JSON result."""
+    lines: list[str] = []
+    output = core._run_streaming_command(
+        [sys.executable, "-c", "print('building wheel', flush=True); print('{\"commit\": \"ok\"}')"],
+        lines.append,
+    )
+    assert "building wheel" in lines
+    assert '{"commit": "ok"}' in output
 
 
 def _init_checkout(path: Path, *, origin: str = "") -> None:
@@ -291,6 +374,52 @@ def test_vps_manager_holds_shared_lock_until_runner_finishes(
     assert callbacks["finished"] is True
     assert lease.released is True
     assert manager._master_update_lease is None
+
+
+def test_master_update_events_keep_accepted_log_during_inventory_refresh(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A refresh cannot redirect PB7 progress into the previous PB8 log."""
+    callbacks: dict[str, object] = {}
+    written: list[tuple[str, str]] = []
+    lease = SimpleNamespace(release=lambda: None)
+    monkeypatch.setattr(vps_core, "PBGDIR", tmp_path)
+    monkeypatch.setattr(vps_core, "acquire_master_update_lock", lambda _path: lease)
+    monkeypatch.setattr(vps_core, "_ansible_envvars", lambda: {})
+    monkeypatch.setattr(vps_core.ansible_runner, "run_async", lambda **kwargs: callbacks.update(kwargs))
+    manager = object.__new__(vps_core.VPSManager)
+    manager.command = "master-update-pb8"
+    manager.command_text = "Update PB8"
+    manager.update_status = "successful"
+    manager.update_log = ""
+    manager._master_update_lease = None
+    manager.remove_update_log = lambda: None
+    manager._append_task_log = lambda dump, **kw: written.append((dump, kw["task_name"]))
+    manager.update_finished = lambda _runner=None: None
+    manager.update_master(command="master-update-pb7", command_text="Update PB7")
+    assert manager.update_status == "starting"
+    manager.command = "master-update-pb8"
+    callbacks["event_handler"]({"stdout": "TASK [Prepare PB7 wheel]"})
+    assert written == [("TASK [Prepare PB7 wheel]", "master-update-pb7")]
+    callbacks["finished_callback"]()
+
+
+def test_master_inventory_does_not_reload_saved_command_while_lease_active(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Even a terminal status callback cannot replace the accepted run metadata."""
+    monkeypatch.setattr(vps_service, "PBGDIR", tmp_path)
+    loaded: list[bool] = []
+    manager = SimpleNamespace(vpss=[], update_status="successful", _master_update_lease=object(),
+                              load_master=lambda: loaded.append(True))
+    service = object.__new__(vps_service.VPSManagerService)
+    service.vpsmanager = manager
+    service._prune_host_inventory_cache = lambda _files: None
+    service._sync_vps_inventory()
+    assert loaded == []
+    manager._master_update_lease = None
+    service._sync_vps_inventory()
+    assert loaded == [True]
 
 
 def test_rejected_parallel_master_command_does_not_replace_running_command(tmp_path: Path, monkeypatch) -> None:

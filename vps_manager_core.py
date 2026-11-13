@@ -19,7 +19,7 @@ from logging_helpers import append_managed_transcript_line, human_log as _log, r
 from master_update_lock import acquire_master_update_lock, recover_orphaned_pb8_update_writer
 from master.cluster_ssh_keys import ensure_local_cluster_ssh_material
 from pbgui_purefunc import load_ini, pb7dir, pb7venv, save_ini
-from vps_inventory_store import delete_inventory_path, write_inventory_json, write_versioned_inventory_json
+from vps_inventory_store import delete_inventory_path, mutate_inventory_json, write_inventory_json, write_versioned_inventory_json
 
 PBGDIR = Path(__file__).resolve().parent
 SERVICE = "VPSManager"
@@ -817,7 +817,10 @@ PY"""
         if dump := event.get("stdout"):
             self._append_task_log(dump, task_name="vps-setup", fallback="vps-setup", buffer_attr="setup_log")
 
-    def update_event_handler(self, event):
+    def update_event_handler(self, event, *, run_id=None):
+        """Ignore delayed log events after their update run has been superseded."""
+        if run_id is not None and self.command_run_id != run_id:
+            return
         if dump := event.get("stdout"):
             self._append_task_log(dump, task_name=self.command, fallback="vps-update", buffer_attr="update_log")
 
@@ -841,8 +844,11 @@ PY"""
         del runner_config
         self.setup_status = status_data["status"]
 
-    def update_status_handler(self, status_data, runner_config):
+    def update_status_handler(self, status_data, runner_config, *, run_id=None):
+        """Ignore callbacks from a superseded update run."""
         del runner_config
+        if run_id is not None and self.command_run_id != run_id:
+            return
         self.update_status = status_data["status"]
 
     def init_finished(self, runner_config=None):
@@ -866,8 +872,47 @@ PY"""
                 _log(SERVICE, f"Could not register {self.hostname} as Cluster node candidate: {exc}", level="WARNING")
         shutil.rmtree(f"{self.path}/tmp", ignore_errors=True)
 
-    def update_finished(self, runner_config=None, private_data_dir=None):
-        del runner_config
+    def _persist_update_result(self, status, run_id, *, only_running=False, completed_at=None):
+        """Patch only the matching persisted run under the inventory transaction lock."""
+        path = self.path / f"{self.hostname}.json"
+        saved = {}
+
+        def complete(current):
+            """Apply the terminal patch only while the persisted run still matches."""
+            if not current or current.get("command_run_id") != run_id:
+                return False, current
+            if only_running and str(current.get("update_status") or "").lower() not in {"starting", "running"}:
+                return False, current
+            current["update_status"] = status
+            current["last_update"] = completed_at or current.get("last_update") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            if status == "successful":
+                profile = str(current.get("runtime_profile") or "pb7")
+                if ((current.get("command") in {"vps-update-pb7", "vps-update-pb"} and profile == "pb8")
+                        or (current.get("command") in {"vps-update-pb8", "vps-update-pbgui-pb8"} and profile == "pb7")):
+                    current["runtime_profile"] = "pb7_pb8"
+            current["_revision"] = int(current.get("_revision") or 0) + 1
+            saved.update(current)
+            return True, current
+
+        changed = mutate_inventory_json(Path(PBGDIR) / "data/vpsmanager", path, complete)
+        if changed and self.command_run_id == run_id:
+            self.apply_config(saved, str(path))
+        return changed
+
+    def update_finished(self, runner_config=None, private_data_dir=None, *, run_id=None):
+        """Persist the actual runner result instead of a stale in-memory status."""
+        if run_id is not None and self.command_run_id != run_id:
+            _cleanup_runner_private_data_dir(private_data_dir)
+            return
+        terminal = str(getattr(runner_config, "status", "") or "").lower()
+        if terminal in {"successful", "failed", "canceled", "timeout"}:
+            self.update_status = terminal
+        if run_id is not None:
+            self._persist_update_result(
+                self.update_status, run_id, completed_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            )
+            _cleanup_runner_private_data_dir(private_data_dir or self.privat_data_dir or f"{self.path}/tmp")
+            return
         self.last_update = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         if str(self.update_status or "") == "successful":
             profile = str(self.runtime_profile or "pb7")
@@ -1002,9 +1047,9 @@ class VPSManager:
             with open(log, "w", encoding="utf-8") as logfile:
                 logfile.write(header)
 
-    def update_event_handler(self, event):
+    def update_event_handler(self, event, *, command=None):
         if dump := event.get("stdout"):
-            self._append_task_log(dump, task_name=self.command, fallback="master-update-pb", buffer_attr="update_log")
+            self._append_task_log(dump, task_name=command or self.command, fallback="master-update-pb", buffer_attr="update_log")
 
     def update_status_handler(self, status_data, runner_config):
         del runner_config
@@ -1161,6 +1206,7 @@ class VPSManager:
         vps.update_status = "starting"
         vps.last_update = None
         vps.command_run_id = f"run-{int(datetime.now().timestamp() * 1000)}"
+        accepted_run_id = vps.command_run_id
         vps.save()
         vps.privat_data_dir = _prepare_runner_private_data_dir(vps.path, vps.command_run_id)
         private_data_dir = vps.privat_data_dir
@@ -1206,11 +1252,14 @@ class VPSManager:
                 tags=tags,
                 verbosity=verbosity,
                 private_data_dir=private_data_dir,
-                event_handler=vps.update_event_handler,
-                status_handler=vps.update_status_handler,
+                event_handler=lambda event: vps.update_event_handler(event, run_id=accepted_run_id),
+                status_handler=lambda status_data, runner_config: vps.update_status_handler(
+                    status_data, runner_config, run_id=accepted_run_id,
+                ),
                 finished_callback=lambda runner_config=None: vps.update_finished(
                     runner_config,
                     private_data_dir=private_data_dir,
+                    run_id=accepted_run_id,
                 ),
             )
         except Exception:
@@ -1260,7 +1309,8 @@ class VPSManager:
                 self.command = command
             if command_text is not None:
                 self.command_text = command_text
-            self.update_status = None
+            accepted_command = self.command
+            self.update_status = "starting"
             self.privat_data_dir = Path(f"{PBGDIR}/data/vpsmanager/tmp")
             self.privat_data_dir.mkdir(parents=True, exist_ok=True)
             self.remove_update_log()
@@ -1307,7 +1357,7 @@ class VPSManager:
                 tags=tags,
                 verbosity=verbosity,
                 private_data_dir=self.privat_data_dir,
-                event_handler=self.update_event_handler,
+                event_handler=lambda event: self.update_event_handler(event, command=accepted_command),
                 status_handler=self.update_status_handler,
                 finished_callback=_update_finished,
             )

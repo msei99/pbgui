@@ -38,14 +38,24 @@
       register: current_branch
       changed_when: false
 
+    - name: Get selected PBGui source
+      command:
+        argv: [git, remote, get-url, origin]
+      args:
+        chdir: "{{ install_dir }}/pbgui"
+      register: current_pbgui_source
+      changed_when: false
+      no_log: true
+
     - name: Update PBGui repository (keep current branch)
       git:
-        repo: https://github.com/msei99/pbgui.git
+        repo: "{{ current_pbgui_source.stdout }}"
         dest: "{{ install_dir }}/pbgui"
         version: "{{ (current_branch.stdout != 'HEAD') | ternary(current_branch.stdout, omit) }}"
         update: yes
         force: yes
       register: pbgui_repo_update
+      no_log: true
 
     - name: print pbgui_repo_update
       debug:

@@ -2415,6 +2415,77 @@
       (sample.proxy_per_minute == null ? ' · waiting for at least 10 seconds between counters' : '');
   }
 
+  const jobConvergenceDefaults = {convergence_enabled:false, convergence_min_exact:512,
+    convergence_patience:512, convergence_tolerance_pct:0.25};
+  let jobConvergenceDraft = null;
+  const jobConvergenceFields = {convergence_enabled:'enabled', convergence_min_exact:'min',
+    convergence_patience:'patience', convergence_tolerance_pct:'tolerance'};
+
+  function renderJobConvergenceEditor(job) {
+    const form = el('job-convergence-form');
+    const editable = /^[a-f0-9]{32}$/.test(job.id || '') && !job.loop_id &&
+      !['worker','calibration'].includes(job.kind) && ['running','uploading'].includes(job.status) &&
+      !job.stop_reason && !job.convergence?.stop_requested;
+    form.hidden = !editable;
+    if (!editable) return;
+    if (!jobConvergenceDraft || jobConvergenceDraft.id !== job.id) {
+      jobConvergenceDraft = {id:job.id, dirty:false, busy:false};
+      el('job-convergence-message').textContent = '';
+    }
+    if (!jobConvergenceDraft.dirty && !jobConvergenceDraft.busy) {
+      jobConvergenceDraft.expected = {...jobConvergenceDefaults, ...(job.convergence_config || {})};
+      Object.entries(jobConvergenceFields).forEach(([key, field]) => {
+        el('job-convergence-' + field).value = String(jobConvergenceDraft.expected[key]);
+      });
+    }
+    Object.values(jobConvergenceFields).forEach(field => {
+      el('job-convergence-' + field).disabled = jobConvergenceDraft.busy;
+    });
+    el('job-convergence-save').disabled = jobConvergenceDraft.busy || !jobConvergenceDraft.dirty;
+    el('job-convergence-discard').disabled = jobConvergenceDraft.busy || !jobConvergenceDraft.dirty;
+  }
+
+  Object.values(jobConvergenceFields).forEach(field => {
+    el('job-convergence-' + field).addEventListener('input', () => {
+      if (!jobConvergenceDraft || jobConvergenceDraft.busy) return;
+      jobConvergenceDraft.dirty = true;
+      el('job-convergence-save').disabled = false;
+      el('job-convergence-discard').disabled = false;
+    });
+  });
+  el('job-convergence-discard').addEventListener('click', () => {
+    const job = jobRows.find(row => row.id === jobConvergenceDraft?.id);
+    if (!job || jobConvergenceDraft.busy) return;
+    jobConvergenceDraft.dirty = false;
+    el('job-convergence-message').textContent = '';
+    renderJobConvergenceEditor(job);
+  });
+  el('job-convergence-form').addEventListener('submit', async event => {
+    event.preventDefault();
+    const draft = jobConvergenceDraft;
+    if (!draft || draft.busy || !draft.dirty || disposed) return;
+    const config = Object.fromEntries(Object.entries(jobConvergenceFields).map(([key, field]) =>
+      [key, field === 'enabled' ? el('job-convergence-' + field).value === 'true' : Number(el('job-convergence-' + field).value)]));
+    draft.busy = true;
+    const job = jobRows.find(row => row.id === draft.id);
+    if (!job) { draft.busy = false; return; }
+    renderJobConvergenceEditor(job);
+    try {
+      const result = await request('/jobs/' + encodeURIComponent(draft.id) + '/convergence', {
+        method:'POST', body:JSON.stringify({config, expected:draft.expected})});
+      if (disposed || jobConvergenceDraft !== draft) return;
+      Object.assign(job, result);
+      draft.dirty = false;
+      el('job-convergence-message').textContent = config.convergence_enabled ?
+        'Enabled. A new observation window starts with the next verified snapshot.' : 'Disabled for this job.';
+    } catch (error) {
+      if (!disposed && jobConvergenceDraft === draft) el('job-convergence-message').textContent = error.message;
+    } finally {
+      draft.busy = false;
+      if (!disposed && jobConvergenceDraft === draft) renderCloudDashboard(job);
+    }
+  });
+
   function renderCloudDashboard(job) {
     if (!window.state || window.state.cloudLogId !== job.id) return;
     if (typeof renderOptimizeLogDashboard !== 'function') return;
@@ -2448,7 +2519,8 @@
       ' further exact evaluations without a Pareto hypervolume improvement greater than ' +
       (config.convergence_tolerance_pct ?? 0.25) +
       '%. Hypervolume measures the feasible front across all configured objectives on a fixed scale, not just the number of results. Small gains accumulate against the last accepted baseline. Checked after verified snapshots (normally about a minute plus transfer time). Zero means a baseline or significant improvement was recorded. This is not overall run progress.';
-    el('cloud-convergence').hidden = !config.convergence_enabled;
+    renderJobConvergenceEditor(job);
+    el('cloud-convergence').hidden = false;
     el('convergence-sample').hidden = !config.convergence_enabled;
     el('convergence-sample').textContent = convergence.checked_exact == null ? 'Waiting for the first verified result snapshot.' :
       'Checked through exact result ' + Number(convergence.checked_exact).toLocaleString() +
@@ -2456,14 +2528,14 @@
       (finalChecked ? ' · Final snapshot checked (not a per-result replay)' : terminal ? ' · Final convergence check unavailable' :
         ' · ' + Math.max(0, (job.exact_completed || 0) - convergence.checked_exact).toLocaleString() + ' newer results awaiting snapshot check');
     if (terminal && !finalChecked && convergence.checked_exact == null) el('convergence-sample').textContent = 'Final convergence check unavailable';
-    el('convergence-phase').textContent = job.completion_reason === 'convergence' ? 'Completed: no significant improvement' :
+    el('convergence-phase').textContent = !config.convergence_enabled ? 'Disabled' : job.completion_reason === 'convergence' ? 'Completed: no significant improvement' :
       job.completion_reason === 'rental_deadline' ? 'Stopped: rental time limit' :
       terminal && finalChecked ? (convergence.threshold_reached ? 'Final snapshot: stagnation threshold reached' : 'Final snapshot checked') :
       terminal ? 'Final convergence check unavailable' :
       convergence.reason || ({warming:'Minimum evaluations', tracking:'Monitoring', stopping:'Collecting results'}[convergence.phase] || 'Waiting for exact results');
-    el('convergence-since').textContent = convergence.last_improvement_exact == null ? '—' :
+    el('convergence-since').textContent = !config.convergence_enabled || convergence.last_improvement_exact == null ? '—' :
       Math.max(0, (job.exact_completed || 0) - convergence.last_improvement_exact).toLocaleString() + ' exact evaluations';
-    el('convergence-progress').textContent = convergence.phase === 'warming' ?
+    el('convergence-progress').textContent = !config.convergence_enabled ? 'Off' : convergence.phase === 'warming' ?
       (job.exact_completed || 0).toLocaleString() + ' / ' + Number(config.convergence_min_exact).toLocaleString() + ' minimum' :
       Number(convergence.stalled_exact || 0).toLocaleString() + ' / ' + Number(config.convergence_patience || 0).toLocaleString() + ' exact evaluations';
     el('convergence-bar').value = config.convergence_patience ? Math.min(100, 100 * (convergence.stalled_exact || 0) / config.convergence_patience) : 0;

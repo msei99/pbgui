@@ -132,15 +132,16 @@ def test_websetup_installs_pb7_pin_and_latest_pb8() -> None:
 
     assert "revision=PB7_PINNED_COMMIT" in local_source
     assert 'branch="master"' in local_source
-    assert "pb8_extras = pb8_gpu_extras(pb8_dir)" in local_source
-    assert 'f"{pb8_dir}[{pb8_extras}]"' in local_source
+    assert '_install_master_wheel("pb8", pb8_dir, pb8_venv, pbgui_dir' in local_source
+    assert 'pb8_gpu_extras(repo)' in local_source
     assert "pb8_gpu_install.py" in remote_source
-    assert "pb8[$PB8_GPU_EXTRAS]" in remote_source
+    assert 'PB8_PYTHON_WHEELS[0]}[$PB8_GPU_EXTRAS]' in remote_source
     assert "_validate_pb8_install(pb8_dir, pb8_venv, log)" in local_source
     assert "git clone --no-checkout" in remote_source
-    assert "--ref refs/remotes/pbgui-pb7-pin/master --expected-major 8 --fetch-url" in remote_source
+    assert "--ref '$PB8_REF' --expected-major 8 --fetch-url" in remote_source
     assert "git reset --hard origin/master" not in remote_source
-    assert "venv_pb8/bin/python' -m pip install --upgrade -e" in remote_source
+    assert "venv_pb8/bin/python' -m pip install --no-index" in remote_source
+    assert "maturin develop" not in remote_source
     assert "--expected-major 8" in remote_source
     assert "PBGui/PB7/PB8" in web_source
     assert "pb8-runtime-invalid" in local_source
@@ -152,7 +153,8 @@ def test_pb8_full_updates_request_platform_gated_gpu_dependencies(playbook: str)
     """Full updates select and validate optional GPU dependencies on the target host."""
     source = Path(playbook).read_text(encoding="utf-8")
 
-    assert 'cmd: "pb8_gpu_install.py {{ pb8dir | quote }}' in source
+    source += Path('tasks/pb8_live_wheels_prepare.yml').read_text(encoding='utf-8')
+    assert 'cmd: "pb8_gpu_install.py ' in source
     assert "['full', 'full,gpu-mps', 'full,gpu-cuda']" in source
     assert "pb8_gpu_dependencies.stdout | trim" in source
 
@@ -184,22 +186,19 @@ def test_pb8_playbooks_validate_before_restarting_live_processes(playbook_path: 
     assert "--expected-major" in source
     assert '"8"' in source
     assert "force: yes" not in source
-    assert "pip install" in source
-    assert "--upgrade -e" in source
-    assert 'if [ -f "$HOME/.cargo/env" ]; then' in source
+    assert "--only-binary=:all:" in source
+    assert "--no-index" in source
+    assert "--upgrade -e" not in source
     assert "Validate PB8 CLI" in source
-    assert "import passivbot_rust" in source
+    assert "pb8_wheels.py runtime" in source
     assert "Save PB8 runtime paths after validation" in source
     assert source.index("Mark PB8 runtime unavailable") < checkout_index
     assert "Validate PB8 Rust module and config schema" not in source
-    rebuild_task = source.split("- name: Rebuild and validate PB8 Rust extension", 1)[1]
-    rebuild_task = rebuild_task.split("\n    - name:", 1)[0]
-    assert "stamp_compiled_extensions" not in rebuild_task
-    assert "check_and_maybe_compile(force=True)" in rebuild_task
-    assert "verify_loaded_runtime_extension()" in rebuild_task
-    assert "\n      when:" not in rebuild_task
-    assert "requirements-rust.txt" in source
-    assert source.index("Rebuild and validate PB8 Rust extension") < source.index("Mark validated PB8 runtime available")
+    assert "check_and_maybe_compile" not in source
+    assert "requirements-rust.txt" not in source
+    assert source.index("Prepare central PB8 wheels before runtime changes") < source.index("Mark PB8 runtime unavailable")
+    assert source.index("Validate centrally built PB8 runtime") < source.index("Mark validated PB8 runtime available")
+    assert source.index("Validate PB8 schema without source compilation") < source.index("Mark validated PB8 runtime available")
     assert source.index("Mark validated PB8 runtime available") < source.index(
         "Restart managed PB8 live bots after successful update"
     )
@@ -213,15 +212,17 @@ def test_pb8_playbooks_validate_before_restarting_live_processes(playbook_path: 
         assert "--barrier" in source
         assert "['master', 'vps', 'slave']" in source
         assert "pb8_install_profile" in source
-        assert "Install PB8 live profile" in source
-        assert 'pip install --no-cache-dir --upgrade -e "{{ pb8dir }}"' in source
-        assert "Remove PB8 Rust build artifacts on live-only runners" in source
-        assert source.index("Rebuild and validate PB8 Rust extension") < source.index(
-            "Remove PB8 Rust build artifacts on live-only runners"
+        assert "Install verified PB8 wheels" in source
+        assert '--only-binary=:all:' in source
+        assert 'Validate centrally built PB8 runtime' in source
+        assert "Remove unused Rust build tools on verified VPS" in source
+        assert "pb_wheel_status.py" in source
+        assert source.index("Validate centrally built PB8 runtime") < source.index(
+            "Remove unused Rust build tools on verified VPS"
         )
         assert "Measure PB8 disk state before changes" in source
         assert "Measure PB8 disk state after validation" in source
-        assert "pb8_min_free_bytes | default(3221225472)" in source
+        assert "pb8_min_free_bytes | default(536870912 if pb8_install_profile" in source
     else:
         assert "pb8_role_probe.stdout | trim | lower == 'master'" in source
     assert "stop-processes" not in source
@@ -354,16 +355,24 @@ def test_master_pb8_branch_state_exposes_runtime_remotes_and_history(monkeypatch
     assert state["default_remote_name"] == "fork"
     assert state["branch_tracking_remotes"] == {"feature": "fork"}
     assert state["upstream_remote_url"] == "https://github.com/enarjord/passivbot.git"
+    assert state["source_options"] == [
+        {"name": "origin", "url": "https://github.com/enarjord/passivbot.git", "label": "Passivbot (official)"},
+        {"name": "pbgui-origin", "url": "https://example.test/origin.git", "label": "origin (https://example.test/origin.git)"},
+        {"name": "pbgui-fork", "url": "https://example.test/fork.git", "label": "fork (https://example.test/fork.git)"},
+    ]
 
 
-def test_remote_pb8_branch_state_does_not_copy_controller_remotes() -> None:
-    """Remote PB8 branch controls start from telemetry without controller Git configuration."""
+def test_remote_pb8_branch_state_uses_controller_sources_not_target_remotes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The version catalog uses trusted controller sources while target Git state stays separate."""
     service = object.__new__(VPSManagerService)
     service._host_meta = lambda _state: {
         "pb8b": "feature",
         "pb8c": "a" * 40,
     }
     service._build_pb8_github_status = lambda _commit: "❌ different"
+    monkeypatch.setattr(service_mod, "configured_pb8dir", lambda: "/controller/pb8")
+    monkeypatch.setattr(service_mod, "list_git_remotes", lambda _repo: ["origin", "fork"])
+    monkeypatch.setattr(service_mod, "get_git_remote_url", lambda _repo, remote: f"https://example.test/{remote}.git")
 
     state = service._build_vps_pb8_branch_state({}, "runner-a")
 
@@ -375,6 +384,8 @@ def test_remote_pb8_branch_state_does_not_copy_controller_remotes() -> None:
     assert state["known_remotes"] == ["origin", "fork"]
     assert state["remote_urls"] == {}
     assert state["branch_tracking_remotes"] == {}
+    assert state["source_options"][0]["url"] == "https://github.com/enarjord/passivbot.git"
+    assert {source["name"] for source in state["source_options"]} == {"origin", "pbgui-fork", "pbgui-origin"}
 
 
 @pytest.mark.parametrize("playbook_path", ["master-update-pb8.yml", "vps-update-pb8.yml"])
@@ -385,6 +396,10 @@ def test_pb8_playbooks_validate_optional_branch_before_checkout(playbook_path: s
     assert "pb8_branch_switch" in source
     assert "Check PB8 checkout for tracked changes" in source
     assert "Refuse PB8 branch switch with tracked changes" in source
+    # Normal updates and retries of an interrupted first install (clone without
+    # index) must not be refused as local work.
+    assert source.count("when: pb8_branch_switch and pb8_git_index.stat.exists") == 2
+    assert source.index("Inspect PB8 checkout index") < source.index("Check PB8 checkout for tracked changes")
     assert "Require selected PB8 source branch" in source
     assert "Resolve selected PB8 ref" in source
     assert "Require selected PB8 commit to belong to source branch" in source
@@ -428,6 +443,9 @@ def test_local_pb8_branch_command_passes_only_validated_switch_vars(monkeypatch:
     service = object.__new__(VPSManagerService)
     service.vpsmanager = SimpleNamespace(update_master=lambda **kwargs: calls.append(kwargs))
     monkeypatch.setattr(service_mod, "load_ini", lambda _section, _parameter: "master")
+    monkeypatch.setattr(service_mod, "_pb8_version_sources", lambda: [
+        {"url": "https://github.com/example/passivbot.git"},
+    ])
     monkeypatch.setattr(
         service_mod,
         "_pb8_runtime_info",
@@ -515,7 +533,7 @@ def test_remote_pb8_command_requires_fresh_master_telemetry(
 
 
 def test_remote_pb7_install_is_blocked_below_disk_reserve_with_pb8_present() -> None:
-    """A PB8-only small VPS cannot start a PB7 first installation below 3 GiB free."""
+    """A PB8-only small VPS cannot start PB7 below the binary install reserve."""
     state = {
         "meta": {
             "role": "vps",
@@ -524,7 +542,7 @@ def test_remote_pb7_install_is_blocked_below_disk_reserve_with_pb8_present() -> 
             "pb7c": "",
             "pb7py": "N/A",
         },
-        "system": {"disk_free": 2944 * 1024**2},
+        "system": {"disk_free": 400 * 1024**2},
     }
 
     result = service_mod._pb7_remote_action_status(state, telemetry_fresh=True)
@@ -532,8 +550,8 @@ def test_remote_pb7_install_is_blocked_below_disk_reserve_with_pb8_present() -> 
     assert result["allowed"] is False
     assert result["installed"] is False
     assert result["required_free_disk_bytes"] == service_mod.PB7_MIN_FREE_DISK_BYTES
-    assert "requires at least 3 GiB" in result["reason"]
-    assert "currently 2.88 GiB" in result["reason"]
+    assert "requires at least 512 MiB" in result["reason"]
+    assert "currently 0.39 GiB" in result["reason"]
 
 
 def test_installed_remote_pb7_update_does_not_require_installation_disk_reserve() -> None:
@@ -561,11 +579,11 @@ def test_remote_pb7_command_rejects_low_disk_first_install() -> None:
     service._get_monitor_state = lambda: {}
     service._get_host_telemetry = lambda _state, _hostname: {
         "meta": {"role": "vps", "pb8ready": True},
-        "system": {"disk_free": 2944 * 1024**2},
+        "system": {"disk_free": 400 * 1024**2},
     }
     service._host_telemetry_fresh = lambda _state: True
 
-    with pytest.raises(ValueError, match="PB7 installation requires at least 3 GiB"):
+    with pytest.raises(ValueError, match="PB7 installation requires at least 512 MiB"):
         service.run_vps_command(
             token="token",
             hostname="small-pb8",
@@ -574,9 +592,12 @@ def test_remote_pb7_command_rejects_low_disk_first_install() -> None:
         )
 
 
-def test_remote_pb8_command_starts_only_for_fresh_master() -> None:
+def test_remote_pb8_command_starts_only_for_fresh_master(monkeypatch: pytest.MonkeyPatch) -> None:
     """Fresh runner telemetry permits the dedicated live-only PB8 playbook."""
     captured: dict[str, object] = {}
+    monkeypatch.setattr(service_mod, "_pb8_version_sources", lambda: [
+        {"url": "https://github.com/example/passivbot.git"},
+    ])
     service = object.__new__(VPSManagerService)
     vps = SimpleNamespace(hostname="remote-master", user_pw=None, command_run_id="run-8")
     vps._task_log_path = lambda command, _fallback: Path(f"{command}--run-8.log")
@@ -611,10 +632,31 @@ def test_remote_pb8_command_starts_only_for_fresh_master() -> None:
     assert captured["extra_vars"] == {"pb8_min_free_bytes": service_mod.PB8_MIN_FREE_DISK_BYTES}
     assert result["command"] == "vps-update-pb8"
 
+    service.run_vps_command(
+        token="token",
+        hostname="remote-master",
+        command="vps-update-pb8",
+        command_text="Install PB8 feature",
+        extra_vars={
+            "pb8_branch": "feature",
+            "pb8_source_branch": "feature",
+            "pb8_remote_name": "pbgui-fork",
+            "pb8_remote_url": "https://github.com/example/passivbot.git",
+        },
+    )
+    assert captured["extra_vars"]["pb8_branch"] == "feature"
+    assert captured["extra_vars"]["pb8_remote_url"] == "https://github.com/example/passivbot.git"
+    assert captured["extra_vars"]["pb8_min_free_bytes"] == service_mod.PB8_MIN_FREE_DISK_BYTES
 
-def test_remote_pb8_branch_command_uses_installed_runtime_without_disk_reserve() -> None:
+
+def test_remote_pb8_branch_command_uses_installed_runtime_without_disk_reserve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An installed remote PB8 runtime accepts a validated branch switch payload."""
     captured: dict[str, object] = {}
+    monkeypatch.setattr(service_mod, "_pb8_version_sources", lambda: [
+        {"url": "git@github.com:example/passivbot.git"},
+    ])
     service = object.__new__(VPSManagerService)
     vps = SimpleNamespace(hostname="runner-a", user_pw=None, command_run_id="run-branch")
     vps._task_log_path = lambda command, _fallback: Path(f"{command}--run-branch.log")
@@ -830,13 +872,12 @@ def test_pb8_actions_support_single_and_profile_aware_bulk_updates() -> None:
 
 
 def test_pb7_playbook_checks_first_install_disk_before_downloads() -> None:
-    """The remote PB7 playbook fails before rust/git downloads on insufficient disk."""
+    """The remote PB7 playbook gates a new checkout before clone or transfer."""
     source = Path("vps-update-pb7.yml").read_text(encoding="utf-8")
 
     gate = source.index("Require free disk space for a new PB7 installation")
-    assert gate < source.index("- name: Update rust")
     assert gate < source.index("Clone official Passivbot for a new PB7 installation")
-    assert "pb7_min_free_bytes | default(3221225472)" in source
+    assert "pb7_min_free_bytes | default(536870912)" in source
     assert "when: not pb7_git_before_disk_gate.stat.exists" in source
 
 
@@ -863,12 +904,13 @@ def test_pb8_remote_action_status_uses_role_and_free_disk_only() -> None:
     assert "currently 1.00 GiB" in low_disk["reason"]
 
 
-def test_pb8_runner_playbook_sources_optional_cargo_environment() -> None:
-    """Distro rustup installs do not emit a missing ~/.cargo/env warning."""
+def test_pb8_runner_playbook_never_requires_target_cargo_environment() -> None:
+    """Target installs use binaries and cannot require a local Rust environment."""
     source = Path("vps-update-pb8.yml").read_text(encoding="utf-8")
 
-    assert source.count('if [ -f "$HOME/.cargo/env" ]; then') == 3
-    assert source.count('source "$HOME/.cargo/env"') == 3
+    assert '.cargo/env' not in source
+    assert "rustup update" not in source
+    assert "--only-binary=:all:" in source
 
 
 def test_runtime_update_playbooks_support_pb8_only_maintenance_and_pb7_install() -> None:
@@ -909,23 +951,12 @@ def test_runtime_update_playbooks_support_pb8_only_maintenance_and_pb7_install()
 def test_vps_setup_pb8_profile_skips_every_pb7_runtime_task() -> None:
     """PB8-only setup skips PB7 artifacts while enabling the shared PBRun service."""
     source = Path("vps-setup.yml").read_text(encoding="utf-8")
-    pb7_tasks = (
-        "Validate pinned PB7 commit",
-        "Check for existing PB7 checkout",
-        "Verify pinned PB7 commit before changing an existing runtime",
-        "Stop PBRun before replacing an existing PB7 runtime",
-        "Stop processes from the existing PB7 runtime",
-        "Clone Passivbot without checking out upstream master",
-        "Fetch, verify and checkout pinned Passivbot v7",
-        "create python3.12 venv for pb7",
-        "Build passivbot-rust with maturin",
-        "Write rust source stamp after maturin build",
-    )
-
-    for task_name in pb7_tasks:
-        block = source.split(f"- name: {task_name}", 1)[1].split("\n    - name:", 1)[0]
-        assert "when:" in block
-        assert "install_pb7 | bool" in block
+    block = source.split("- name: Select this host for PB7 installation", 1)[1].split("\n    - name:", 1)[0]
+    assert "install_pb7 | bool" in block
+    assert "import_playbook: vps-update-pb7.yml" in source
+    assert source.index("import_playbook: vps-update-pb7.yml") < source.index("import_playbook: vps-update-pb8.yml")
+    assert "rustup" not in source
+    assert "maturin" not in source
     assert "remove PB7 runtime paths for PB8-only setup" in source
     assert "(['pbrun'] if ((install_pb7 | bool) or (install_pb8 | bool)) else [])" in source
     assert "(['pbgui-pbrun.service'] if ((install_pb7 | bool) or (install_pb8 | bool)) else [])" in source

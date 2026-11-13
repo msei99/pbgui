@@ -1,0 +1,113 @@
+---
+# Fetch the pinned upstream source on the controller before stopping PB7.
+- name: Probe PB7 target wheel compatibility
+  stat:
+    path: "{{ pb7venv }}/bin/python"
+  register: pb7_wheel_python
+
+- name: Probe PB7 binary compatibility before changes
+  script:
+    cmd: pb8_wheels.py probe
+    executable: "{{ 'python3.12' if (pb7_recreate_python312 | default(false) | bool) else ((pb7venv ~ '/bin/python') if pb7_wheel_python.stat.exists else 'python3.12') }}"
+  register: pb7_wheel_target
+  changed_when: false
+
+- name: Create private controller PB7 wheel staging
+  tempfile:
+    state: directory
+    prefix: pbgui-pb7-wheel-
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  register: pb7_wheel_master_stage
+  notify: Clean controller PB7 wheel staging
+
+- name: Create private target PB7 wheel staging
+  tempfile:
+    state: directory
+    prefix: pbgui-pb7-wheel-
+  register: pb7_wheel_remote_stage
+  notify: Clean target PB7 wheel staging
+
+- name: Fetch pinned PB7 source on the controller
+  command:
+    argv: ["{{ ansible_playbook_python }}", "{{ playbook_dir }}/pb8_wheels.py", source, "--url={{ pb7_wheel_source_url | default('https://github.com/enarjord/passivbot.git') }}", "--commit={{ pb7_wheel_source_commit | default(pb7_ref) }}", "--archive={{ pb7_wheel_master_stage.path }}/source.tar"]
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  changed_when: false
+
+- name: Prepare verified PB7 wheels on the controller
+  command:
+    argv:
+      - "{{ ansible_playbook_python }}"
+      - "{{ playbook_dir }}/pb8_wheels.py"
+      - build
+      - --product
+      - pb7
+      - --archive
+      - "{{ pb7_wheel_master_stage.path }}/source.tar"
+      - --commit
+      - "{{ pb7_wheel_source_commit | default(pb7_ref) }}"
+      - --target
+      - "{{ pb7_wheel_target.stdout }}"
+      - --cache
+      - "{{ playbook_dir }}/data/cache/pb7-wheels"
+      - --bundle
+      - "{{ pb7_wheel_master_stage.path }}/bundle"
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  register: pb7_wheel_build
+  changed_when: false
+
+- name: Read PB7 wheel manifest
+  set_fact:
+    pb7_wheel_manifest: "{{ pb7_wheel_build.stdout | from_json }}"
+
+- name: Transfer verified PB7 binaries to target
+  copy:
+    src: "{{ pb7_wheel_master_stage.path }}/bundle/"
+    dest: "{{ pb7_wheel_remote_stage.path }}/bundle/"
+    mode: "0600"
+    directory_mode: "0700"
+
+- name: Verify PB7 artifacts on target before changing runtime
+  script:
+    cmd: "pb8_wheels.py verify --product pb7 --bundle {{ (pb7_wheel_remote_stage.path ~ '/bundle') | quote }} --commit {{ (pb7_wheel_source_commit | default(pb7_ref)) | quote }}"
+    executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
+  changed_when: false
+
+- name: Seed reusable PB7 cache on target masters
+  script:
+    cmd: "pb8_wheels.py cache --product pb7 --bundle {{ (pb7_wheel_remote_stage.path ~ '/bundle') | quote }} --cache {{ (pbgdir ~ '/data/cache/pb7-wheels') | quote }}"
+    executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
+  when: pb7_install_profile == 'full'
+  changed_when: false
+
+- name: Download binary PB7 dependencies before runtime changes
+  command:
+    argv:
+      - "{{ pbgui_python | default(ansible_playbook_python) }}"
+      - -m
+      - pip
+      - download
+      - "--only-binary=:all:"
+      - --dest
+      - "{{ pb7_wheel_remote_stage.path }}/bundle"
+      - --find-links
+      - "{{ pb7_wheel_remote_stage.path }}/bundle"
+      - "{{ pb7_wheel_remote_stage.path }}/bundle/{{ pb7_wheel_manifest.python_wheel }}{{ '[full]' if pb7_install_profile == 'full' else '' }}"
+  changed_when: false
+
+- name: Check PB7 binary installation capacity
+  script:
+    cmd: "pb8_wheels.py capacity --product pb7 --bundle {{ (pb7_wheel_remote_stage.path ~ '/bundle') | quote }} --repo {{ pb7dir | quote }}"
+    executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
+  changed_when: false
+
+- name: Check PB7 receipt path before runtime changes
+  script:
+    cmd: "pb8_wheels.py receipt --receipt {{ (pbgdir ~ '/data/state/pb7-wheel.json') | quote }}"
+    executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
+  changed_when: false

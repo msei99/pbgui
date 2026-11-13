@@ -1,11 +1,11 @@
 ---
 # Switch pbgui branch/commit on localhost
 # Steps:
-# 1. Fetch all branches from origin
+# 1. Fetch the selected branch from its controller-approved source
 # 2. Discard tracked local changes by default, matching normal PBGui updates
 # 3. Checkout specified branch
 # 4. Optionally reset to specific commit (stays on branch)
-# 5. Pull if on branch HEAD (no specific commit)
+# 5. Reset to the fetched branch HEAD when no commit was specified
 # 6. Sync systemd units and restart PBCluster/PBCoinData/PBMonitorAgent
 
 - hosts: "{{ target_hosts | default('localhost') }}"
@@ -16,6 +16,7 @@
     pbgdir: "{{ pbgdir }}"
     target_branch: "{{ branch }}"
     target_commit: "{{ commit | default('') }}"
+    selected_source: "{{ source_url | default('origin', true) }}"
 
   tasks:
     - name: display facts
@@ -23,11 +24,52 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: Fetch all branches from origin
-      command: git fetch --prune origin +refs/heads/*:refs/remotes/origin/*
+    - name: Fetch selected PBGui branch
+      command:
+        argv:
+          - git
+          - fetch
+          - --no-tags
+          - "{{ selected_source }}"
+          - "+refs/heads/{{ target_branch }}:refs/remotes/pbgui-selected/{{ target_branch }}"
       args:
         chdir: "{{ pbgdir }}"
       when: pbgdir != ""
+      changed_when: false
+
+    - name: Check whether PBGui checkout is shallow
+      command: git rev-parse --is-shallow-repository
+      args:
+        chdir: "{{ pbgdir }}"
+      register: pbgui_shallow
+      when: target_commit != ""
+      changed_when: false
+
+    - name: Fetch PBGui history for an older commit
+      command:
+        argv:
+          - git
+          - fetch
+          - --unshallow
+          - --no-tags
+          - "{{ selected_source }}"
+          - "+refs/heads/{{ target_branch }}:refs/remotes/pbgui-selected/{{ target_branch }}"
+      args:
+        chdir: "{{ pbgdir }}"
+      when: target_commit != "" and pbgui_shallow.stdout == "true"
+      changed_when: false
+
+    - name: Verify selected PBGui commit belongs to the selected branch
+      command:
+        argv:
+          - git
+          - merge-base
+          - --is-ancestor
+          - "{{ target_commit }}"
+          - "refs/remotes/pbgui-selected/{{ target_branch }}"
+      args:
+        chdir: "{{ pbgdir }}"
+      when: target_commit != ""
       changed_when: false
 
     - name: Check for uncommitted changes (tracked files only)
@@ -57,7 +99,7 @@
       changed_when: false
 
     - name: Create and checkout local branch from remote if it doesn't exist
-      command: git checkout -b "{{ target_branch }}" "refs/remotes/origin/{{ target_branch }}"
+      command: git checkout -b "{{ target_branch }}" "refs/remotes/pbgui-selected/{{ target_branch }}"
       args:
         chdir: "{{ pbgdir }}"
       when: branch_exists.rc != 0
@@ -79,13 +121,21 @@
       register: commit_reset
       notify: restart pbgui
 
-    - name: Reset to latest remote HEAD (only if no specific commit provided)
-      command: git reset --hard "origin/{{ target_branch }}"
+    - name: Reset to selected branch HEAD (only if no specific commit provided)
+      command: git reset --hard "refs/remotes/pbgui-selected/{{ target_branch }}"
       args:
         chdir: "{{ pbgdir }}"
       when: target_commit == ""
       register: pull_result
       notify: restart pbgui
+
+    - name: Remember selected PBGui source for later updates
+      command:
+        argv: [git, remote, set-url, origin, "{{ selected_source }}"]
+      args:
+        chdir: "{{ pbgdir }}"
+      when: selected_source != 'origin'
+      no_log: true
 
     - name: Display checkout result
       debug:

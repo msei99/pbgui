@@ -435,6 +435,18 @@
       line-height: 1.5;
     }
 
+    .pb8-version-table-wrap { max-height: 600px; overflow: auto; border: 1px solid var(--border); border-radius: 8px; }
+    .pb8-version-table { width: 100%; }
+    .pb8-version-table th { position: sticky; top: 0; z-index: 1; background: var(--bg2); border-bottom: 2px solid var(--border); }
+    .pb8-version-table td:last-child { white-space: nowrap; width: 180px; }
+    .pb8-version-table tr[data-branch] { cursor: pointer; }
+    .pb8-version-table tr[data-branch]:hover td { background: rgba(77,166,255,.08); }
+    .pb8-version-table tr[data-branch].selected td { background: rgba(77,166,255,.12); }
+    .pb8-version-table tr[data-branch].selected td:first-child { border-left: 3px solid var(--accent); }
+    .pb8-version-table tr[data-branch]:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+    .pb8-version-pager { display: flex; align-items: center; gap: 8px; margin-top: 10px; }
+    #pbgui-version-more-commits[hidden], #pb8-version-more-commits[hidden] { display: none !important; }
+
     .checkbox-row {
       display: flex;
       align-items: center;
@@ -3246,6 +3258,22 @@
         updateReboot: true,
         pbguiBranch: '',
         pbguiCommit: 'HEAD',
+        pbguiRemoteName: '',
+        pbguiRemoteUrl: '',
+        pbguiRemoteBranches: [],
+        pbguiRemoteVersions: [],
+        pbguiRemoteVersionsFetchedAt: 0,
+        pbguiRemoteCommits: {},
+        pbguiRemoteCommitLimit: 50,
+        pbguiRemoteBranchesKey: '',
+        pbguiRemoteCommitsKey: '',
+        pbguiRemoteBranchesRequest: '',
+        pbguiRemoteCommitsRequest: '',
+        pbguiRemoteBranchesError: '',
+        pbguiRemoteRetryTimer: 0,
+        pbguiVersionFilter: '',
+        pbguiVersionPage: 0,
+        pbguiVersionExplicit: false,
         pb7Branch: '',
         pb7Commit: 'HEAD',
         pb7RemoteName: '',
@@ -3265,11 +3293,19 @@
         pb8ManualBranch: '',
         pb8ManualCommit: '',
         pb8RemoteBranches: [],
+        pb8RemoteVersions: [],
+        pb8RemoteVersionsFetchedAt: 0,
         pb8RemoteCommits: {},
+        pb8RemoteCommitLimit: 50,
         pb8RemoteBranchesKey: '',
         pb8RemoteCommitsKey: '',
         pb8RemoteBranchesRequest: '',
-        pb8RemoteCommitsRequest: ''
+        pb8RemoteCommitsRequest: '',
+        pb8RemoteBranchesError: '',
+        pb8RemoteRetryTimer: 0,
+        pb8VersionFilter: '',
+        pb8VersionPage: 0,
+        pb8VersionExplicit: false
       };
     }
 
@@ -3320,6 +3356,22 @@
         log: { filename: '', size_kb: 50, reverse: true },
         pbguiBranch: '',
         pbguiCommit: 'HEAD',
+        pbguiRemoteName: '',
+        pbguiRemoteUrl: '',
+        pbguiRemoteBranches: [],
+        pbguiRemoteVersions: [],
+        pbguiRemoteVersionsFetchedAt: 0,
+        pbguiRemoteCommits: {},
+        pbguiRemoteCommitLimit: 50,
+        pbguiRemoteBranchesKey: '',
+        pbguiRemoteCommitsKey: '',
+        pbguiRemoteBranchesRequest: '',
+        pbguiRemoteCommitsRequest: '',
+        pbguiRemoteBranchesError: '',
+        pbguiRemoteRetryTimer: 0,
+        pbguiVersionFilter: '',
+        pbguiVersionPage: 0,
+        pbguiVersionExplicit: false,
         pb7Branch: '',
         pb7Commit: 'HEAD',
         pb7RemoteName: '',
@@ -3339,11 +3391,19 @@
         pb8ManualBranch: '',
         pb8ManualCommit: '',
         pb8RemoteBranches: [],
+        pb8RemoteVersions: [],
+        pb8RemoteVersionsFetchedAt: 0,
         pb8RemoteCommits: {},
+        pb8RemoteCommitLimit: 50,
         pb8RemoteBranchesKey: '',
         pb8RemoteCommitsKey: '',
         pb8RemoteBranchesRequest: '',
-        pb8RemoteCommitsRequest: ''
+        pb8RemoteCommitsRequest: '',
+        pb8RemoteBranchesError: '',
+        pb8RemoteRetryTimer: 0,
+        pb8VersionFilter: '',
+        pb8VersionPage: 0,
+        pb8VersionExplicit: false
       };
     }
 
@@ -3816,10 +3876,10 @@
     }
 
     function runtimeBranchKeys(runtime) {
-      const repo = runtime === 'pb8' ? 'pb8' : 'pb7';
+      const repo = runtime === 'pb8' ? 'pb8' : (runtime === 'pbgui' ? 'pbgui' : 'pb7');
       return {
         repo: repo,
-        label: repo === 'pb8' ? 'PB8' : 'PB7',
+        label: repo === 'pb8' ? 'PB8' : (repo === 'pbgui' ? 'PBGui' : 'PB7'),
         branch: repo + 'Branch',
         commit: repo + 'Commit',
         remoteName: repo + 'RemoteName',
@@ -3838,6 +3898,20 @@
     function clearPb7RemoteCache(uiState, runtime) {
       if (!uiState) return;
       const keys = runtimeBranchKeys(runtime);
+      if (keys.repo === 'pb8') {
+        clearTimeout(uiState.pb8RemoteRetryTimer);
+        uiState.pb8RemoteRetryTimer = 0;
+        uiState.pb8RemoteBranchesError = '';
+        uiState.pb8RemoteVersions = [];
+        uiState.pb8RemoteVersionsFetchedAt = 0;
+      }
+      if (keys.repo === 'pbgui') {
+        clearTimeout(uiState.pbguiRemoteRetryTimer);
+        uiState.pbguiRemoteRetryTimer = 0;
+        uiState.pbguiRemoteBranchesError = '';
+        uiState.pbguiRemoteVersions = [];
+        uiState.pbguiRemoteVersionsFetchedAt = 0;
+      }
       uiState[keys.remoteBranches] = [];
       uiState[keys.remoteCommits] = {};
       uiState[keys.remoteBranchesKey] = '';
@@ -3874,7 +3948,20 @@
         ui[keys.remoteUrl] = value;
         clearPb7RemoteCache(ui, keys.repo);
       }
-      refreshLocalInteractiveState();
+      syncBranchViewPanel();
+      renderUi();
+    }
+
+    function useOfficialPb8Upstream(scope) {
+      const url = 'https://github.com/enarjord/passivbot.git';
+      const ui = scope === 'master'
+        ? store.master
+        : ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
+      ui.pb8RemoteName = 'origin';
+      ui.pb8RemoteUrl = url;
+      clearPb7RemoteCache(ui, 'pb8');
+      syncBranchViewPanel();
+      renderUi();
     }
 
     function setPb7LocalBranch(scope, value, runtime) {
@@ -3929,7 +4016,10 @@
 
     function syncPb7RemoteLoads(scope, uiState, state, runtime) {
       if (!uiState || !state) return;
+      if (!store.connected) return;
       const keys = runtimeBranchKeys(runtime);
+      if (keys.repo === 'pb8') uiState = pb8VersionContext(scope, state).ui;
+      if (keys.repo === 'pbgui') uiState = pbguiVersionContext(scope, state).ui;
       const remoteName = String(uiState[keys.remoteName] || state.default_remote_name || '');
       const remoteUrl = String(uiState[keys.remoteUrl] || (state.remote_urls || {})[remoteName] || '');
       const sourceBranch = String(uiState[keys.manualBranch] || uiState[keys.branch] || state.current_branch || '');
@@ -3939,6 +4029,23 @@
         uiState[keys.remoteBranchesKey] = branchesKey;
         uiState[keys.remoteCommitsKey] = '';
         loadRemoteBranches(scope, keys.repo);
+      }
+      if (keys.repo === 'pb8' || keys.repo === 'pbgui') {
+        const fetchedAt = Number(uiState[keys.repo + 'RemoteVersionsFetchedAt']) || 0;
+        if (branchesKey && !uiState[keys.remoteBranchesRequest] && fetchedAt &&
+            Date.now() - fetchedAt > 300000) {
+          loadRemoteBranches(scope, keys.repo);
+        }
+        const selected = keys.repo === 'pb8'
+          ? pb8VersionContext(scope, state).selected : pbguiVersionContext(scope, state).selected;
+        const limit = Math.max(50, Number(uiState[keys.repo + 'RemoteCommitLimit']) || 50);
+        const commitsKey = branchesKey && !uiState[keys.remoteBranchesRequest] && remoteBranches.includes(selected)
+          ? `${branchesKey}|${selected}|${limit}` : '';
+        if (commitsKey && uiState[keys.remoteCommitsKey] !== commitsKey) {
+          uiState[keys.remoteCommitsKey] = commitsKey;
+          loadRemoteBranchCommits(scope, keys.repo, limit);
+        }
+        return;
       }
       const canLoadCommits = remoteUrl && sourceBranch && (!remoteBranches.length || remoteBranches.indexOf(sourceBranch) >= 0);
       const commitsKey = canLoadCommits ? (branchesKey + '|' + sourceBranch) : '';
@@ -4279,6 +4386,7 @@
           pb8_profile: String(st.pb8_install_profile || ''),
           runtime_profile: String(st.runtime_profile || ''),
           pending_updates: st.pending_updates == null ? String(((st.summary_row || {}).updates) || '') : String(st.pending_updates),
+          linux_update_available: hasActionableLinuxUpdates(st),
           reboot_required: !!((st.summary_row || {}).reboot_required),
           host_key_error: !!st.host_key_error,
           ssh_host_key_status: String(((st.summary_row || {}).ssh_host_key_status) || ''),
@@ -4300,6 +4408,7 @@
           pb8_runtime_reason: String(st.pb8_runtime_reason || ''),
           pb8_allowed: !!st.pb8_action_allowed,
           pending_updates: st.pending_updates == null ? '' : String(st.pending_updates),
+          linux_update_available: hasActionableLinuxUpdates(st),
           reboot_required: !!((st.summary_row || {}).reboot_required),
           debug: !!store.master.debug,
           update_reboot: !!store.master.updateReboot
@@ -4465,6 +4574,13 @@
       if (node.innerHTML !== html) node.innerHTML = html;
     }
 
+    function setBranchPanelHtmlIfChanged(id, html) {
+      const node = document.getElementById(id);
+      if (!node || node.__lastRenderedBranchHtml === html) return;
+      node.__lastRenderedBranchHtml = html;
+      if (node.innerHTML !== html) node.innerHTML = html;
+    }
+
     function setNodeHtmlIfChanged(node, html) {
       if (!node) return;
       if (node.innerHTML !== html) node.innerHTML = html;
@@ -4505,6 +4621,7 @@
     function getOverviewVersionTone(github, ver) {
       const g = String(github || '');
       const value = getOverviewVersionCore(ver);
+      if (g === 'Custom source') return 'info';
       if (g.indexOf('✅') >= 0 || g.indexOf('✓') >= 0) return 'ok';
       if (g.indexOf('❌') >= 0) return 'error';
       if (value && value !== '-') return 'warning';
@@ -4529,10 +4646,13 @@
       return branchText;
     }
 
-    function renderOverviewVersionCell(version, github, runtimeBlocked, runtimeReason) {
+    function renderOverviewVersionCell(version, github, runtimeBlocked, runtimeReason, wheelRequired) {
       const value = getOverviewVersionCore(version);
       if (runtimeBlocked && value !== '-') {
         return `${esc(value)} <span class='tag error' title='${escAttr(runtimeReason || 'PB8 runtime unavailable; run Update PB8')}'>⚠</span>`;
+      }
+      if (wheelRequired && value !== '-') {
+        return `${esc(value)} <span class='tag warning'>Wheel update</span>`;
       }
       const tone = getOverviewVersionTone(github, value);
       if ((tone === 'error' || tone === 'warning') && value !== '-') {
@@ -4611,6 +4731,26 @@
         </div>`;
     }
 
+    function linuxUpdateCounts(packageStatus) {
+      const status = packageStatus || {};
+      const count = value => value == null || String(value).trim() === '' ? NaN : Number(value);
+      const valid = value => Number.isInteger(value) && value >= 0;
+      const total = status.available === true ? count(status.upgrades) : NaN;
+      const deferredValue = count(status.deferred_updates);
+      const deferred = valid(deferredValue) && valid(total) && deferredValue <= total ? deferredValue : 0;
+      const explicit = count(status.installable_updates);
+      const installable = valid(total) ? (valid(explicit) && explicit + deferred === total ? explicit : total - deferred) : NaN;
+      const actions = installable + Math.max(Number(status.new_installs) || 0, 0) + Math.max(Number(status.removals) || 0, 0);
+      return {total, deferred, installable, actions};
+    }
+
+    function hasActionableLinuxUpdates(status) {
+      const counts = linuxUpdateCounts(status.package_status || (status.summary_row || {}).package_status);
+      if (Number.isFinite(counts.actions)) return counts.actions > 0;
+      const pending = status.pending_updates != null ? status.pending_updates : (status.summary_row || {}).updates;
+      return !!(String(pending || '').trim() && String(pending).trim() !== '0' && String(pending).trim() !== 'N/A');
+    }
+
     function getSystemHeaderModel(status, summary, isMaster, rtd) {
       const hostname = String(status.name || summary.name || store.hostname || '-');
       const online = !!status.online;
@@ -4623,11 +4763,14 @@
       const packageStatus = status.package_status || summary.package_status || {};
       const packageState = String(packageStatus.state || 'missing').toLowerCase();
       const packageAvailable = packageStatus.available === true;
-      const updatesCount = packageAvailable ? Number.parseInt(String(packageStatus.upgrades), 10) : NaN;
-      const updatesNum = Number.isFinite(updatesCount) ? updatesCount : 'N/A';
-      const updatesTone = !packageAvailable || packageState !== 'ok' ? 'warning' : (updatesCount === 0 ? 'ok' : 'error');
-      const updatesSub = 'Source: agent cache · ' + (packageState.charAt(0).toUpperCase() + packageState.slice(1)) + (packageState === 'stale' ? ' · last-known values' : '');
-      const updatesClickable = Number.isFinite(updatesCount) && updatesCount > 0;
+      const updateCounts = linuxUpdateCounts(packageStatus);
+      const updatesNum = Number.isFinite(updateCounts.installable) ? updateCounts.installable : 'N/A';
+      const updatesTone = !packageAvailable || packageState !== 'ok' || !Number.isFinite(updateCounts.actions)
+        ? 'warning' : (updateCounts.actions === 0 ? 'ok' : 'error');
+      const updatesSub = 'Source: agent cache · ' + (packageState.charAt(0).toUpperCase() + packageState.slice(1))
+        + (updateCounts.deferred > 0 ? ` · ${updateCounts.deferred} deferred by apt` : '')
+        + (packageState === 'stale' ? ' · last-known values' : '');
+      const updatesClickable = Number.isFinite(updateCounts.total) && (updateCounts.total > 0 || updateCounts.actions > 0);
       const reboot = packageAvailable ? packageStatus.reboot_required === true : null;
       const rebootTone = reboot === null ? 'warning' : (reboot ? 'error' : 'ok');
       const rebootText = reboot === null ? 'N/A' : (reboot ? 'Required' : 'OK');
@@ -4639,13 +4782,15 @@
       const pb7Branch = String(summary.pb7_branch || '-');
       const pb8Branch = String(summary.pb8_branch || '-');
       const pbguiTone = getOverviewVersionTone(summary.pbgui_github, summary.pbgui);
-      const pb7Tone = getOverviewVersionTone(summary.pb7_github, summary.pb7);
+      const pb7WheelRequired = !!summary.pb7_wheel_required;
+      const pb8WheelRequired = !!summary.pb8_wheel_required;
+      const pb7Tone = pb7WheelRequired ? 'warning' : getOverviewVersionTone(summary.pb7_github, summary.pb7);
       const pb8Blocked = !!(status.pb8_runtime_blocked || summary.pb8_runtime_blocked);
       const pb8Reason = String(status.pb8_runtime_reason || summary.pb8_runtime_reason || '');
-      const pb8Tone = pb8Blocked ? 'error' : getOverviewVersionTone(summary.pb8_github, summary.pb8);
+      const pb8Tone = pb8Blocked ? 'error' : (pb8WheelRequired ? 'warning' : getOverviewVersionTone(summary.pb8_github, summary.pb8));
       const pbguiSub = getVersionStatusSub(pbguiBranch, summary.pbgui_github, pbguiTone);
-      const pb7Sub = getVersionStatusSub(pb7Branch, summary.pb7_github, pb7Tone);
-      const pb8Sub = pb8Blocked ? (pb8Reason || 'PB8 runtime unavailable; run Update PB8') : getVersionStatusSub(pb8Branch, summary.pb8_github, pb8Tone);
+      const pb7Sub = pb7WheelRequired ? 'Wheel update required' : getVersionStatusSub(pb7Branch, summary.pb7_github, pb7Tone);
+      const pb8Sub = pb8Blocked ? (pb8Reason || 'PB8 runtime unavailable; run Update PB8') : (pb8WheelRequired ? 'Wheel update required' : getVersionStatusSub(pb8Branch, summary.pb8_github, pb8Tone));
       const tags = [];
       if (!isMaster) {
         tags.push(`<span class='tag ${hostConnected ? (telemetryStale ? 'warning' : 'ok') : 'error'}'>${esc(onlineText)}</span>`);
@@ -6117,6 +6262,10 @@
     }
 
     function renderOverviewTaskSummary(row) {
+      // A completed current-run recap is authoritative even on older API processes.
+      if (row.task_recap && typeof row.task_recap === 'object'
+          && Number.isFinite(Number(row.task_recap.failed))
+          && Number.isFinite(Number(row.task_recap.unreachable))) return '';
       const status = String(row.task_status || '').toLowerCase();
       if (!status || status === 'none' || status === 'idle' || status.indexOf('success') >= 0 || status.indexOf('fail') >= 0 || status.indexOf('error') >= 0 || status.indexOf('unreachable') >= 0 || status.indexOf('cancel') >= 0 || status.indexOf('interrupt') >= 0) {
         return '';
@@ -7058,6 +7207,7 @@
           scheduleVpsDetailFetch(store.hostname);
         }
         flushPendingWsMessages();
+        renderUi();
       };
       ws.onmessage = function (event) {
         try {
@@ -7073,6 +7223,7 @@
       ws.onclose = function (event) {
         if (store.ws !== ws) return;
         store.connected = false;
+        resetRuntimeBranchRequests();
         interruptVpsLoggingSave('disconnect');
         clearInterruptedSettingsReads();
         store.packageCheckHosts = [];
@@ -7503,6 +7654,14 @@
           const retryKey = branchRequest.pending.kind === 'branches'
             ? branchRequest.keys.remoteBranchesKey
             : branchRequest.keys.remoteCommitsKey;
+          if (branchRequest.pending.runtime === 'pb8' && branchRequest.pending.kind === 'branches') {
+            failPb8VersionRequest(branchRequest, String(msg.error || 'Could not load PB8 versions.'));
+            return;
+          }
+          if (branchRequest.pending.runtime === 'pbgui' && branchRequest.pending.kind === 'branches') {
+            failPbguiVersionRequest(branchRequest, String(msg.error || 'Could not load PBGui versions.'));
+            return;
+          }
           branchRequest.uiState[retryKey] = '';
         }
         if (msg.cmd === 'set_context' && String(msg.error || '').indexOf('Unknown VPS:') === 0) {
@@ -7615,13 +7774,37 @@
         const target = takeRuntimeBranchRequest(msg.request_id);
         if (!target || target.pending.kind !== 'branches' || target.pending.remoteUrl !== url) return;
         target.uiState[target.keys.remoteBranches] = branches;
+        if (target.pending.runtime === 'pb8') target.uiState.pb8RemoteVersions = Array.isArray(msg.versions) ? msg.versions : [];
+        if (target.pending.runtime === 'pbgui') target.uiState.pbguiRemoteVersions = Array.isArray(msg.versions) ? msg.versions : [];
         target.uiState[target.keys.remoteUrl] = url;
         target.uiState[target.keys.remoteCommits] = {};
+        if (target.pending.runtime === 'pbgui' || target.pending.runtime === 'pb8') target.uiState[target.keys.remoteCommitsKey] = '';
+        if (target.pending.runtime === 'pb8') {
+          target.uiState.pb8RemoteVersionsFetchedAt = Date.now();
+          target.uiState.pb8RemoteBranchesError = '';
+          clearTimeout(target.uiState.pb8RemoteRetryTimer);
+          target.uiState.pb8RemoteRetryTimer = 0;
+        }
+        if (target.pending.runtime === 'pbgui') {
+          target.uiState.pbguiRemoteVersionsFetchedAt = Date.now();
+          target.uiState.pbguiRemoteBranchesError = '';
+          clearTimeout(target.uiState.pbguiRemoteRetryTimer);
+          target.uiState.pbguiRemoteRetryTimer = 0;
+        }
         const activeScope = target.pending.scope === 'master'
           ? isMasterContextView()
           : isVpsContextView() && store.hostname === target.pending.scope;
-        if (activeScope && activeRuntimeBranchRepo() === target.pending.runtime && !store[target.pending.runtime + 'BranchSelectInteracting']) {
+        const activeRepo = target.pending.runtime === 'pbgui' ? isPbguiBranchView() : activeRuntimeBranchRepo() === target.pending.runtime;
+        if (activeScope && activeRepo && !store[target.pending.runtime + 'BranchSelectInteracting']) {
           syncBranchViewPanel();
+        } else if (activeScope && target.pending.runtime === 'pb8' && document.activeElement && document.activeElement.id === 'pb8-version-search') {
+          updatePb8VersionList(target.pending.scope);
+        } else if (activeScope && target.pending.runtime === 'pbgui' && document.activeElement && document.activeElement.id === 'pbgui-version-search') {
+          updatePbguiVersionList(target.pending.scope);
+        }
+        if ((target.pending.runtime === 'pbgui' || target.pending.runtime === 'pb8') && activeScope && activeRepo && store.detail) {
+          const branchState = (store.detail.branches || {})[target.pending.runtime] || {};
+          syncPb7RemoteLoads(target.pending.scope, target.uiState, branchState, target.pending.runtime);
         }
         return;
       }
@@ -7735,8 +7918,13 @@
         const activeScope = target.pending.scope === 'master'
           ? isMasterContextView()
           : isVpsContextView() && store.hostname === target.pending.scope;
-        if (activeScope && activeRuntimeBranchRepo() === target.pending.runtime && !store[target.pending.runtime + 'BranchSelectInteracting']) {
+        const activeRepo = target.pending.runtime === 'pbgui' ? isPbguiBranchView() : activeRuntimeBranchRepo() === target.pending.runtime;
+        if (activeScope && activeRepo && !store[target.pending.runtime + 'BranchSelectInteracting']) {
           syncBranchViewPanel();
+        } else if (activeScope && activeRepo && target.pending.runtime === 'pbgui') {
+          updatePbguiVersionList(target.pending.scope);
+        } else if (activeScope && activeRepo && target.pending.runtime === 'pb8') {
+          updatePb8VersionList(target.pending.scope);
         }
         return;
       }
@@ -8059,7 +8247,7 @@
         ui.dirtyFields = {};
       }
       syncCurrentVpsFormFromDom(hostname, ui);
-      if (detail && !detail.provisional && (!ui.initialized || !Object.keys(ui.form || {}).length)) {
+      if (detail && !detail.provisional && !ui.initialized) {
         ui.form = Object.assign({}, detail.config || {});
         ui.savedForm = Object.assign({}, ui.form);
         ui.dirtyFields = {};
@@ -8201,7 +8389,7 @@
       if (!nextHost) return;
       const keepViews = ['vps-setup', 'vps-pbgui-branch', 'vps-pb7-branch', 'vps-pb8-branch', 'vps-host-logs', 'vps-ufw'];
       const row = getOverviewRows().find(function (item) { return String((item || {}).hostname || '') === nextHost; }) || {};
-      const keepCurrentView = keepViews.indexOf(store.view) >= 0 && !(store.view === 'vps-pb8-branch' && !row.pb8_installed);
+      const keepCurrentView = keepViews.indexOf(store.view) >= 0;
       const nextView = keepCurrentView ? store.view : 'vps';
       selectView(nextView, nextHost);
     }
@@ -10482,10 +10670,10 @@
         if (column.key === 'pbgui') return renderOverviewVersionCell(row.pbgui, row.pbgui_github);
         if (column.key === 'pbgui_branch') return esc(row.pbgui_branch || '-');
         if (column.key === 'pbgui_github') return renderOverviewGithubCell(row.pbgui_github);
-        if (column.key === 'pb7') return row.pb7_installed === false ? '-' : renderOverviewVersionCell(row.pb7, row.pb7_github);
+        if (column.key === 'pb7') return row.pb7_installed === false ? '-' : renderOverviewVersionCell(row.pb7, row.pb7_github, false, '', row.pb7_wheel_required);
         if (column.key === 'pb7_branch') return row.pb7_installed === false ? '-' : esc(row.pb7_branch || '-');
         if (column.key === 'pb7_github') return row.pb7_installed === false ? '-' : renderOverviewGithubCell(row.pb7_github);
-        if (column.key === 'pb8') return renderOverviewVersionCell(row.pb8, row.pb8_github, row.pb8_runtime_blocked, row.pb8_runtime_reason);
+        if (column.key === 'pb8') return renderOverviewVersionCell(row.pb8, row.pb8_github, row.pb8_runtime_blocked, row.pb8_runtime_reason, row.pb8_wheel_required);
         if (column.key === 'pb8_branch') return esc(row.pb8_branch || '-');
         if (column.key === 'pb8_github') return renderOverviewGithubCell(row.pb8_github);
         return esc(column.getValue(row));
@@ -10691,60 +10879,671 @@
         </div>`;
     }
 
+    function pbguiVersionSources(state) {
+      return (Array.isArray(state.source_options) ? state.source_options : []).filter(function (item) {
+        return item && item.name && item.url;
+      });
+    }
+
+    function savedPbguiVersionSelection(scope) {
+      try {
+        const saved = JSON.parse(window.sessionStorage.getItem('pbgui.pbgui-version-selection.v1') || 'null');
+        return saved && saved.scope === scope ? saved : null;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function savePbguiVersionSelection(scope, ui) {
+      try {
+        window.sessionStorage.setItem('pbgui.pbgui-version-selection.v1', JSON.stringify({
+          scope: scope, source_url: ui.pbguiRemoteUrl,
+          branch: ui.pbguiVersionExplicit ? ui.pbguiBranch : '', explicit: !!ui.pbguiVersionExplicit,
+          commit: ui.pbguiCommit || 'HEAD', commit_limit: ui.pbguiRemoteCommitLimit || 50,
+          filter: ui.pbguiVersionFilter || '', page: ui.pbguiVersionPage || 0
+        }));
+      } catch (_error) {
+        // The picker remains usable when browser storage is unavailable.
+      }
+    }
+
+    function pbguiVersionContext(scope, state) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
+      const sources = pbguiVersionSources(state);
+      if (!ui.pbguiVersionRestored) {
+        const saved = savedPbguiVersionSelection(scope);
+        const savedSource = saved && sources.find(function (item) { return item.url === saved.source_url; });
+        if (savedSource) {
+          ui.pbguiRemoteUrl = savedSource.url;
+          ui.pbguiRemoteName = savedSource.name;
+          if (saved.explicit) {
+            ui.pbguiBranch = String(saved.branch || '');
+            ui.pbguiVersionExplicit = !!ui.pbguiBranch;
+          }
+          ui.pbguiVersionFilter = String(saved.filter || '');
+          ui.pbguiVersionPage = Math.max(0, Number(saved.page) || 0);
+          ui.pbguiCommit = /^[0-9a-f]{40}$/i.test(String(saved.commit || '')) ? saved.commit : 'HEAD';
+          ui.pbguiRemoteCommitLimit = Math.min(1000, Math.max(50, Number(saved.commit_limit) || 50));
+        }
+        if (!saved || savedSource || sources.length) ui.pbguiVersionRestored = true;
+      }
+      const source = sources.find(function (item) { return item.name === ui.pbguiRemoteName && item.url === ui.pbguiRemoteUrl; }) || sources[0] || {name:'',url:''};
+      if (ui.pbguiRemoteName !== source.name || ui.pbguiRemoteUrl !== source.url) {
+        ui.pbguiRemoteName = source.name;
+        ui.pbguiRemoteUrl = source.url;
+        clearPb7RemoteCache(ui, 'pbgui');
+      }
+      const key = source.name + '|' + source.url;
+      const loaded = !!source.url && ui.pbguiRemoteBranchesKey === key && (!ui.pbguiRemoteBranchesRequest ||
+        (Array.isArray(ui.pbguiRemoteBranches) && ui.pbguiRemoteBranches.length > 0));
+      const branches = loaded ? (Array.isArray(ui.pbguiRemoteBranches) ? ui.pbguiRemoteBranches : []) : [];
+      const matching = filterPb8Versions(branches, ui.pbguiVersionFilter);
+      const timestamps = new Map((Array.isArray(ui.pbguiRemoteVersions) ? ui.pbguiRemoteVersions : []).map(function (row) {
+        return [String(row.name || ''), Number(row.updated_at) || 0];
+      }));
+      const needle = String(ui.pbguiVersionFilter || '').trim().toLowerCase();
+      const rows = matching.map(function (name) { return {name:name, updated_at:timestamps.get(name) || 0}; });
+      rows.sort(function (left, right) {
+        const exact = Number(right.name.toLowerCase() === needle) - Number(left.name.toLowerCase() === needle);
+        return exact || right.updated_at - left.updated_at || left.name.localeCompare(right.name);
+      });
+      const pageCount = Math.max(1, Math.ceil(rows.length / 25));
+      if (loaded) ui.pbguiVersionPage = Math.min(Math.max(0, Number(ui.pbguiVersionPage) || 0), pageCount - 1);
+      const pageRows = rows.slice(ui.pbguiVersionPage * 25, (ui.pbguiVersionPage + 1) * 25);
+      const current = String(state.current_branch || '');
+      let selected = String(ui.pbguiBranch || '');
+      if (branches.length && branches.indexOf(selected) < 0) {
+        selected = branches.indexOf(current) >= 0 ? current : '';
+        ui.pbguiBranch = selected;
+        ui.pbguiCommit = 'HEAD';
+        ui.pbguiVersionExplicit = false;
+      }
+      const commits = Array.isArray((ui.pbguiRemoteCommits || {})[selected]) ? ui.pbguiRemoteCommits[selected] : [];
+      const chosenCommit = String(ui.pbguiCommit || 'HEAD');
+      const commitValid = chosenCommit === 'HEAD' || /^[0-9a-f]{40}$/i.test(chosenCommit);
+      return {ui:ui, sources:sources, source:source, branches:branches, rows:rows,
+        pageRows:pageRows, pageCount:pageCount, selected:selected, loaded:loaded,
+        commits:commits, chosenCommit:chosenCommit, commitValid:commitValid};
+    }
+
+    function setPbguiVersionSource(scope, url) {
+      const detail = store.detail && ((scope === 'master' && store.detail.kind === 'master') ||
+        (store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
+      if (!detail) return;
+      const source = pbguiVersionSources((detail.branches || {}).pbgui || {}).find(function (item) { return item.url === url; });
+      if (!source) return;
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, detail);
+      ui.pbguiRemoteName = source.name;
+      ui.pbguiRemoteUrl = source.url;
+      ui.pbguiBranch = '';
+      ui.pbguiCommit = 'HEAD';
+      ui.pbguiRemoteCommitLimit = 50;
+      ui.pbguiVersionFilter = '';
+      ui.pbguiVersionPage = 0;
+      ui.pbguiVersionExplicit = false;
+      clearPb7RemoteCache(ui, 'pbgui');
+      syncBranchViewPanel();
+      renderUi();
+    }
+
+    function setPbguiVersion(scope, branch) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail);
+      ui.pbguiBranch = branch;
+      ui.pbguiCommit = 'HEAD';
+      ui.pbguiRemoteCommitLimit = 50;
+      ui.pbguiRemoteCommitsKey = '';
+      ui.pbguiVersionExplicit = true;
+      savePbguiVersionSelection(scope, ui);
+      updatePbguiVersionList(scope);
+      const detail = store.detail;
+      if (detail) syncPb7RemoteLoads(scope, ui, (detail.branches || {}).pbgui || {}, 'pbgui');
+    }
+
+    function selectPbguiVersionRow(event, scope) {
+      const row = event.target.closest('tr[data-branch]');
+      if (!row) return;
+      if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+      if (event.type === 'keydown') event.preventDefault();
+      setPbguiVersion(scope, row.dataset.branch);
+    }
+
+    function versionCommitLabel(commit) {
+      const firstLine = String(commit.message || '').split('\n')[0];
+      return `${commit.short || shortHash(commit.full)} | ${firstLine.slice(0, 60)} | ${commit.date || ''}`;
+    }
+
+    function setPbguiCommit(scope, commit) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail);
+      ui.pbguiCommit = commit;
+      savePbguiVersionSelection(scope, ui);
+      updatePbguiVersionList(scope);
+    }
+
+    function loadOlderPbguiCommits(scope) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail);
+      if (ui.pbguiRemoteCommitsRequest) return;
+      ui.pbguiRemoteCommitLimit = Math.min(1000, Math.max(50, Number(ui.pbguiRemoteCommitLimit) || 50) + 50);
+      ui.pbguiRemoteCommitsKey = '';
+      savePbguiVersionSelection(scope, ui);
+      syncPb7RemoteLoads(scope, ui, (store.detail.branches || {}).pbgui || {}, 'pbgui');
+      updatePbguiVersionList(scope);
+    }
+
+    function updatePbguiVersionList(scope) {
+      const detail = store.detail && ((scope === 'master' && store.detail.kind === 'master') ||
+        (store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
+      if (!detail) return;
+      const context = pbguiVersionContext(scope, (detail.branches || {}).pbgui || {});
+      const body = document.getElementById('pbgui-version-rows');
+      const count = document.getElementById('pbgui-version-count');
+      const pager = document.getElementById('pbgui-version-pager');
+      const selection = document.getElementById('pbgui-version-selected');
+      const button = document.getElementById('pbgui-version-install');
+      const commitSelect = document.getElementById('pbgui-version-commit');
+      const commitInput = document.getElementById('pbgui-version-commit-sha');
+      const commitStatus = document.getElementById('pbgui-version-commit-status');
+      const more = document.getElementById('pbgui-version-more-commits');
+      if (!body || !count || !pager || !selection || !button || !commitSelect || !commitInput || !commitStatus || !more) return;
+      const current = String((detail.branches.pbgui || {}).current_branch || '');
+      const nodes = context.pageRows.map(function (item) {
+        const row = document.createElement('tr');
+        row.dataset.branch = item.name;
+        row.tabIndex = 0;
+        row.className = item.name === context.selected ? 'selected' : '';
+        const name = document.createElement('td');
+        name.textContent = item.name;
+        if (item.name === current) {
+          const installed = document.createElement('span');
+          installed.className = 'field-help';
+          installed.textContent = ' (Installed)';
+          name.appendChild(installed);
+        }
+        const updated = document.createElement('td');
+        updated.textContent = pb8VersionUpdatedText(item.updated_at);
+        row.append(name, updated);
+        return row;
+      });
+      if (context.loaded && !context.rows.length) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 2;
+        cell.textContent = context.ui.pbguiVersionFilter ? 'No matching versions' : 'No versions available';
+        row.appendChild(cell);
+        nodes.push(row);
+      }
+      body.replaceChildren(...nodes);
+      count.textContent = context.loaded ? `${context.rows.length} of ${context.branches.length} versions` : 'Loading versions...';
+      pager.replaceChildren();
+      if (context.pageCount > 1) {
+        const previous = document.createElement('button');
+        previous.className = 'btn'; previous.type = 'button'; previous.textContent = 'Previous';
+        previous.disabled = context.ui.pbguiVersionPage === 0;
+        previous.onclick = function () { setPbguiVersionPage(scope, context.ui.pbguiVersionPage - 1); };
+        const label = document.createElement('span');
+        label.className = 'field-help'; label.textContent = `Page ${context.ui.pbguiVersionPage + 1} of ${context.pageCount}`;
+        const next = document.createElement('button');
+        next.className = 'btn'; next.type = 'button'; next.textContent = 'Next';
+        next.disabled = context.ui.pbguiVersionPage + 1 >= context.pageCount;
+        next.onclick = function () { setPbguiVersionPage(scope, context.ui.pbguiVersionPage + 1); };
+        pager.append(previous, label, next);
+      }
+      const options = [new Option('Latest (branch HEAD)', 'HEAD')];
+      context.commits.forEach(function (commit) {
+        if (/^[0-9a-f]{40}$/i.test(String(commit.full || ''))) options.push(new Option(versionCommitLabel(commit), commit.full));
+      });
+      if (context.chosenCommit !== 'HEAD' && !context.commits.some(function (entry) { return entry.full === context.chosenCommit; })) {
+        options.push(new Option('Manual commit: ' + shortHash(context.chosenCommit), context.chosenCommit));
+      }
+      commitSelect.replaceChildren(...options);
+      commitSelect.value = context.chosenCommit;
+      commitSelect.disabled = !context.loaded || !context.selected;
+      if (document.activeElement !== commitInput) commitInput.value = context.chosenCommit === 'HEAD' ? '' : context.chosenCommit;
+      commitInput.disabled = !context.loaded || !context.selected;
+      commitStatus.textContent = context.ui.pbguiRemoteCommitsRequest ? 'Loading commits...' :
+        context.commits.length ? `${context.commits.length} commits loaded` : 'No commit history loaded';
+      more.hidden = !context.selected || context.commits.length < (context.ui.pbguiRemoteCommitLimit || 50) ||
+        (context.ui.pbguiRemoteCommitLimit || 50) >= 1000;
+      more.disabled = !!context.ui.pbguiRemoteCommitsRequest;
+      selection.textContent = context.selected
+        ? 'Selected: ' + context.selected + (context.chosenCommit === 'HEAD' ? ' @ latest' : ' @ ' + shortHash(context.chosenCommit))
+        : 'Select a version';
+      button.disabled = !context.loaded || context.branches.indexOf(context.selected) < 0 || !context.commitValid;
+      const panel = document.getElementById(scope === 'master' ? 'master-branch-panel' : 'vps-branch-panel');
+      if (panel) panel.__lastRenderedBranchHtml = renderBranchPanelForCurrentView();
+    }
+
+    function setPbguiVersionPage(scope, page) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail);
+      ui.pbguiVersionPage = Math.max(0, Number(page) || 0);
+      savePbguiVersionSelection(scope, ui);
+      updatePbguiVersionList(scope);
+    }
+
+    function setPbguiVersionFilter(scope, value) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail);
+      ui.pbguiVersionFilter = value;
+      ui.pbguiVersionPage = 0;
+      savePbguiVersionSelection(scope, ui);
+      updatePbguiVersionList(scope);
+    }
+
+    function installPbguiVersion(scope) {
+      const detail = store.detail && ((scope === 'master' && store.detail.kind === 'master') ||
+        (store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
+      if (!detail) return;
+      const context = pbguiVersionContext(scope, (detail.branches || {}).pbgui || {});
+      if (!context.loaded || context.branches.indexOf(context.selected) < 0 || !context.commitValid) return;
+      const extraVars = {branch: context.selected, source_url: context.source.url};
+      if (context.chosenCommit !== 'HEAD') extraVars.commit = context.chosenCommit;
+      const label = 'Install PBGui ' + context.selected +
+        (context.chosenCommit === 'HEAD' ? '' : ' @ ' + shortHash(context.chosenCommit));
+      if (scope === 'master') runMasterWithLog('master-switch-pbgui-branch', label, extraVars);
+      else runVpsWithLog(scope, 'vps-switch-pbgui-branch', label, extraVars, false);
+    }
+
     function renderPbguiBranchPanel(scope, state) {
-      const uiState = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
-      const model = branchModel(state, uiState, 'pbgui');
-      const isMaster = scope === 'master';
-      const actionLabel = model.isBehindOrigin ? 'Update' : model.branchChanged ? 'Switch Branch' : model.commitChanged ? 'Switch Commit' : 'Already Selected';
-      const branchSelect = `
-        <div class='field'>
-          <label>Target Branch</label>
-          <select onfocus='store.pbguiBranchSelectInteracting = true' onmousedown='store.pbguiBranchSelectInteracting = true' onblur='store.pbguiBranchSelectInteracting = false; syncBranchViewPanel()' onchange='store.pbguiBranchSelectInteracting = false; ${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiBranch') + ', this.value' : js(scope) + ', ' + js('pbguiBranch') + ', this.value'}); syncBranchViewPanel();'>
-            ${model.availableBranches.map(function (branch) {
-              return `<option value='${escAttr(branch)}'${branch === model.selectedBranch ? ' selected' : ''}>${esc(branch)}</option>`;
-            }).join('')}
-          </select>
-        </div>`;
-      const commitSelect = `
-        <div class='field'>
-          <label>Target Commit</label>
-          <select onchange='${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiCommit') + ', this.value' : js(scope) + ', ' + js('pbguiCommit') + ', this.value'}); syncBranchViewPanel();'>
-            ${renderCommitOptions(model)}
-          </select>
-        </div>`;
-      const actions = `
-        <div class='button-row'>
-          <button class='btn ghost' type='button' onclick='send({ cmd: "load_more_commits", repo: "pbgui", branch: ${js(model.selectedBranch)}, limit: ${Math.max((model.commits || []).length + 50, 50)} })'>+50</button>
-          <button class='btn ghost' type='button' onclick='send({ cmd: "load_more_commits", repo: "pbgui", branch: ${js(model.selectedBranch)}, limit: 999999 })'>All</button>
-          <button class='btn primary' type='button' ${model.onTarget ? 'disabled' : ''} onclick='triggerPbguiBranchAction(${js(scope)})'>${esc(actionLabel)}</button>
-        </div>`;
+      const context = pbguiVersionContext(scope, state);
+      if (context.ui.pbguiVersionRestored) savePbguiVersionSelection(scope, context.ui);
+      const current = String(state.current_branch || '');
+      const commit = String(state.current_commit || '');
       return `
         <div class='panel'>
           <div class='panel-head'>
             <div>
-              <div class='panel-title'>${isMaster ? 'Local PBGui Branch Management' : 'VPS PBGui Branch Management'}</div>
-              <div class='panel-sub'>Current: <span class='code'>${esc(model.currentBranch)}</span> @ <span class='code'>${esc(shortHash(model.currentCommit))}</span></div>
+              <div class='panel-title'>PBGui versions</div>
+              <div class='panel-sub'>${current && current !== 'unknown' ? `Installed: ${esc(current)} @ ${esc(shortHash(commit))}` : 'PBGui is not installed'}</div>
             </div>
           </div>
           <div class='panel-body'>
-            <div class='two-col'>
-              ${branchSelect}
-              <div class='field'>
-                <label>Target Commit (${esc(model.commits.length)} loaded - optional, leave at HEAD for latest)</label>
-                <select onchange='${isMaster ? 'setMasterField' : 'setVpsUiField'}(${isMaster ? js('pbguiCommit') + ', this.value' : js(scope) + ', ' + js('pbguiCommit') + ', this.value'}); syncBranchViewPanel();'>
-                  ${renderCommitOptions(model)}
+            <div class='field-grid'>
+              ${context.sources.length > 1 ? `<div class='field'>
+                <label>Repository</label>
+                <select onfocus='store.pbguiBranchSelectInteracting = true' onmousedown='store.pbguiBranchSelectInteracting = true' onblur='store.pbguiBranchSelectInteracting = false; syncBranchViewPanel()' onchange='store.pbguiBranchSelectInteracting = false; setPbguiVersionSource(${js(scope)}, this.value)'>
+                  ${context.sources.map(function (item) { return `<option value='${escAttr(item.url)}'${item.url === context.source.url ? ' selected' : ''}>${esc(item.label || item.name)}</option>`; }).join('')}
                 </select>
+              </div>` : ''}
+              <div class='field'>
+                <label for='pbgui-version-search'>Search branches</label>
+                <input id='pbgui-version-search' type='search' value='${escAttr(context.ui.pbguiVersionFilter || '')}' placeholder='Search branches...' autocomplete='off' onfocus='store.pbguiBranchSelectInteracting = true' onblur='store.pbguiBranchSelectInteracting = false; syncBranchViewPanel()' oninput='setPbguiVersionFilter(${js(scope)}, this.value)'>
+                <div id='pbgui-version-count' class='field-help'>${context.loaded ? `${context.rows.length} of ${context.branches.length} versions` : 'Loading versions...'}</div>
               </div>
             </div>
-            ${actions}
-            ${renderBranchMessage(model, 'branch')}
-            ${renderCommitDetails(model)}
+            ${!context.sources.length ? `<div class='notice warning'>No credential-free PBGui Git remote is configured on this master.</div>` : ''}
+            ${context.ui.pbguiRemoteBranchesError ? `<div class='notice warning'>${esc(context.ui.pbguiRemoteBranchesError)} Retrying automatically.</div>` : ''}
+            <div class='pb8-version-table-wrap'>
+              <table class='pb8-version-table'><thead><tr><th>Branch</th><th>Last updated ↓</th></tr></thead>
+                <tbody id='pbgui-version-rows' onclick='selectPbguiVersionRow(event, ${js(scope)})' onkeydown='selectPbguiVersionRow(event, ${js(scope)})'>
+                  ${context.pageRows.map(function (row) { return pb8VersionRowHtml(row, context, current); }).join('')}
+                  ${context.loaded && !context.rows.length ? `<tr><td colspan='2'>${context.ui.pbguiVersionFilter ? 'No matching versions' : 'No versions available'}</td></tr>` : ''}
+                </tbody>
+              </table>
+            </div>
+            <div id='pbgui-version-pager' class='pb8-version-pager'>${context.pageCount > 1 ? `<button class='btn' type='button' ${context.ui.pbguiVersionPage === 0 ? 'disabled' : ''} onclick='setPbguiVersionPage(${js(scope)}, ${context.ui.pbguiVersionPage - 1})'>Previous</button><span class='field-help'>Page ${context.ui.pbguiVersionPage + 1} of ${context.pageCount}</span><button class='btn' type='button' ${context.ui.pbguiVersionPage + 1 >= context.pageCount ? 'disabled' : ''} onclick='setPbguiVersionPage(${js(scope)}, ${context.ui.pbguiVersionPage + 1})'>Next</button>` : ''}</div>
+            <div class='field'>
+              <label for='pbgui-version-commit'>Commit</label>
+              <select id='pbgui-version-commit' ${!context.loaded || !context.selected ? 'disabled' : ''} onfocus='store.pbguiBranchSelectInteracting = true' onblur='store.pbguiBranchSelectInteracting = false; syncBranchViewPanel()' onchange='setPbguiCommit(${js(scope)}, this.value)'>
+                <option value='HEAD'${context.chosenCommit === 'HEAD' ? ' selected' : ''}>Latest (branch HEAD)</option>
+                ${context.commits.filter(function (entry) { return /^[0-9a-f]{40}$/i.test(String(entry.full || '')); }).map(function (entry) { return `<option value='${escAttr(entry.full)}'${entry.full === context.chosenCommit ? ' selected' : ''}>${esc(versionCommitLabel(entry))}</option>`; }).join('')}
+                ${context.chosenCommit !== 'HEAD' && !context.commits.some(function (entry) { return entry.full === context.chosenCommit; }) ? `<option value='${escAttr(context.chosenCommit)}' selected>Manual commit: ${esc(shortHash(context.chosenCommit))}</option>` : ''}
+              </select>
+              <div id='pbgui-version-commit-status' class='field-help'>${context.ui.pbguiRemoteCommitsRequest ? 'Loading commits...' : context.commits.length ? `${context.commits.length} commits loaded` : 'No commit history loaded'}</div>
+            </div>
+            <div class='field'>
+              <label for='pbgui-version-commit-sha'>Or enter full commit SHA</label>
+              <input id='pbgui-version-commit-sha' type='text' inputmode='text' spellcheck='false' value='${context.chosenCommit === 'HEAD' ? '' : escAttr(context.chosenCommit)}' ${!context.loaded || !context.selected ? 'disabled' : ''} placeholder='40 hexadecimal characters' onfocus='store.pbguiBranchSelectInteracting = true' onblur='store.pbguiBranchSelectInteracting = false; syncBranchViewPanel()' oninput='setPbguiCommit(${js(scope)}, this.value || "HEAD")'>
+            </div>
+            <div class='button-row'><button id='pbgui-version-more-commits' class='btn' type='button' ${!context.selected || context.commits.length < (context.ui.pbguiRemoteCommitLimit || 50) || (context.ui.pbguiRemoteCommitLimit || 50) >= 1000 ? 'hidden' : ''} ${context.ui.pbguiRemoteCommitsRequest ? 'disabled' : ''} onclick='loadOlderPbguiCommits(${js(scope)})'>Load older commits</button></div>
+            <div id='pbgui-version-selected' class='field-help'>${context.selected ? `Selected: ${esc(context.selected)}${context.chosenCommit === 'HEAD' ? ' @ latest' : ' @ ' + esc(shortHash(context.chosenCommit))}` : 'Select a version'}</div>
+            <div class='button-row'><button id='pbgui-version-install' class='btn primary' type='button' ${!context.loaded || context.branches.indexOf(context.selected) < 0 || !context.commitValid ? 'disabled' : ''} onclick='installPbguiVersion(${js(scope)})'>Install PBGui</button></div>
+          </div>
+        </div>`;
+    }
+
+    function pb8VersionSources(state) {
+      const sources = Array.isArray(state.source_options) ? state.source_options : [];
+      const valid = sources.filter(function (item) { return item && item.name && item.url; });
+      return valid.length ? valid : [{ name: 'origin', url: 'https://github.com/enarjord/passivbot.git', label: 'Passivbot (official)' }];
+    }
+
+    function savedPb8VersionSelection(scope) {
+      try {
+        const saved = JSON.parse(window.sessionStorage.getItem('pbgui.pb8-version-selection.v2') || 'null');
+        return saved && saved.scope === scope ? saved : null;
+      } catch (_error) {
+        return null;
+      }
+    }
+
+    function savePb8VersionSelection(scope, ui) {
+      try {
+        window.sessionStorage.setItem('pbgui.pb8-version-selection.v2', JSON.stringify({
+          scope: scope, source_url: ui.pb8RemoteUrl,
+          branch: ui.pb8VersionExplicit ? ui.pb8Branch : '', explicit: !!ui.pb8VersionExplicit,
+          commit: ui.pb8Commit || 'HEAD', commit_limit: ui.pb8RemoteCommitLimit || 50,
+          filter: ui.pb8VersionFilter || '', page: ui.pb8VersionPage || 0
+        }));
+      } catch (_error) {
+        // Version selection remains usable when browser storage is unavailable.
+      }
+    }
+
+    function filterPb8Versions(branches, query) {
+      const needle = String(query || '').trim().toLowerCase();
+      if (!needle) return branches;
+      const matches = branches.filter(function (branch) { return branch.toLowerCase().includes(needle); });
+      return matches.filter(function (branch) { return branch.toLowerCase() === needle; })
+        .concat(matches.filter(function (branch) { return branch.toLowerCase() !== needle; }));
+    }
+
+    function pb8VersionContext(scope, state) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
+      const sources = pb8VersionSources(state);
+      if (!ui.pb8VersionRestored) {
+        const saved = savedPb8VersionSelection(scope);
+        const savedSource = saved && sources.find(function (item) { return item.url === saved.source_url; });
+        if (savedSource) {
+          ui.pb8RemoteUrl = saved.source_url;
+          ui.pb8RemoteName = savedSource.name;
+          if (saved.explicit) {
+            ui.pb8Branch = String(saved.branch || '');
+            ui.pb8VersionExplicit = !!ui.pb8Branch;
+          }
+          ui.pb8VersionFilter = String(saved.filter || '');
+          ui.pb8VersionPage = Math.max(0, Number(saved.page) || 0);
+          ui.pb8Commit = /^[0-9a-f]{40}$/i.test(String(saved.commit || '')) ? saved.commit : 'HEAD';
+          ui.pb8RemoteCommitLimit = Math.min(1000, Math.max(50, Number(saved.commit_limit) || 50));
+        }
+        if (!saved || savedSource || (Array.isArray(state.source_options) && state.source_options.length)) {
+          ui.pb8VersionRestored = true;
+        }
+      }
+      const source = sources.find(function (item) { return item.name === ui.pb8RemoteName && item.url === ui.pb8RemoteUrl; }) || sources[0];
+      if (ui.pb8RemoteName !== source.name || ui.pb8RemoteUrl !== source.url) {
+        ui.pb8RemoteName = source.name;
+        ui.pb8RemoteUrl = source.url;
+        clearPb7RemoteCache(ui, 'pb8');
+      }
+      const key = source.name + '|' + source.url;
+      const loaded = ui.pb8RemoteBranchesKey === key && (!ui.pb8RemoteBranchesRequest ||
+        (Array.isArray(ui.pb8RemoteBranches) && ui.pb8RemoteBranches.length > 0));
+      const branches = loaded ? (Array.isArray(ui.pb8RemoteBranches) ? ui.pb8RemoteBranches : []) : [];
+      const matching = filterPb8Versions(branches, ui.pb8VersionFilter);
+      const timestamps = new Map((Array.isArray(ui.pb8RemoteVersions) ? ui.pb8RemoteVersions : []).map(function (row) {
+        return [String(row.name || ''), Number(row.updated_at) || 0];
+      }));
+      const needle = String(ui.pb8VersionFilter || '').trim().toLowerCase();
+      const rows = matching.map(function (name) { return { name: name, updated_at: timestamps.get(name) || 0 }; });
+      rows.sort(function (left, right) {
+        const exact = Number(right.name.toLowerCase() === needle) - Number(left.name.toLowerCase() === needle);
+        return exact || right.updated_at - left.updated_at || left.name.localeCompare(right.name);
+      });
+      const pageCount = Math.max(1, Math.ceil(rows.length / 25));
+      if (loaded) ui.pb8VersionPage = Math.min(Math.max(0, Number(ui.pb8VersionPage) || 0), pageCount - 1);
+      const pageRows = rows.slice(ui.pb8VersionPage * 25, (ui.pb8VersionPage + 1) * 25);
+      const current = String(state.current_branch || '');
+      let selected = String(ui.pb8Branch || '');
+      if (branches.length && branches.indexOf(selected) < 0) {
+        selected = branches.indexOf(current) >= 0 ? current : (branches.indexOf('master') >= 0 ? 'master' : '');
+        ui.pb8Branch = selected;
+        ui.pb8Commit = 'HEAD';
+        ui.pb8VersionExplicit = false;
+      }
+      const commits = Array.isArray((ui.pb8RemoteCommits || {})[selected]) ? ui.pb8RemoteCommits[selected] : [];
+      const chosenCommit = String(ui.pb8Commit || 'HEAD');
+      const commitValid = chosenCommit === 'HEAD' || /^[0-9a-f]{40}$/i.test(chosenCommit);
+      return { ui: ui, sources: sources, source: source, branches: branches, matching: matching, rows: rows,
+        pageRows: pageRows, pageCount: pageCount, selected: selected, loaded: loaded,
+        commits: commits, chosenCommit: chosenCommit, commitValid: commitValid };
+    }
+
+    function setPb8VersionSource(scope, url) {
+      const detail = store.detail && ((scope === 'master' && store.detail.kind === 'master') || (store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
+      if (!detail) return;
+      const state = (detail.branches || {}).pb8 || {};
+      const source = pb8VersionSources(state).find(function (item) { return item.url === url; });
+      if (!source) return;
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, detail);
+      ui.pb8RemoteName = source.name;
+      ui.pb8RemoteUrl = source.url;
+      ui.pb8Branch = '';
+      ui.pb8Commit = 'HEAD';
+      ui.pb8RemoteCommitLimit = 50;
+      ui.pb8VersionFilter = '';
+      ui.pb8VersionPage = 0;
+      ui.pb8VersionExplicit = false;
+      clearPb7RemoteCache(ui, 'pb8');
+      syncBranchViewPanel();
+      renderUi();
+    }
+
+    function setPb8Version(scope, branch) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
+      ui.pb8Branch = branch;
+      ui.pb8Commit = 'HEAD';
+      ui.pb8RemoteCommitLimit = 50;
+      ui.pb8RemoteCommitsKey = '';
+      ui.pb8VersionExplicit = true;
+      savePb8VersionSelection(scope, ui);
+      updatePb8VersionList(scope);
+      if (store.detail) syncPb7RemoteLoads(scope, ui, (store.detail.branches || {}).pb8 || {}, 'pb8');
+    }
+
+    function pb8VersionUpdatedText(timestamp) {
+      if (!timestamp) return 'Unknown';
+      const date = new Date(timestamp * 1000);
+      return Number.isNaN(date.getTime()) ? 'Unknown' : date.toLocaleString();
+    }
+
+    function pb8VersionRowHtml(row, context, current) {
+      const selected = row.name === context.selected;
+      return `<tr data-branch='${escAttr(row.name)}' tabindex='0' class='${selected ? 'selected' : ''}'>
+        <td>${esc(row.name)}${row.name === current ? ` <span class='field-help'>(Installed)</span>` : ''}</td>
+        <td>${esc(pb8VersionUpdatedText(row.updated_at))}</td>
+      </tr>`;
+    }
+
+    function selectPb8VersionRow(event, scope) {
+      const row = event.target.closest('tr[data-branch]');
+      if (!row) return;
+      if (event.type === 'keydown' && event.key !== 'Enter' && event.key !== ' ') return;
+      if (event.type === 'keydown') event.preventDefault();
+      setPb8Version(scope, row.dataset.branch);
+    }
+
+    function setPb8Commit(scope, commit) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail);
+      ui.pb8Commit = commit;
+      savePb8VersionSelection(scope, ui);
+      updatePb8VersionList(scope);
+    }
+
+    function loadOlderPb8Commits(scope) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail);
+      if (ui.pb8RemoteCommitsRequest) return;
+      ui.pb8RemoteCommitLimit = Math.min(1000, Math.max(50, Number(ui.pb8RemoteCommitLimit) || 50) + 50);
+      ui.pb8RemoteCommitsKey = '';
+      savePb8VersionSelection(scope, ui);
+      syncPb7RemoteLoads(scope, ui, (store.detail.branches || {}).pb8 || {}, 'pb8');
+      updatePb8VersionList(scope);
+    }
+
+    function updatePb8VersionList(scope) {
+      const detail = store.detail && ((scope === 'master' && store.detail.kind === 'master') ||
+        (store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
+      if (!detail) return;
+      const context = pb8VersionContext(scope, (detail.branches || {}).pb8 || {});
+      const body = document.getElementById('pb8-version-rows');
+      const count = document.getElementById('pb8-version-count');
+      const pager = document.getElementById('pb8-version-pager');
+      const selection = document.getElementById('pb8-version-selected');
+      const button = document.getElementById('pb8-version-install');
+      const commitSelect = document.getElementById('pb8-version-commit');
+      const commitInput = document.getElementById('pb8-version-commit-sha');
+      const commitStatus = document.getElementById('pb8-version-commit-status');
+      const more = document.getElementById('pb8-version-more-commits');
+      if (!body || !count || !pager || !selection || !button || !commitSelect || !commitInput || !commitStatus || !more) return;
+      const current = String((detail.branches.pb8 || {}).current_branch || '');
+      const nodes = context.pageRows.map(function (item) {
+        const row = document.createElement('tr');
+        row.dataset.branch = item.name;
+        row.tabIndex = 0;
+        row.className = item.name === context.selected ? 'selected' : '';
+        const name = document.createElement('td');
+        name.textContent = item.name;
+        if (item.name === current) {
+          const installed = document.createElement('span');
+          installed.className = 'field-help';
+          installed.textContent = ' (Installed)';
+          name.appendChild(installed);
+        }
+        const updated = document.createElement('td');
+        updated.textContent = pb8VersionUpdatedText(item.updated_at);
+        row.append(name, updated);
+        return row;
+      });
+      if (context.loaded && !context.rows.length) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 2;
+        cell.textContent = context.ui.pb8VersionFilter ? 'No matching versions' : 'No versions available';
+        row.appendChild(cell);
+        nodes.push(row);
+      }
+      body.replaceChildren(...nodes);
+      count.textContent = context.loaded ? `${context.rows.length} of ${context.branches.length} versions` : 'Loading versions...';
+      pager.replaceChildren();
+      if (context.pageCount > 1) {
+        const previous = document.createElement('button');
+        previous.className = 'btn'; previous.type = 'button'; previous.textContent = 'Previous';
+        previous.disabled = context.ui.pb8VersionPage === 0;
+        previous.onclick = function () { setPb8VersionPage(scope, context.ui.pb8VersionPage - 1); };
+        const label = document.createElement('span');
+        label.className = 'field-help'; label.textContent = `Page ${context.ui.pb8VersionPage + 1} of ${context.pageCount}`;
+        const next = document.createElement('button');
+        next.className = 'btn'; next.type = 'button'; next.textContent = 'Next';
+        next.disabled = context.ui.pb8VersionPage + 1 >= context.pageCount;
+        next.onclick = function () { setPb8VersionPage(scope, context.ui.pb8VersionPage + 1); };
+        pager.append(previous, label, next);
+      }
+      const options = [new Option('Latest (branch HEAD)', 'HEAD')];
+      context.commits.forEach(function (entry) {
+        if (/^[0-9a-f]{40}$/i.test(String(entry.full || ''))) options.push(new Option(versionCommitLabel(entry), entry.full));
+      });
+      if (context.chosenCommit !== 'HEAD' && !context.commits.some(function (entry) { return entry.full === context.chosenCommit; })) {
+        options.push(new Option('Manual commit: ' + shortHash(context.chosenCommit), context.chosenCommit));
+      }
+      commitSelect.replaceChildren(...options);
+      commitSelect.value = context.chosenCommit;
+      commitSelect.disabled = !context.loaded || !context.selected;
+      if (document.activeElement !== commitInput) commitInput.value = context.chosenCommit === 'HEAD' ? '' : context.chosenCommit;
+      commitInput.disabled = !context.loaded || !context.selected;
+      commitStatus.textContent = context.ui.pb8RemoteCommitsRequest ? 'Loading commits...' :
+        context.commits.length ? `${context.commits.length} commits loaded` : 'No commit history loaded';
+      more.hidden = !context.selected || context.commits.length < (context.ui.pb8RemoteCommitLimit || 50) ||
+        (context.ui.pb8RemoteCommitLimit || 50) >= 1000;
+      more.disabled = !!context.ui.pb8RemoteCommitsRequest;
+      selection.textContent = context.selected
+        ? 'Selected: ' + context.selected + (context.chosenCommit === 'HEAD' ? ' @ latest' : ' @ ' + shortHash(context.chosenCommit))
+        : 'Select a version';
+      button.disabled = !context.loaded || context.branches.indexOf(context.selected) < 0 || !context.commitValid;
+      const panel = document.getElementById(scope === 'master' ? 'master-branch-panel' : 'vps-branch-panel');
+      if (panel) panel.__lastRenderedBranchHtml = renderBranchPanelForCurrentView();
+    }
+
+    function setPb8VersionPage(scope, page) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail);
+      ui.pb8VersionPage = Math.max(0, Number(page) || 0);
+      savePb8VersionSelection(scope, ui);
+      updatePb8VersionList(scope);
+    }
+
+    function setPb8VersionFilter(scope, value) {
+      const ui = scope === 'master' ? store.master : ensureVpsUi(scope, store.detail);
+      ui.pb8VersionFilter = value;
+      ui.pb8VersionPage = 0;
+      savePb8VersionSelection(scope, ui);
+      updatePb8VersionList(scope);
+    }
+
+    function installPb8Version(scope) {
+      const detail = store.detail && ((scope === 'master' && store.detail.kind === 'master') || (store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
+      if (!detail) return;
+      const context = pb8VersionContext(scope, (detail.branches || {}).pb8 || {});
+      if (!context.loaded || context.branches.indexOf(context.selected) < 0 || !context.commitValid) return;
+      const extraVars = {
+        pb8_branch: context.selected,
+        pb8_source_branch: context.selected,
+        pb8_remote_name: context.source.name,
+        pb8_remote_url: context.source.url
+      };
+      if (context.chosenCommit !== 'HEAD') extraVars.pb8_commit = context.chosenCommit;
+      const label = 'Install PB8 ' + context.selected +
+        (context.chosenCommit === 'HEAD' ? '' : ' @ ' + shortHash(context.chosenCommit));
+      if (scope === 'master') runMasterWithLog('master-update-pb8', label, extraVars);
+      else runVpsWithLog(scope, 'vps-update-pb8', label, extraVars, false);
+    }
+
+    function renderPb8VersionPanel(scope, state) {
+      const context = pb8VersionContext(scope, state);
+      if (context.ui.pb8VersionRestored) savePb8VersionSelection(scope, context.ui);
+      const current = String(state.current_branch || '');
+      const commit = String(state.current_commit || '');
+      return `
+        <div class='panel'>
+          <div class='panel-head'>
+            <div>
+              <div class='panel-title'>PB8 versions</div>
+              <div class='panel-sub'>${current && current !== 'unknown' ? `Installed: ${esc(current)} @ ${esc(shortHash(commit))}` : 'PB8 is not installed'}</div>
+            </div>
+          </div>
+          <div class='panel-body'>
+            <div class='field-grid'>
+              ${context.sources.length > 1 ? `<div class='field'>
+                <label>Repository</label>
+                <select onfocus='store.pb8BranchSelectInteracting = true' onmousedown='store.pb8BranchSelectInteracting = true' onblur='store.pb8BranchSelectInteracting = false' onchange='store.pb8BranchSelectInteracting = false; setPb8VersionSource(${js(scope)}, this.value)'>
+                  ${context.sources.map(function (item) { return `<option value='${escAttr(item.url)}'${item.url === context.source.url ? ' selected' : ''}>${esc(item.label || item.name)}</option>`; }).join('')}
+                </select>
+              </div>` : ''}
+              <div class='field'>
+                <label for='pb8-version-search'>Search branches</label>
+                <input id='pb8-version-search' type='search' value='${escAttr(context.ui.pb8VersionFilter || '')}' placeholder='Search branches...' autocomplete='off' onfocus='store.pb8BranchSelectInteracting = true' onblur='store.pb8BranchSelectInteracting = false' oninput='setPb8VersionFilter(${js(scope)}, this.value)'>
+                <div id='pb8-version-count' class='field-help'>${context.loaded ? `${context.rows.length} of ${context.branches.length} versions` : 'Loading versions...'}</div>
+              </div>
+            </div>
+            ${context.ui.pb8RemoteBranchesError ? `<div class='notice warning'>${esc(context.ui.pb8RemoteBranchesError)} Retrying automatically.</div>` : ''}
+            <div class='pb8-version-table-wrap'>
+              <table class='pb8-version-table'><thead><tr><th>Branch</th><th>Last updated ↓</th></tr></thead>
+                <tbody id='pb8-version-rows' onclick='selectPb8VersionRow(event, ${js(scope)})' onkeydown='selectPb8VersionRow(event, ${js(scope)})'>
+                  ${context.pageRows.map(function (row) { return pb8VersionRowHtml(row, context, current); }).join('')}
+                  ${context.loaded && !context.rows.length ? `<tr><td colspan='2'>${context.ui.pb8VersionFilter ? 'No matching versions' : 'No versions available'}</td></tr>` : ''}
+                </tbody>
+              </table>
+            </div>
+            <div id='pb8-version-pager' class='pb8-version-pager'>${context.pageCount > 1 ? `<button class='btn' type='button' ${context.ui.pb8VersionPage === 0 ? 'disabled' : ''} onclick='setPb8VersionPage(${js(scope)}, ${context.ui.pb8VersionPage - 1})'>Previous</button><span class='field-help'>Page ${context.ui.pb8VersionPage + 1} of ${context.pageCount}</span><button class='btn' type='button' ${context.ui.pb8VersionPage + 1 >= context.pageCount ? 'disabled' : ''} onclick='setPb8VersionPage(${js(scope)}, ${context.ui.pb8VersionPage + 1})'>Next</button>` : ''}</div>
+            <div class='field'>
+              <label for='pb8-version-commit'>Commit</label>
+              <select id='pb8-version-commit' ${!context.loaded || !context.selected ? 'disabled' : ''} onfocus='store.pb8BranchSelectInteracting = true' onblur='store.pb8BranchSelectInteracting = false' onchange='setPb8Commit(${js(scope)}, this.value)'>
+                <option value='HEAD'${context.chosenCommit === 'HEAD' ? ' selected' : ''}>Latest (branch HEAD)</option>
+                ${context.commits.filter(function (entry) { return /^[0-9a-f]{40}$/i.test(String(entry.full || '')); }).map(function (entry) { return `<option value='${escAttr(entry.full)}'${entry.full === context.chosenCommit ? ' selected' : ''}>${esc(versionCommitLabel(entry))}</option>`; }).join('')}
+                ${context.chosenCommit !== 'HEAD' && !context.commits.some(function (entry) { return entry.full === context.chosenCommit; }) ? `<option value='${escAttr(context.chosenCommit)}' selected>Manual commit: ${esc(shortHash(context.chosenCommit))}</option>` : ''}
+              </select>
+              <div id='pb8-version-commit-status' class='field-help'>${context.ui.pb8RemoteCommitsRequest ? 'Loading commits...' : context.commits.length ? `${context.commits.length} commits loaded` : 'No commit history loaded'}</div>
+            </div>
+            <div class='field'>
+              <label for='pb8-version-commit-sha'>Or enter full commit SHA</label>
+              <input id='pb8-version-commit-sha' type='text' inputmode='text' spellcheck='false' value='${context.chosenCommit === 'HEAD' ? '' : escAttr(context.chosenCommit)}' ${!context.loaded || !context.selected ? 'disabled' : ''} placeholder='40 hexadecimal characters' onfocus='store.pb8BranchSelectInteracting = true' onblur='store.pb8BranchSelectInteracting = false' oninput='setPb8Commit(${js(scope)}, this.value || "HEAD")'>
+            </div>
+            <div class='button-row'><button id='pb8-version-more-commits' class='btn' type='button' ${!context.selected || context.commits.length < (context.ui.pb8RemoteCommitLimit || 50) || (context.ui.pb8RemoteCommitLimit || 50) >= 1000 ? 'hidden' : ''} ${context.ui.pb8RemoteCommitsRequest ? 'disabled' : ''} onclick='loadOlderPb8Commits(${js(scope)})'>Load older commits</button></div>
+            <div id='pb8-version-selected' class='field-help'>${context.selected ? `Selected: ${esc(context.selected)}${context.chosenCommit === 'HEAD' ? ' @ latest' : ' @ ' + esc(shortHash(context.chosenCommit))}` : 'Select a version'}</div>
+            <div class='button-row'><button id='pb8-version-install' class='btn primary' type='button' ${!context.loaded || context.branches.indexOf(context.selected) < 0 || !context.commitValid ? 'disabled' : ''} onclick='installPb8Version(${js(scope)})'>Install PB8</button></div>
+            <div class='panel-sub'>Wheel built on the controlling master and transferred to this host.</div>
           </div>
         </div>`;
     }
 
     function renderPb7BranchPanel(scope, state, runtime) {
       const keys = runtimeBranchKeys(runtime);
+      if (keys.repo === 'pb8') return renderPb8VersionPanel(scope, state);
       const isMaster = scope === 'master';
       const uiState = isMaster ? store.master : ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
       const manualBranch = String(uiState[keys.manualBranch] || '');
@@ -10787,6 +11586,7 @@
               </div>
               <div class='panel-body'>
                 ${keys.repo === 'pb7' ? `<div class='button-row'><button class='btn ghost' type='button' onclick='switchPb7ToUpstream(${js(scope)})'>Use pinned upstream PB7</button></div>` : ''}
+                ${keys.repo === 'pb8' && !isMaster ? `<div class='button-row'><button class='btn ghost' type='button' onclick='useOfficialPb8Upstream(${js(scope)})'>Use official PB8 upstream</button></div>` : ''}
                 <div class='field-grid'>
                   <div class='field'>
                     <label>Selected Remote</label>
@@ -10798,7 +11598,7 @@
                     </select>
                   </div>
                   <div class='field span-2'>
-                    <label>Selected Remote URL</label>
+                    <label><span tabindex='0' data-tip='Verify this URL before switching. The selected source is built on the controlling master. For a known remote of a VPS, this URL is reported by that host.'>Selected Remote URL</span></label>
                     <input type='text' value='${escAttr(derivedRemoteUrl)}' onfocus='store.${interactionField} = true' onblur='store.${interactionField} = false; syncBranchViewPanel()' onchange='${remoteUrlSetter}' placeholder='https://github.com/&lt;user&gt;/passivbot.git'>
                   </div>
                   <div class='field'>
@@ -10824,6 +11624,7 @@
                     </select>
                   </div>
                 </div>
+                ${!derivedRemoteUrl ? `<div class='notice warning'>Enter a Remote URL${keys.repo === 'pb8' && !isMaster ? ' or choose official PB8 upstream' : ''} to load branches.</div>` : ''}
               </div>
             </div>
             <div class='panel'>
@@ -10850,7 +11651,7 @@
               ${sourceMissing ? `<div>Selected remote does not currently provide branch <span class='code'>${esc(sourceBranch)}</span>. Choose another remote or set a different remote branch before switching.</div>` : ''}
             </div>
             <div class='button-row'>
-              <button class='btn primary' type='button' ${model.onTarget || sourceMissing ? 'disabled' : ''} onclick='triggerPb7BranchAction(${js(scope)}, ${js(keys.repo)})'>${esc(actionLabel)}</button>
+              <button class='btn primary' type='button' ${!derivedRemoteUrl || model.onTarget || sourceMissing ? 'disabled' : ''} onclick='triggerPb7BranchAction(${js(scope)}, ${js(keys.repo)})'>${esc(!derivedRemoteUrl ? 'Choose Remote URL' : actionLabel)}</button>
             </div>
             ${renderBranchMessage({
               availableBranches: model.availableBranches,
@@ -10872,28 +11673,6 @@
             ${!manualCommit ? renderCommitDetails(Object.assign({}, model, { commits: model.remoteCommits, selectedCommit: model.selectedRemoteCommit === 'HEAD' ? 'HEAD' : model.selectedRemoteCommit })) : `<div class='notice'><div>Remote commit selected.</div><div>This resets local branch <span class='code'>${esc(effectiveBranch || model.currentBranch)}</span> to the specified commit.</div><div class='code'>${esc(manualCommit)}</div></div>`}
           </div>
         </div>`;
-    }
-
-    function triggerPbguiBranchAction(scope) {
-      const isMaster = scope === 'master';
-      const detail = store.detail && ((isMaster && store.detail.kind === 'master') || (!isMaster && store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
-      if (!detail) return;
-      const uiState = isMaster ? store.master : ensureVpsUi(scope, detail);
-      const state = detail.branches.pbgui;
-      const model = branchModel(state, uiState, 'pbgui');
-      if (model.onTarget) return;
-      if (isMaster) {
-        runMasterWithLog('master-switch-pbgui-branch', 'Switch to ' + model.selectedBranch + (uiState.pbguiCommit !== 'HEAD' ? ' @ ' + shortHash(model.targetCommit) : ''), {
-          branch: model.selectedBranch,
-          commit: uiState.pbguiCommit !== 'HEAD' ? model.targetCommit : undefined
-        });
-      } else {
-        const extraVars = { branch: model.selectedBranch };
-        if (uiState.pbguiCommit !== 'HEAD' && !model.branchChanged && !model.isBehindOrigin) {
-          extraVars.commit = model.targetCommit;
-        }
-        runVpsWithLog(scope, 'vps-switch-pbgui-branch', 'Switch to branch ' + model.selectedBranch + (extraVars.commit ? ' @ ' + shortHash(extraVars.commit) : ''), extraVars, false);
-      }
     }
 
     function triggerPb7BranchAction(scope, runtime) {
@@ -10953,6 +11732,61 @@
       }
     }
 
+    function resetRuntimeBranchRequests() {
+      Object.values(store.pendingBranchRequests || {}).forEach(function (pending) {
+        clearTimeout(pending.timeoutId);
+        const keys = runtimeBranchKeys(pending.runtime);
+        const ui = pending.scope === 'master' ? store.master : store.vps[pending.scope];
+        if (!ui) return;
+        ui[pending.kind === 'branches' ? keys.remoteBranchesRequest : keys.remoteCommitsRequest] = '';
+        ui[pending.kind === 'branches' ? keys.remoteBranchesKey : keys.remoteCommitsKey] = '';
+        if ((pending.runtime === 'pb8' || pending.runtime === 'pbgui') && pending.kind === 'branches') {
+          ui[pending.runtime + 'RemoteBranchesError'] = pending.runtime === 'pb8'
+            ? 'Connection interrupted while loading PB8 versions.'
+            : 'Connection interrupted while loading PBGui versions.';
+        }
+      });
+      store.pendingBranchRequests = {};
+      store.pendingWsMessages = (store.pendingWsMessages || []).filter(function (item) {
+        return item && item.cmd !== 'load_remote_branches' && item.cmd !== 'load_remote_branch_commits';
+      });
+      [store.master].concat(Object.values(store.vps || {})).forEach(function (ui) {
+        if (!ui) return;
+        for (const repo of ['pb8', 'pbgui']) {
+          if (!ui[repo + 'RemoteBranchesError']) continue;
+          clearTimeout(ui[repo + 'RemoteRetryTimer']);
+          ui[repo + 'RemoteRetryTimer'] = 0;
+          ui[repo + 'RemoteBranchesKey'] = '';
+        }
+      });
+    }
+
+    function failPb8VersionRequest(target, message) {
+      const ui = target.uiState;
+      ui.pb8RemoteBranchesError = message;
+      clearTimeout(ui.pb8RemoteRetryTimer);
+      ui.pb8RemoteRetryTimer = setTimeout(function () {
+        ui.pb8RemoteRetryTimer = 0;
+        if (ui.pb8RemoteUrl !== target.pending.remoteUrl) return;
+        ui.pb8RemoteBranchesKey = '';
+        renderUi();
+      }, 10000);
+      syncBranchViewPanel();
+    }
+
+    function failPbguiVersionRequest(target, message) {
+      const ui = target.uiState;
+      ui.pbguiRemoteBranchesError = message;
+      clearTimeout(ui.pbguiRemoteRetryTimer);
+      ui.pbguiRemoteRetryTimer = setTimeout(function () {
+        ui.pbguiRemoteRetryTimer = 0;
+        if (ui.pbguiRemoteUrl !== target.pending.remoteUrl) return;
+        ui.pbguiRemoteBranchesKey = '';
+        renderUi();
+      }, 10000);
+      syncBranchViewPanel();
+    }
+
     function beginRuntimeBranchRequest(scope, runtime, kind, remoteUrl, branch) {
       const keys = runtimeBranchKeys(runtime);
       const uiState = scope === 'master'
@@ -10969,6 +11803,13 @@
         remoteUrl: remoteUrl,
         branch: branch || ''
       };
+      if ((keys.repo === 'pb8' || keys.repo === 'pbgui') && kind === 'branches') {
+        store.pendingBranchRequests[requestId].timeoutId = setTimeout(function () {
+          const target = takeRuntimeBranchRequest(requestId);
+          if (target && keys.repo === 'pb8') failPb8VersionRequest(target, 'PB8 version lookup timed out.');
+          if (target && keys.repo === 'pbgui') failPbguiVersionRequest(target, 'PBGui version lookup timed out.');
+        }, 60000);
+      }
       return requestId;
     }
 
@@ -10977,6 +11818,7 @@
       const pending = id ? store.pendingBranchRequests[id] : null;
       if (!pending) return null;
       delete store.pendingBranchRequests[id];
+      clearTimeout(pending.timeoutId);
       const keys = runtimeBranchKeys(pending.runtime);
       const uiState = pending.scope === 'master'
         ? store.master
@@ -10998,7 +11840,7 @@
           return;
         }
         const requestId = beginRuntimeBranchRequest(scope, keys.repo, 'branches', remoteUrl, '');
-        send({ cmd: 'load_remote_branches', remote_url: remoteUrl, request_id: requestId });
+        send({ cmd: 'load_remote_branches', remote_url: remoteUrl, request_id: requestId, include_updated: keys.repo !== 'pb7' });
       } else {
         const ui = ensureVpsUi(scope, store.detail && store.detail.hostname === scope ? store.detail : null);
         const state = store.detail && store.detail.kind === 'vps' && store.detail.hostname === scope ? store.detail.branches[keys.repo] : null;
@@ -11009,11 +11851,11 @@
           return;
         }
         const requestId = beginRuntimeBranchRequest(scope, keys.repo, 'branches', remoteUrl, '');
-        send({ cmd: 'load_remote_branches', remote_url: remoteUrl, request_id: requestId });
+        send({ cmd: 'load_remote_branches', remote_url: remoteUrl, request_id: requestId, include_updated: keys.repo !== 'pb7' });
       }
     }
 
-    function loadRemoteBranchCommits(scope, runtime) {
+    function loadRemoteBranchCommits(scope, runtime, requestedLimit) {
       const keys = runtimeBranchKeys(runtime);
       const isMaster = scope === 'master';
       const detail = store.detail && ((isMaster && store.detail.kind === 'master') || (!isMaster && store.detail.kind === 'vps' && store.detail.hostname === scope)) ? store.detail : null;
@@ -11028,7 +11870,9 @@
         return;
       }
       const requestId = beginRuntimeBranchRequest(scope, keys.repo, 'commits', remoteUrl, branchName);
-      send({ cmd: 'load_remote_branch_commits', remote_url: remoteUrl, branch: branchName, limit: 50, request_id: requestId });
+      const limit = keys.repo === 'pbgui' || keys.repo === 'pb8'
+        ? Math.min(1000, Math.max(50, Number(requestedLimit) || 50)) : 50;
+      send({ cmd: 'load_remote_branch_commits', remote_url: remoteUrl, branch: branchName, limit: limit, request_id: requestId });
     }
 
     function combinedUpdateButtonClass(pbguiUpdateAvailable, runtimeUpdateAvailable) {
@@ -11064,8 +11908,7 @@
         const masterCombinedText = masterPb8Only ? 'Update PBGui and PB8' : 'Update PBGui and PB7';
         const masterBothBtnClass = combinedUpdateButtonClass(st.pbgui_update_available, masterPb8Only ? st.pb8_update_available : st.pb7_update_available);
         const masterPbguiPb8BtnClass = combinedUpdateButtonClass(st.pbgui_update_available, st.pb8_update_available);
-        const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
-        const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
+        const hasLinuxUpdates = hasActionableLinuxUpdates(st);
         const needsReboot = !!(st.summary_row || {}).reboot_required;
         const masterLinuxBtnClass = hasLinuxUpdates ? 'sb-btn warning' : 'sb-btn ok';
         const masterRebootBtnClass = needsReboot ? 'sb-btn warning' : 'sb-btn ok';
@@ -11082,9 +11925,9 @@
           <button class='sb-btn' type='button' onclick='openMasterTaskLogs()'>Task Logs</button>
           <button class='sb-btn' type='button' onclick='openMasterHostLogs()'>Host Logs</button>
           <button class='sb-btn' type='button' onclick='selectView("master-ufw")'>Change UFW</button>
-          <button class='sb-btn' type='button' onclick='selectView("master-pbgui-branch")'>PBGui Branch</button>
+          <button class='sb-btn' type='button' onclick='selectView("master-pbgui-branch")'>PBGui Versions</button>
           <button class='sb-btn' type='button' onclick='selectView("master-pb7-branch")'>PB7 Branch</button>
-          ${st.pb8_installed ? `<button class='sb-btn' type='button' onclick='selectView("master-pb8-branch")'>PB8 Branch</button>` : ''}
+          <button class='sb-btn' type='button' onclick='selectView("master-pb8-branch")'>PB8 Versions</button>
           <div class='sb-separator'>Tasks</div>
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${store.master.debug ? 'checked' : ''} onchange="setMasterBool('debug', this.checked)"> Debug</label>
@@ -11126,8 +11969,7 @@
         const combinedText = pb8Only ? 'Update PBGui and PB8' : 'Update PBGui and PB7';
         const bothBtnClass = combinedUpdateButtonClass(st.pbgui_update_available, pb8Only ? st.pb8_update_available : st.pb7_update_available);
         const pbguiPb8BtnClass = combinedUpdateButtonClass(st.pbgui_update_available, st.pb8_update_available);
-        const pendingSrc = st.pending_updates != null ? st.pending_updates : ((st.summary_row || {}).updates);
-        const hasLinuxUpdates = String(pendingSrc || '').trim() && String(pendingSrc).trim() !== '0' && String(pendingSrc).trim() !== 'N/A';
+        const hasLinuxUpdates = hasActionableLinuxUpdates(st);
         const linuxUpdateBtnClass = hasLinuxUpdates ? 'sb-btn warning' : 'sb-btn ok';
         const needsReboot = !!(st.summary_row || {}).reboot_required;
         const rebootBtnClass = needsReboot ? 'sb-btn warning' : 'sb-btn ok';
@@ -11155,9 +11997,9 @@
           <button class='${hostKeyBtnClass}' type='button' data-vps-action='review-host-key' data-host='${escAttr(selectedHost)}'>Review SSH Host Key</button>
           ${isRemoteMaster ? `<button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-ufw' data-host='${escAttr(selectedHost)}'>Change UFW</button>` : ''}
           ${!isRemoteMaster ? `<button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-setup' data-host='${escAttr(selectedHost)}'>Change VPS</button>` : ''}
-          <button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-pbgui-branch' data-host='${escAttr(selectedHost)}'>PBGui Branch</button>
+          <button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-pbgui-branch' data-host='${escAttr(selectedHost)}'>PBGui Versions</button>
           <button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-pb7-branch' data-host='${escAttr(selectedHost)}'>PB7 Branch</button>
-          ${st.pb8_installed ? `<button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-pb8-branch' data-host='${escAttr(selectedHost)}'>PB8 Branch</button>` : ''}
+          <button class='sb-btn' type='button' data-vps-action='select-view' data-view='vps-pb8-branch' data-host='${escAttr(selectedHost)}'>PB8 Versions</button>
           ${showClusterNodeBtn ? `<button class='${clusterNodeBtnClass}' type='button' title='${escAttr(clusterNode.reason || '')}' data-vps-action='add-cluster-node' data-host='${escAttr(selectedHost)}'>${esc(clusterNodeBtnText)}</button>` : ''}
           <button class='sb-btn' type='button' data-vps-action='initialize-vps' data-host='${escAttr(selectedHost)}'>Initialize</button>
           <button class='sb-btn danger' type='button' data-vps-action='delete-vps' data-host='${escAttr(selectedHost)}'>Delete VPS</button>
@@ -12940,7 +13782,7 @@
       const label = repo === 'pbgui' ? 'PBGui' : (repo === 'pb8' ? 'PB8' : 'PB7');
       return `
 
-        <h2 class='page-section-title'>Master - ${esc(label)} Branch</h2>
+        <h2 class='page-section-title'>Master - ${esc(label)} ${repo === 'pb7' ? 'Branch' : 'Versions'}</h2>
         <div id='master-branch-panel'>${renderBranchPanelForCurrentView()}</div>`;
     }
 
@@ -13182,7 +14024,7 @@
       const label = repo === 'pbgui' ? 'PBGui' : (repo === 'pb8' ? 'PB8' : 'PB7');
       return `
 
-        <h2 class='page-section-title'>${esc(detail.hostname)} &mdash; ${label} Branch</h2>
+        <h2 class='page-section-title'>${esc(detail.hostname)} &mdash; ${label} ${repo === 'pb7' ? 'Branch' : 'Versions'}</h2>
         <div id='vps-branch-panel'>${renderBranchPanelForCurrentView()}</div>`;
     }
 
@@ -13197,9 +14039,7 @@
       }
       if (store.view === 'master-pb8-branch') {
         const detail = store.detail && store.detail.kind === 'master' ? store.detail : null;
-        return detail && (detail.status || {}).pb8_installed
-          ? renderPb7BranchPanel('master', (detail.branches || {}).pb8 || {}, 'pb8')
-          : `<div class='notice warning'>Install PB8 before opening PB8 Branch Management.</div>`;
+        return detail ? renderPb7BranchPanel('master', (detail.branches || {}).pb8 || {}, 'pb8') : '';
       }
       if (store.view === 'vps-pbgui-branch') {
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
@@ -13211,9 +14051,9 @@
       }
       if (store.view === 'vps-pb8-branch') {
         const detail = store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname ? store.detail : null;
-        return detail && (detail.status || {}).pb8_installed
+        return detail && !detail.provisional
           ? renderPb7BranchPanel(detail.hostname, (detail.branches || {}).pb8 || {}, 'pb8')
-          : `<div class='notice warning'>Install PB8 before opening PB8 Branch Management.</div>`;
+          : `<div class='notice'>Loading PB8 versions...</div>`;
       }
       return '';
     }
@@ -13229,11 +14069,11 @@
         return;
       }
       if (store.view === 'master-pbgui-branch' || store.view === 'master-pb7-branch' || store.view === 'master-pb8-branch') {
-        setHtmlIfChanged('master-branch-panel', renderBranchPanelForCurrentView());
+        setBranchPanelHtmlIfChanged('master-branch-panel', renderBranchPanelForCurrentView());
         return;
       }
       if (store.view === 'vps-pbgui-branch' || store.view === 'vps-pb7-branch' || store.view === 'vps-pb8-branch') {
-        setHtmlIfChanged('vps-branch-panel', renderBranchPanelForCurrentView());
+        setBranchPanelHtmlIfChanged('vps-branch-panel', renderBranchPanelForCurrentView());
       }
     }
 
@@ -13765,6 +14605,10 @@
       viewRoot.classList.toggle('log-view-root', isLogView);
       main.classList.toggle('log-view-active', isLogView);
       viewRoot.innerHTML = html;
+      if (isPb8BranchView()) {
+        const panel = document.getElementById(store.view === 'master-pb8-branch' ? 'master-branch-panel' : 'vps-branch-panel');
+        if (panel) panel.__lastRenderedBranchHtml = renderBranchPanelForCurrentView();
+      }
     }
 
     function initSidebarResize() {
@@ -13795,11 +14639,15 @@
         renderView(!!opts.forceView);
       }
       const runtime = activeRuntimeBranchRepo();
-      const runtimeAvailable = runtime !== 'pb8' || !!(store.detail && (store.detail.status || {}).pb8_installed);
-      if (!holdPb7BranchView && !holdPb8BranchView && !holdPbguiBranchView && runtimeAvailable && runtime && store.view === 'master-' + runtime + '-branch' && store.detail && store.detail.kind === 'master') {
+      const runtimeAvailable = true;
+      if (runtimeAvailable && runtime && store.view === 'master-' + runtime + '-branch' && store.detail && store.detail.kind === 'master') {
         syncPb7RemoteLoads('master', store.master, (store.detail.branches || {})[runtime] || {}, runtime);
-      } else if (!holdPb7BranchView && !holdPb8BranchView && !holdPbguiBranchView && runtimeAvailable && runtime && store.view === 'vps-' + runtime + '-branch' && store.hostname && store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname) {
+      } else if (runtimeAvailable && runtime && store.view === 'vps-' + runtime + '-branch' && store.hostname && store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname) {
         syncPb7RemoteLoads(store.hostname, ensureVpsUi(store.hostname, store.detail), (store.detail.branches || {})[runtime] || {}, runtime);
+      } else if (store.view === 'master-pbgui-branch' && store.detail && store.detail.kind === 'master') {
+        syncPb7RemoteLoads('master', store.master, (store.detail.branches || {}).pbgui || {}, 'pbgui');
+      } else if (store.view === 'vps-pbgui-branch' && store.hostname && store.detail && store.detail.kind === 'vps' && store.detail.hostname === store.hostname) {
+        syncPb7RemoteLoads(store.hostname, ensureVpsUi(store.hostname, store.detail), (store.detail.branches || {}).pbgui || {}, 'pbgui');
       }
       syncTaskLogViewer();
       syncDeployLogViewers();

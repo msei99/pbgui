@@ -21,27 +21,6 @@
         var: ansible_facts
       tags: debug,never
 
-    - name: remove rustc and cargo if installed via apt
-      apt:
-        name:
-        - rustc
-        - cargo
-        state: absent
-        purge: yes
-        autoremove: yes
-        clean: yes
-        lock_timeout: 300
-      become: yes
-
-    - name: Make sure rustup and gcc is installed
-      apt:
-        pkg:
-        - gcc
-        - rustup
-        clean: yes
-        lock_timeout: 300
-      become: yes
-
     - name: update server
       apt:
         update_cache: yes

@@ -1058,7 +1058,14 @@ def _worker_step_locked(queue: CloudQueue, identifier: str, *, now: float | None
                 from vast_convergence import DEFAULTS
                 preferences = state.get('gpu_preferences', {})
                 convergence_config = {key: preferences.get(key, value) for key, value in DEFAULTS.items()}
-                job_convergence = store.read(candidate['id'], 'intent.json').get('convergence_config')
+                intent_path = store.directory(candidate['id']) / 'intent.json'
+                try:
+                    intent_path.lstat()
+                except FileNotFoundError:
+                    # Existing native jobs may predate per-job convergence settings.
+                    job_convergence = None
+                else:
+                    job_convergence = store.read(candidate['id'], 'intent.json').get('convergence_config')
                 if job_convergence is not None:
                     from optimize_convergence import validate_config
                     convergence_config = validate_config(job_convergence)

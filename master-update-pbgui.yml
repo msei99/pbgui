@@ -25,9 +25,19 @@
       changed_when: false
       when: pbgdir != ""
 
+    - name: Get selected PBGui source
+      command:
+        argv: [git, remote, get-url, origin]
+      args:
+        chdir: "{{ pbgdir }}"
+      register: current_pbgui_source
+      changed_when: false
+      when: pbgdir != ""
+      no_log: true
+
     - name: clone pbgui repository
       git:
-        repo: https://github.com/msei99/pbgui.git
+        repo: "{{ current_pbgui_source.stdout }}"
         dest: "{{ pbgdir }}"
         version: "{{ current_branch.stdout }}"
         refspec: "+refs/heads/{{ current_branch.stdout }}:refs/remotes/origin/{{ current_branch.stdout }}"
@@ -35,6 +45,7 @@
         force: yes
       when: pbgdir != ""
       register: pbgui_repo
+      no_log: true
 
     - name: Reconcile pbgui requirements
       command:

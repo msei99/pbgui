@@ -1618,6 +1618,35 @@ def adjust_budget(body: BudgetRequest, session: SessionToken = Depends(require_a
 
 
 
+class JobConvergenceSettings(BaseModel):
+    """Strict complete stop policy for a single native optimizer."""
+    model_config = ConfigDict(extra='forbid')
+    convergence_enabled: bool = Field(strict=True)
+    convergence_min_exact: int = Field(strict=True, ge=256, le=10_000_000)
+    convergence_patience: int = Field(strict=True, ge=128, le=10_000_000)
+    convergence_tolerance_pct: float = Field(strict=True, allow_inf_nan=False, gt=0, le=10)
+
+
+class JobConvergenceRequest(BaseModel):
+    """Bind a reviewed settings edit to the job's currently displayed policy."""
+    model_config = ConfigDict(extra='forbid')
+    config: JobConvergenceSettings
+    expected: JobConvergenceSettings
+
+
+@router.post('/jobs/{identifier}/convergence')
+def update_job_convergence(identifier: str, body: JobConvergenceRequest,
+                           response: Response, session: SessionToken = Depends(require_auth)) -> dict:
+    """Update controller-owned stopping settings while the native optimizer keeps running."""
+    from vast_convergence import update_config
+    response.headers['Cache-Control'] = 'no-store'
+    try:
+        row = update_config(JobStore(), job_id(identifier), body.config.model_dump(), body.expected.model_dump())
+        return {'id': row['id'], 'convergence_config': row.get('convergence_config', body.config.model_dump()), 'convergence': row.get('convergence', {})}
+    except VastError as exc:
+        raise _error(exc) from None
+
+
 class EndRentalAck(BaseModel):
     """Acknowledge the attached Loops affected by ordinary rental termination."""
     model_config = ConfigDict(extra='forbid')

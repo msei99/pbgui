@@ -78,6 +78,12 @@ def log_page(request):
                     held.append(('charges', route))
                 else:
                     route.fulfill(json={'billing': {}})
+            elif path == '/api/vast/jobs/' + job['id'] + '/convergence':
+                payload = route.request.post_data_json
+                control.setdefault('convergence_posts', []).append(payload)
+                job['convergence_config'] = payload['config']
+                job['convergence'] = {}
+                route.fulfill(json={'id': job['id'], 'convergence_config': job['convergence_config'], 'convergence': {}})
             elif path.endswith('/queue/job/status'):
                 if control['hold_status']:
                     held.append(('status', route))
@@ -455,7 +461,8 @@ def test_stale_samples_groups_and_billing(log_page):
     job['convergence_config']['convergence_enabled'] = False
     page.evaluate('window.testCloudPoll()')
     page.wait_for_timeout(80)
-    assert page.locator('#optlog-convergence-group').is_hidden()
+    assert page.locator('#optlog-convergence-group').is_visible()
+    page.wait_for_function("document.getElementById('convergence-phase').textContent === 'Disabled'")
     hint = page.locator('#optlog-utilization-hint').inner_text()
     assert 'GPU —' in hint and 'Exact/min 20' in hint and 'Last interval' in hint
     job['rental'] = None
@@ -869,4 +876,37 @@ def test_local_convergence_real_editor_controls(log_page):
     page.reload()
     page.wait_for_selector('#opted-convergence-min', state='visible')
     assert page.locator('#opted-convergence-min').input_value() == '256'
+    assert not errors
+
+
+def test_live_stagnation_can_be_enabled_from_log_and_preserves_drafts(log_page):
+    """Off stays visible; polling preserves edits and Apply targets only the viewed job."""
+    page, data, queue, errors, calls, held, control = log_page
+    job = data['jobs'][0]
+    job['convergence_config'] = {'convergence_enabled': False, 'convergence_min_exact': 512,
+                                 'convergence_patience': 512, 'convergence_tolerance_pct': .25}
+    page.evaluate('window.testCloudPoll()')
+    open_cloud(page)
+    group = page.locator('#optlog-convergence-group')
+    assert not group.get_attribute('hidden')
+    if not group.evaluate('(node)=>node.open'):
+        group.locator('summary').click()
+    assert page.locator('#convergence-phase').inner_text() == 'Disabled'
+    page.locator('#job-convergence-enabled').select_option('true')
+    page.locator('#job-convergence-patience').fill('1024')
+    page.evaluate('window.testCloudPoll()')
+    page.wait_for_timeout(150)
+    assert page.locator('#job-convergence-patience').input_value() == '1024'
+    assert page.locator('#job-convergence-enabled').input_value() == 'true'
+    page.locator('#job-convergence-save').click()
+    page.wait_for_function("document.getElementById('job-convergence-message').textContent.startsWith('Enabled.')")
+    assert len(control['convergence_posts']) == 1
+    posted = control['convergence_posts'][0]
+    assert posted['expected']['convergence_enabled'] is False
+    assert posted['config']['convergence_enabled'] is True
+    assert posted['config']['convergence_patience'] == 1024
+    assert page.locator('#job-convergence-save').is_disabled()
+    page.locator('#job-convergence-patience').fill('2048')
+    page.locator('#job-convergence-discard').click()
+    assert page.locator('#job-convergence-patience').input_value() == '1024'
     assert not errors

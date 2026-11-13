@@ -1,0 +1,39 @@
+---
+# Choose the PB7 branch commit from controller variables or a controller-side
+# remote lookup. The target checkout only confirms that immutable choice.
+- name: Require selected PB7 remote URL for branch switch
+  assert:
+    that:
+      - remote_url != '' or use_pinned_ref
+    fail_msg: "Selected PB7 remote URL is missing. Choose its URL in Branch Management before switching; the controller will not use the official upstream as a fallback."
+
+- name: Select PB7 source URL from the controller request
+  set_fact:
+    pb7_wheel_source_url: "{{ 'https://github.com/enarjord/passivbot.git' if use_pinned_ref else remote_url }}"
+
+- name: Resolve selected PB7 branch head on controller
+  command:
+    argv: ["{{ ansible_playbook_python }}", "{{ playbook_dir }}/pb8_wheels.py", resolve, "--url={{ pb7_wheel_source_url }}", "--branch={{ source_branch }}"]
+  delegate_to: localhost
+  vars:
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  register: pb7_controller_head
+  changed_when: false
+  when: target_commit == ''
+
+- name: Pin controller-resolved PB7 wheel commit
+  set_fact:
+    pb7_wheel_source_commit: "{{ (pb7_controller_head.stdout | from_json).commit }}"
+  when: target_commit == ''
+
+- name: Pin explicitly selected PB7 wheel commit
+  set_fact:
+    pb7_wheel_source_commit: "{{ target_commit }}"
+  when: target_commit != ''
+
+- name: Require target PB7 commit to match controller selection
+  assert:
+    that:
+      - pb7_wheel_source_commit is match('^[0-9a-f]{40}$')
+      - resolved_commit.stdout == pb7_wheel_source_commit
+    fail_msg: "PB7 target commit differs from the controller-selected source; no runtime was stopped."

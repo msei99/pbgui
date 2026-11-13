@@ -188,7 +188,7 @@ Rankt alle Symbole nach Gesamteinnahmen und zeigt die Top-N als horizontales Bal
 Negative Einnahmen erscheinen rot. Gut für einen schnellen Performance-Überblick.
 
 Konfiguration:
-- **Top N** — Anzahl der anzuzeigenden Symbole
+- **Top N** — Anzahl der anzuzeigenden Symbole (bis zu 1.000)
 - **Period / From / To** — Zeitraum
 
 ### 📋 POSITIONS

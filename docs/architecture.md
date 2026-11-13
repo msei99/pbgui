@@ -219,3 +219,56 @@ See the [Node/npm removal audit](node_dependency_audit.md) and
 [browser test setup](../tests/README.md).
 
 - OHLCV AI Python analysis uses a trusted read-only broker for explicitly selected locally mapped markets and UTC minute ranges. It freezes numeric candles, explicit coverage gaps and optional sanitized PB8 config into the approved input; untrusted Python receives stdin only under the existing Landlock/Seccomp runtime, without Bubblewrap or AppArmor setup. No directory-wide mounts, implicit downloads, gap interpolation or silent sampling. Bounded requests split by coin/time while preserving calculation warmup.
+
+Standalone native Vast jobs may receive an authenticated, compare-and-set user edit of their controller-owned convergence policy while uploading/running, before any stop/cleanup request. This is a durable runtime override; frozen optimizer inputs, single-job rental intent, research budgets and shared preferences are unchanged. A changed policy resets observation history and establishes its baseline on the next verified exact snapshot. Policy edits and both archive/live-point observers share the per-job cross-process convergence lock, so stale observations cannot restore history or request a stop from a superseded policy. No new task, process or remote command is introduced.
+
+
+## Central PB7 and PB8 wheels
+
+Linux x86_64 PB7 and PB8 master and VPS updates use `pb8_wheels.py` through the native
+Ansible workflow. The controlling PBGui master resolves the normal PB8 update from
+the official upstream `master` ref. A branch switch uses the commit explicitly
+selected in the authenticated UI or resolves the selected branch on the controller.
+The target must confirm the same commit before any runtime change. The controller
+fetches that commit and creates the source archive locally; it never builds an
+archive or commit chosen by a target host. A user-selected fork revision executes
+its build code as the controlling PBGui user. The wheels are built
+natively on that master, which can itself be a remote master. Docker is not
+used. New builds require Python 3.12, Rust/Cargo 1.90.0, a C compiler and several
+GiB of temporary space on that master. An isolated temporary Python environment
+uses pinned build tools, private Cargo/home/temp directories and baseline x86-64
+code generation. This is directory/environment isolation, not a security sandbox;
+building executes the verified PB7 or PB8 revision as the PBGui user. Child process groups
+are terminated on failure, timeout or interruption.
+
+Auditwheel checks and repairs both wheels against the target's glibc baseline;
+newer system-library symbols cause preparation to fail rather than relabeling an
+incompatible binary. Supported targets initially require Linux x86_64, Python 3.12
+and glibc >= 2.28. Other targets fail before runtime changes.
+Per-source/archive/toolchain cache entries have cross-process build locks and atomic
+publication. Only four completed entries are retained. Each deployment gets its
+own verified artifact copy so eviction cannot invalidate an active transfer.
+Ansible owns private per-run master/runner staging and force-handler cleanup.
+No build starts at API startup or outside an explicitly requested update.
+
+Target masters receive the checked bundle in their own PBGui cache. Subsequent
+updates from that master can reuse it without a compiler or a second build when
+the immutable Git archive and target Python/architecture/glibc are compatible.
+The manifest binds the source archive hash as well as the commit and binaries.
+A different source revision or an older incompatible target needs a new build;
+an existing newer wheel is never passed off as compatible. Full master targets
+select their full/optional GPU extras from the verified source before downloading
+binary dependencies; live VPS targets retain the minimal live dependency set.
+
+The complete Python wheel, canonical Rust wheel, Cargo.lock, commit, Rust source
+fingerprint and binary checksums travel together. Preparation, transfer checks,
+binary-only dependency download and unpacked disk-capacity checks happen before
+the failed-update guard or checkout. Target hosts install offline from that stage;
+there is no Cargo/toolchain install or source-build fallback. The loaded canonical
+extension must match the manifest's binary hash and the actual checkout's source
+fingerprint before its stamp and wheel receipt are written. A source install without
+a matching receipt appears as a wheel update in VPS Manager. Only VPS runners remove
+their PB7/PB8 Rust build targets and unused account Rust/Cargo tools after every
+installed runtime has a verified wheel receipt. An unrelated toolchain or Cargo
+binary prevents shared-tool removal; masters retain build tools. VPS updates require explicit user
+permission; implementing or releasing this workflow does not authorize rollout.

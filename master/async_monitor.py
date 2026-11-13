@@ -845,6 +845,9 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
         ))
         for field in ("role", "pbgv", "pbgc", "pbgb", "pbgpy", "pb7v", "pb7c", "pb7b", "pb7py"):
             _monitor_agent_require_type(payload, field, str)
+        pbgsource = payload.get("pbgsource", "unknown")
+        if not isinstance(pbgsource, str) or pbgsource not in {"official", "custom", "unknown"}:
+            raise MonitorAgentPayloadError("invalid PBGui source kind")
         pb8_fields = ("pb8v", "pb8_config_schema", "pb8c", "pb8b", "pb8py", "pb8ready")
         if any(field in payload for field in pb8_fields):
             _monitor_agent_require(payload, pb8_fields)
@@ -853,6 +856,9 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
             if type(payload.get("pb8ready")) is not bool:
                 raise MonitorAgentPayloadError("invalid type for pb8ready")
         for field in ("pb8installed", "pb8blocked"):
+            if field in payload and type(payload.get(field)) is not bool:
+                raise MonitorAgentPayloadError(f"invalid type for {field}")
+        for field in ("pb7wheel", "pb8wheel"):
             if field in payload and type(payload.get(field)) is not bool:
                 raise MonitorAgentPayloadError(f"invalid type for {field}")
         if "pb8reason" in payload and (not isinstance(payload.get("pb8reason"), str) or len(payload["pb8reason"]) > 500):
@@ -3454,6 +3460,22 @@ def git_value(git_dir, args, default=''):
     return value or default
 
 
+def pbgui_source_kind(remote_url):
+    """Classify origin without sending its URL or credentials in telemetry."""
+    source = str(remote_url or '').strip().lower().rstrip('/')
+    if not source:
+        return 'unknown'
+    if source.endswith('.git'):
+        source = source[:-4]
+    if source in (
+        'https://github.com/msei99/pbgui',
+        'git@github.com:msei99/pbgui',
+        'ssh://git@github.com/msei99/pbgui',
+    ):
+        return 'official'
+    return 'custom'
+
+
 def python_version(exe):
     if not exe or not Path(exe).exists():
         return ''
@@ -3819,17 +3841,20 @@ result = {
     'pbgv': read_pbgui_version(PBGDIR),
     'pbgc': '',
     'pbgb': 'unknown',
+    'pbgsource': 'unknown',
     'pbgpy': 'N/A',
     'pb7v': read_pb7_version(pb7dir),
     'pb7_config_schema': read_pb7_config_schema(pb7dir),
     'pb7c': '',
     'pb7b': 'unknown',
     'pb7py': 'N/A',
+    'pb7wheel': False,
     'pb8v': read_pb7_version(pb8dir),
     'pb8_config_schema': read_pb7_config_schema(pb8dir),
     'pb8c': '',
     'pb8b': 'unknown',
     'pb8py': 'N/A',
+    'pb8wheel': False,
     'pb8installed': False,
     'pb8ready': False,
     'pb8blocked': False,
@@ -3866,6 +3891,7 @@ if api_keys and api_keys.exists():
 pbgui_git = str(Path(PBGDIR) / '.git')
 result['pbgc'] = git_value(pbgui_git, ['log', '-n', '1', '--pretty=format:%H'])
 result['pbgb'] = git_value(pbgui_git, ['rev-parse', '--abbrev-ref', 'HEAD'], 'unknown')
+result['pbgsource'] = pbgui_source_kind(git_value(pbgui_git, ['config', '--get', 'remote.origin.url']))
 
 pb7_git = str(Path(pb7dir) / '.git') if pb7dir else ''
 result['pb7c'] = git_value(pb7_git, ['log', '-n', '1', '--pretty=format:%H'])
@@ -3893,6 +3919,13 @@ if pb7_python:
 pb8_python = python_version(pb8venv)
 if pb8_python:
     result['pb8py'] = pb8_python
+try:
+    sys.path.insert(0, PBGDIR)
+    from pb_wheel_status import wheel_installed
+    result['pb7wheel'] = wheel_installed(Path(PBGDIR), 'pb7', Path(pb7dir), Path(pb7venv)) if pb7dir and pb7venv else False
+    result['pb8wheel'] = wheel_installed(Path(PBGDIR), 'pb8', Path(pb8dir), Path(pb8venv)) if pb8dir and pb8venv else False
+except Exception:
+    pass
 result['pb8installed'] = bool(
     result['pb8v'].startswith('v8.')
     and result['pb8_config_schema'].startswith('v8.')

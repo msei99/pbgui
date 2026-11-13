@@ -1,0 +1,100 @@
+---
+# Install a prepared PB7 bundle after stopping the target runtime.
+    - name: Check PB7 virtualenv
+      stat:
+        path: "{{ pb7venv }}/bin/python"
+      register: pb7_python
+
+    - name: Remove old PB7 virtualenv for Python 3.12 migration
+      file:
+        path: "{{ pb7venv }}"
+        state: absent
+      when:
+        - pb7_recreate_python312 | default(false) | bool
+        - pb7_python.stat.exists
+
+    - name: Create PB7 virtualenv
+      command:
+        argv: [python3.12, -m, venv, "{{ pb7venv }}"]
+      when: not pb7_python.stat.exists or (pb7_recreate_python312 | default(false) | bool)
+
+    - name: Install binary PB7 dependencies
+      command:
+        argv:
+          - "{{ pb7venv }}/bin/python"
+          - -m
+          - pip
+          - install
+          - --no-index
+          - "--only-binary=:all:"
+          - --find-links
+          - "{{ pb7_wheel_remote_stage.path }}/bundle"
+          - "{{ pb7_wheel_remote_stage.path }}/bundle/{{ pb7_wheel_manifest.python_wheel }}{{ '[full]' if pb7_install_profile == 'full' else '' }}"
+
+    - name: Install verified PB7 wheels
+      command:
+        argv:
+          - "{{ pb7venv }}/bin/python"
+          - -m
+          - pip
+          - install
+          - --no-index
+          - "--only-binary=:all:"
+          - --no-deps
+          - --force-reinstall
+          - "{{ pb7_wheel_remote_stage.path }}/bundle/{{ pb7_wheel_manifest.python_wheel }}"
+          - "{{ pb7_wheel_remote_stage.path }}/bundle/{{ pb7_wheel_manifest.rust_wheel }}"
+
+    - name: Install source-bound PB7 Cargo lockfile
+      copy:
+        src: "{{ pb7_wheel_remote_stage.path }}/bundle/Cargo.lock"
+        dest: "{{ pb7dir }}/passivbot-rust/Cargo.lock"
+        remote_src: true
+        mode: "0600"
+
+    - name: Validate centrally built PB7 runtime
+      script:
+        cmd: "pb8_wheels.py runtime --product pb7 --bundle {{ (pb7_wheel_remote_stage.path ~ '/bundle') | quote }} --repo {{ pb7dir | quote }} --commit {{ (pb7_wheel_source_commit | default(pb7_ref)) | quote }} --receipt {{ (pbgdir ~ '/data/state/pb7-wheel.json') | quote }}"
+        executable: "{{ pb7venv }}/bin/python"
+      changed_when: false
+
+    - name: Validate PB7 CLI
+      command:
+        argv: ["{{ pb7venv }}/bin/passivbot", --help]
+      changed_when: false
+
+    - name: Save PB7 runtime paths after validation
+      command:
+        argv:
+          - "{{ pbgui_python | default(ansible_playbook_python) }}"
+          - -c
+          - "import configparser,sys; from pbgui_purefunc import save_ini_section; c=configparser.ConfigParser(); c.read('pbgui.ini'); desired={'pb7dir':sys.argv[1],'pb7venv':sys.argv[2]}; changed=any(c.get('main',k,fallback='') != v for k,v in desired.items()); save_ini_section('main', desired) if changed else None; print('changed=' + str(changed).lower())"
+          - "{{ pb7dir }}"
+          - "{{ pb7venv }}/bin/python"
+      args:
+        chdir: "{{ pbgdir }}"
+      register: save_pb7_paths
+      changed_when: "'changed=true' in save_pb7_paths.stdout"
+
+    - name: Remove unused Rust build tools on verified VPS
+      script:
+        cmd: "pb_wheel_status.py {{ pbgdir | quote }}"
+        executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
+      register: pb7_rust_cleanup
+      changed_when: "(pb7_rust_cleanup.stdout | from_json).cleaned | default(false)"
+      when: pb7_install_profile == 'live'
+
+    - name: Report Rust cleanup result
+      debug:
+        msg: "{{ pb7_rust_cleanup.stdout }}"
+      when: pb7_install_profile == 'live'
+
+    - name: Remove obsolete Ubuntu rustup package on verified VPS
+      apt:
+        name: rustup
+        state: absent
+      become: yes
+      ignore_errors: yes
+      when:
+        - pb7_install_profile == 'live'
+        - (pb7_rust_cleanup.stdout | from_json).cleaned | default(false)

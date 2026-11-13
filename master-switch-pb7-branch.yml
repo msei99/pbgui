@@ -10,6 +10,7 @@
 
 - hosts: localhost
   gather_facts: "{{ debug }}"
+  force_handlers: true
 
   vars:
     user: "{{ user }}"
@@ -17,6 +18,8 @@
     pbgvenv: "{{ pbgvenv }}"
     pb7dir: "{{ pb7dir }}"
     pb7venv: "{{ pb7venv }}"
+    pbgui_python: "{{ ansible_playbook_python }}"
+    pb7_install_profile: full
     target_branch: "{{ pb7_branch }}"
     source_branch: "{{ pb7_source_branch | default(pb7_branch) }}"
     pb7_ref: "{{ lookup('file', playbook_dir + '/pb7_ref.txt') | trim }}"
@@ -107,6 +110,12 @@
       register: pb7_preflight
       changed_when: false
 
+    - name: Pin selected PB7 wheel source commit
+      include_tasks: tasks/pb7_branch_wheel_commit.yml
+
+    - name: Prepare central PB7 wheels before runtime changes
+      include_tasks: tasks/pb7_wheels_prepare.yml
+
     - name: Stop PBRun before changing PB7 checkout
       command:
         argv:
@@ -114,8 +123,8 @@
           - "{{ pbgdir }}/starter.py"
           - --stop
           - PBRun
-      changed_when: false
-      when: "'checkout_required=true' in pb7_preflight.stdout"
+      changed_when: true
+      notify: Recover PBRun after PB7 branch switch
 
     - name: Stop PB7 processes before changing checkout
       command:
@@ -125,27 +134,28 @@
           - --repo
           - "{{ pb7dir }}"
           - --ref
-          - "{{ resolved_commit.stdout }}"
+          - "{{ pb7_wheel_source_commit }}"
           - --expected-major
           - "7"
           - --stop-processes
           - --venv
           - "{{ pb7venv }}"
       changed_when: false
-      when: "'checkout_required=true' in pb7_preflight.stdout"
 
     - name: Checkout target branch directly at verified commit
-      command: git checkout -B "{{ target_branch }}" "{{ resolved_commit.stdout }}"
+      command: git checkout -B "{{ target_branch }}" "{{ pb7_wheel_source_commit }}"
       args:
         chdir: "{{ pb7dir }}"
       register: checkout_result
-      notify: restart pb7
 
     - name: Set target branch upstream
       command: git branch --set-upstream-to "{{ remote_name }}/{{ source_branch }}" "{{ target_branch }}"
       args:
         chdir: "{{ pb7dir }}"
       changed_when: false
+
+    - name: Install and validate central PB7 wheels
+      include_tasks: tasks/pb7_wheels_install.yml
 
     - name: Display checkout result
       debug:
@@ -157,69 +167,21 @@
       tags: debug,never
 
   handlers:
-    - name: Stop PBRun before PB7 rebuild
+    - name: Recover PBRun after PB7 branch switch
       command:
-        argv:
-          - "{{ pbgui_python | default(ansible_playbook_python) }}"
-          - "{{ pbgdir }}/starter.py"
-          - --stop
-          - PBRun
-      changed_when: false
-      listen: "restart pb7"
-      ignore_errors: yes
-
-    - name: kill all pb7 processes
-      shell: |
-        pids="$({
-          ps -ef | grep "{{ pb7dir }}/src/main.py" | grep -v grep | awk '{print $2}'
-          ps -ef | grep "{{ pb7venv }}/bin/python" | grep -v grep | awk '{print $2}'
-        } | sort -u)"
-        if [ -n "$pids" ]; then
-          kill $pids
-        fi
+        argv: ["{{ pbgui_python }}", "{{ pbgdir }}/starter.py", -s, PBRun]
       args:
-        executable: /bin/bash
-      changed_when: false
-      listen: "restart pb7"
-      ignore_errors: yes
-
-    - name: Install pb7 requirements
-      pip:
-        requirements: "{{ pb7dir }}/requirements.txt"
-        virtualenv: "{{ pb7venv }}"
-        extra_args: --upgrade pip
-      listen: "restart pb7"
-
-    - name: Build passivbot-rust with maturin
-      shell: |
-        source ~/.profile || source ~/.bashrc || true
-        source "{{ pb7venv }}/bin/activate"
-        maturin develop --release
-      args:
-        chdir: "{{ pb7dir }}/passivbot-rust"
-        executable: /bin/bash
-      register: maturin_result
-      listen: "restart pb7"
-
-    - name: Write rust source stamp after maturin build
-      shell: |
-        source "{{ pb7venv }}/bin/activate"
-        python - <<'PY'
-        import sys
-        sys.path.insert(0, 'src')
-        from rust_utils import stamp_compiled_extensions, source_fingerprint
-        stamp_compiled_extensions(source_fingerprint())
-        print('Rust source stamp updated.')
-        PY
-      args:
-        chdir: "{{ pb7dir }}"
-        executable: /bin/bash
-      listen: "restart pb7"
-
-    - name: Make sure PBRun ist running
-      shell: |
-        "{{ pbgui_python | default(ansible_playbook_python) }}" "{{ pbgdir }}/starter.py" -s PBRun
-      args:
-        executable: /bin/bash
         chdir: "{{ pbgdir }}"
-      listen: "restart pb7"
+
+    - name: Clean controller PB7 wheel staging
+      file:
+        path: "{{ pb7_wheel_master_stage.path }}"
+        state: absent
+      delegate_to: localhost
+      when: pb7_wheel_master_stage is defined and pb7_wheel_master_stage.path is defined
+
+    - name: Clean target PB7 wheel staging
+      file:
+        path: "{{ pb7_wheel_remote_stage.path }}"
+        state: absent
+      when: pb7_wheel_remote_stage is defined and pb7_wheel_remote_stage.path is defined

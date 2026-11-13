@@ -2324,7 +2324,7 @@ def _period_to_range(period: str) -> tuple:
 def get_top_data(
     users:  str = Query(default="ALL"),
     period: str = Query(default="THIS_MONTH"),
-    top:    int = Query(default=10, ge=1, le=500),
+    top:    int = Query(default=10, ge=1, le=1000),
     session: SessionToken = Depends(require_auth),
 ):
     """Return top-symbols income data as JSON for the dashboard_top.html component."""

@@ -97,6 +97,7 @@ const window={setInterval(fn,ms){assert.equal(ms,8000);callback=fn;intervals.add
   clearInterval(fn){intervals.delete(fn);}};
 const refreshCurrentPanel=()=>{requests++;return new Promise(resolve=>release=resolve);};
 const handleError=e=>{throw e;};
+const recoverPb8RuntimeWarning=()=>Promise.resolve();
 ''' + functions + r'''
 (async()=>{
   scheduleOptimizeLiveResults();assert.equal(intervals.size,1);

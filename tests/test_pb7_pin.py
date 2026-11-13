@@ -254,6 +254,14 @@ def test_stop_passivbot_processes_matches_symlinked_runtime_paths(tmp_path: Path
 def test_pb7_update_playbooks_preflight_and_use_exact_pin(playbook_path: str) -> None:
     """Every PB7 updater verifies v7 before checking out the shared pin."""
     source = Path(playbook_path).read_text(encoding="utf-8")
+    if playbook_path == "master-update-pbonly.yml":
+        assert "import_playbook: master-update-pb7.yml" in source
+        return
+    if playbook_path == "vps-pb7-python312.yml":
+        assert "import_playbook: vps-update-pb7.yml" in source
+        assert "pb7_recreate_python312: true" in source
+        assert "maturin" not in source
+        return
 
     assert "lookup('file', playbook_dir + '/pb7_ref.txt')" in source
     assert "pb7_guard.py" in source
@@ -262,14 +270,9 @@ def test_pb7_update_playbooks_preflight_and_use_exact_pin(playbook_path: str) ->
     assert "--fetch-url" in source
     assert "--checkout" in source
     assert "current_pb7_branch" not in source
-    if playbook_path == "vps-pb7-python312.yml":
-        preflight_index = source.index("Verify pinned commit is Passivbot v7 before stopping services")
-        stop_index = source.index("name: Stop PBRun")
-        checkout_index = source.index("checkout verified pinned PB7 commit")
-    else:
-        preflight_index = source.index("Fetch and verify pinned Passivbot v7")
-        stop_index = source.index("Stop PBRun before changing PB7 checkout")
-        checkout_index = source.index("Checkout verified pinned Passivbot v7")
+    preflight_index = source.index("Fetch and verify pinned Passivbot v7")
+    stop_index = source.index("Stop PBRun before replacing PB7 runtime" if playbook_path == "vps-update-pb7.yml" else "Stop PBRun before changing PB7 checkout")
+    checkout_index = source.index("Checkout verified pinned Passivbot v7")
     assert preflight_index < stop_index < checkout_index
 
 
@@ -283,7 +286,7 @@ def test_pb7_branch_switches_guard_target_before_checkout(playbook_path: str) ->
     assert "pb7_guard.py" in source
     assert "--expected-major" in source
     assert "Resolve selected PB7 ref to one immutable commit" in source
-    assert 'git checkout -B "{{ target_branch }}" "{{ resolved_commit.stdout }}"' in source
+    assert 'git checkout -B "{{ target_branch }}" "{{ pb7_wheel_source_commit }}"' in source
     assert 'git checkout "{{ target_branch }}"' not in source
     stop_index = source.index("Stop PBRun before changing PB7 checkout")
     assert guard_index < stop_index < checkout_index
@@ -291,14 +294,18 @@ def test_pb7_branch_switches_guard_target_before_checkout(playbook_path: str) ->
 
 @pytest.mark.parametrize("playbook_path", REBUILD_PLAYBOOKS)
 def test_pb7_rebuilds_stop_supervisor_and_processes_before_dependencies(playbook_path: str) -> None:
-    """PBRun and PB7 children stop before requirements or Rust are replaced."""
+    """PB7 wheel preparation precedes process stops and binary installation."""
     source = Path(playbook_path).read_text(encoding="utf-8")
-    stop_index = source.index("Stop PBRun before PB7 rebuild")
-    kill_index = source.index("name: kill all pb7 processes", stop_index)
-    install_index = source.index("name: Install pb7 requirements", kill_index)
-    build_index = source.index("name: Build passivbot-rust", install_index)
-
-    assert stop_index < kill_index < install_index < build_index
+    if playbook_path == "master-update-pbonly.yml":
+        assert "import_playbook: master-update-pb7.yml" in source
+        return
+    prepare_index = source.index("Prepare central PB7 wheels before runtime changes")
+    stop_index = source.index("Stop PBRun before replacing PB7 runtime" if playbook_path == "vps-update-pb7.yml" else "Stop PBRun before changing PB7 checkout")
+    checkout_index = source.index("Checkout target branch directly at verified commit" if playbook_path in SWITCH_PLAYBOOKS else "Checkout verified pinned Passivbot v7")
+    install_index = source.index("Install and validate central PB7 wheels")
+    assert prepare_index < stop_index < checkout_index < install_index
+    assert "maturin" not in source
+    assert "rustup update" not in source
 
 
 def test_fresh_install_paths_use_the_pb7_pin_and_guard() -> None:
@@ -315,9 +322,8 @@ def test_fresh_install_paths_use_the_pb7_pin_and_guard() -> None:
     assert f'PB7_REF="{PINNED_COMMIT}"' in legacy_source
     assert "pb7_ref.txt" not in legacy_source
     assert 'git -C pb7 checkout --detach "$PB7_REF"' in legacy_source
-    assert "Clone Passivbot without checking out upstream master" in vps_source
-    assert "Fetch, verify and checkout pinned Passivbot v7" in vps_source
-    assert "--fetch-url" in vps_source
+    assert "import_playbook: vps-update-pb7.yml" in vps_source
+    assert "Fetch and verify pinned Passivbot v7" in Path("vps-update-pb7.yml").read_text(encoding="utf-8")
 
 
 @pytest.mark.parametrize("playbook_path", SWITCH_PLAYBOOKS)

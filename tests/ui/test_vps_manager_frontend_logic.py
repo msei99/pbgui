@@ -132,6 +132,41 @@ def test_add_vps_offers_pb8_live_only_profile() -> None:
     assert "Setup and PB8 Live installation successful." in source
 
 
+def test_legacy_runtime_shows_wheel_update_even_when_git_is_current() -> None:
+    """A source-built runtime remains visibly updateable at the same commit."""
+    _run_node_assertions(
+        ["renderOverviewVersionCell"],
+        bootstrap="""
+          const getOverviewVersionCore = value => String(value || '-');
+          const getOverviewVersionTone = () => 'ok';
+          const esc = value => String(value);
+          const escAttr = value => String(value);
+        """,
+        assertions="""
+          assert.match(renderOverviewVersionCell('v7.12.0', '✅', false, '', true), /Wheel update/);
+          assert.match(renderOverviewVersionCell('v8.2.0', '✅', false, '', true), /Wheel update/);
+          assert.equal(renderOverviewVersionCell('v7.12.0', '✅', false, '', false), 'v7.12.0');
+        """,
+    )
+
+
+def test_custom_pbgui_source_has_neutral_overview_status() -> None:
+    """A fork checkout must not appear current, outdated, or warning-colored."""
+    _run_node_assertions(
+        ["getOverviewVersionTone", "renderOverviewVersionCell", "renderOverviewGithubCell"],
+        bootstrap="""
+          const getOverviewVersionCore = value => String(value || '-');
+          const esc = value => String(value);
+          const escAttr = value => String(value);
+        """,
+        assertions="""
+          assert.equal(getOverviewVersionTone('Custom source', 'v2.10.16'), 'info');
+          assert.equal(renderOverviewVersionCell('v2.10.16', 'Custom source'), 'v2.10.16');
+          assert.equal(renderOverviewGithubCell('Custom source'), 'Custom source');
+        """,
+    )
+
+
 def _extract_function(source: str, name: str) -> str:
     """Extract a named JavaScript function from the inline VPS manager script."""
     marker = f"function {name}("
@@ -1499,8 +1534,8 @@ class TestVpsManagerFrontendLogic:
         assert "st.pb8_installed ? 'Updates the installed PB8 runtime.'" in sidebar_source
         assert "PB8-only leaves PBRun disabled" not in source
 
-    def test_pb8_branch_sidebar_views_and_hash_routes_are_installed_only(self) -> None:
-        """Installed PB8 runtimes expose branch views with master and VPS context routes."""
+    def test_pb8_version_sidebar_views_and_hash_routes_allow_first_install(self) -> None:
+        """PB8 version selection is reachable before installation on master and VPS."""
         source = HTML_PATH.read_text(encoding="utf-8")
         sidebar_source = _extract_function(source, "renderSidebarActions")
         view_hash_source = _extract_function(source, "viewHash")
@@ -1509,7 +1544,7 @@ class TestVpsManagerFrontendLogic:
         branch_panel_source = _extract_function(source, "renderBranchPanelForCurrentView")
         host_switch_source = _extract_function(source, "selectSidebarVpsHost")
 
-        assert sidebar_source.count("st.pb8_installed ? `<button") == 2
+        assert sidebar_source.count('>PB8 Versions</button>') == 2
         assert 'selectView("master-pb8-branch")' in sidebar_source
         assert "data-view='vps-pb8-branch'" in sidebar_source
         assert "'#master/pb8-branch'" in view_hash_source
@@ -1518,8 +1553,8 @@ class TestVpsManagerFrontendLogic:
         assert "selectView('vps-pb8-branch', hostname)" in restore_source
         assert "renderMasterBranchView('pb8')" in render_view_source
         assert "renderVpsBranchView('pb8')" in render_view_source
-        assert branch_panel_source.count("(detail.status || {}).pb8_installed") == 2
-        assert "store.view === 'vps-pb8-branch' && !row.pb8_installed" in host_switch_source
+        assert "(detail.status || {}).pb8_installed" not in branch_panel_source
+        assert "store.view === 'vps-pb8-branch' && !row.pb8_installed" not in host_switch_source
 
     def test_pb7_and_pb8_branch_state_and_remote_caches_are_independent(self) -> None:
         """Each runtime keeps distinct branch selections and remote response caches."""
@@ -1595,6 +1630,56 @@ class TestVpsManagerFrontendLogic:
             ["runtimeBranchKeys", "isPb7BranchView", "isPb8BranchView", "activeRuntimeBranchRepo", "takeRuntimeBranchRequest", "handleMessage"],
             bootstrap=bootstrap,
             assertions=assertions,
+        )
+
+    def test_pb8_version_lookup_recovers_from_timeout_and_disconnect(self) -> None:
+        """A lost branch response must leave Loading and retry after reconnect."""
+        _run_node_assertions(
+            [
+                "runtimeBranchKeys", "resetRuntimeBranchRequests", "failPb8VersionRequest",
+                "beginRuntimeBranchRequest", "takeRuntimeBranchRequest",
+            ],
+            bootstrap="""
+                const timers = new Map();
+                let nextTimer = 0;
+                const setTimeout = callback => { const id = ++nextTimer; timers.set(id, callback); return id; };
+                const clearTimeout = id => timers.delete(id);
+                const runTimer = id => { const callback = timers.get(id); timers.delete(id); callback(); };
+                let renders = 0;
+                let panelSyncs = 0;
+                const renderUi = () => { renders += 1; };
+                const syncBranchViewPanel = () => { panelSyncs += 1; };
+                const url = 'https://github.com/enarjord/passivbot.git';
+                const store = {
+                  master: { pb8RemoteUrl: url, pb8RemoteBranchesKey: 'origin|' + url,
+                    pb8RemoteBranchesRequest: '', pb8RemoteBranchesError: '', pb8RemoteRetryTimer: 0 },
+                  vps: {}, pendingBranchRequests: {}, pendingWsMessages: [], branchRequestCounter: 0
+                };
+            """,
+            assertions="""
+                const first = beginRuntimeBranchRequest('master', 'pb8', 'branches', url, '');
+                runTimer(store.pendingBranchRequests[first].timeoutId);
+                assert.equal(store.master.pb8RemoteBranchesRequest, '');
+                assert.equal(store.master.pb8RemoteBranchesError, 'PB8 version lookup timed out.');
+                assert.equal(panelSyncs, 1);
+                assert.equal(Object.keys(store.pendingBranchRequests).length, 0);
+                runTimer(store.master.pb8RemoteRetryTimer);
+                assert.equal(store.master.pb8RemoteBranchesKey, '');
+                assert.equal(renders, 1);
+
+                store.master.pb8RemoteBranchesKey = 'origin|' + url;
+                const second = beginRuntimeBranchRequest('master', 'pb8', 'branches', url, '');
+                store.pendingWsMessages = [
+                  {cmd:'load_remote_branches',request_id:second}, {cmd:'set_context'}
+                ];
+                resetRuntimeBranchRequests();
+                assert.equal(store.master.pb8RemoteBranchesRequest, '');
+                assert.equal(store.master.pb8RemoteBranchesKey, '');
+                assert.equal(store.master.pb8RemoteBranchesError, 'Connection interrupted while loading PB8 versions.');
+                assert.equal(Object.keys(store.pendingBranchRequests).length, 0);
+                assert.deepEqual(store.pendingWsMessages, [{cmd:'set_context'}]);
+                assert.equal(timers.size, 0);
+            """,
         )
 
     def test_remote_head_is_used_without_manual_remote_branch_override(self) -> None:
@@ -1688,70 +1773,240 @@ class TestVpsManagerFrontendLogic:
             assertions=assertions,
         )
 
-    def test_pb8_branch_select_handler_survives_html_attribute_parsing(self) -> None:
-        """Rendered PB8 onchange code must remain complete and update the selected branch."""
+    def test_pb8_version_table_is_searchable_and_sorted_by_commit_time(self) -> None:
+        """PB8 renders a branch table with newest heads first and search across all names."""
         bootstrap = """
-        const calls = [];
-        const branchState = {
-          current_branch: 'master',
-          current_commit: 'current',
-          branches: {
-            master: [{ full: 'current' }],
-            'codex/gpu-tma-market-foundation': [{ full: 'gpu-head' }]
-          },
-          known_remotes: ['origin'],
-          remote_urls: { origin: 'https://example.test/passivbot.git' },
-          branch_tracking_remotes: {},
-          default_remote_name: 'origin'
-        };
-        const store = {
-          master: {
-            pb8Branch: 'master', pb8Commit: 'HEAD', pb8ManualBranch: '', pb8ManualCommit: '',
-            pb8RemoteName: 'origin', pb8RemoteUrl: 'https://example.test/passivbot.git',
-            pb8RemoteBranches: [], pb8RemoteCommits: {}
-          },
-          detail: { kind: 'master', branches: { pb8: branchState } }
-        };
-        function ensureVpsUi() { throw new Error('not expected'); }
-        function js(value) { return JSON.stringify(value == null ? '' : String(value)); }
-        function esc(value) { return String(value == null ? '' : value); }
-        function escAttr(value) { return esc(value); }
-        function shortHash(value) { return String(value || '').slice(0, 8); }
-        function syncBranchViewPanel() {}
-        function renderBranchMessage() { return ''; }
-        function renderMissingCommitsPanel() { return ''; }
-        function renderCommitDetails() { return ''; }
-        function setPb7LocalBranch(scope, value, runtime) { calls.push({ scope, value, runtime }); }
+        const window = {sessionStorage:{setItem(){}}};
+        const url = 'https://example.test/passivbot.git';
+        const branchState = {current_branch:'master',current_commit:'current',
+          source_options:[{name:'origin',url:url,label:'Official'}]};
+        const branches = Array.from({length:150}, (_,index) => 'codex/v9-' + index).concat(['v9','master']);
+        const store = {master:{pb8Branch:'master',pb8RemoteName:'origin',pb8RemoteUrl:url,
+          pb8RemoteBranches:branches,pb8RemoteVersions:[{name:'master',updated_at:100},
+            {name:'v9',updated_at:300},{name:'codex/v9-149',updated_at:200}],
+          pb8RemoteBranchesKey:'origin|'+url,pb8RemoteBranchesRequest:'',pb8VersionRestored:true,
+          pb8VersionFilter:'',pb8VersionPage:0},
+          detail:{kind:'master',branches:{pb8:branchState}}};
+        function ensureVpsUi(){throw new Error('unexpected');}
+        function js(value){return JSON.stringify(value);}
+        function esc(value){return String(value == null ? '' : value);}
+        function escAttr(value){return esc(value);}
+        function shortHash(value){return String(value || '').slice(0,8);}
+        function syncBranchViewPanel(){}
         """
         assertions = """
-        const html = renderPb7BranchPanel('master', branchState, 'pb8');
-        const handlers = Array.from(html.matchAll(/onchange='([^']*)'/g), match => match[1]);
-        const handler = handlers.find(value => value.includes('setPb7LocalBranch'));
-        assert.ok(handler, 'complete local branch onchange handler is present');
-        const run = new Function('store', 'setPb7LocalBranch', 'syncBranchViewPanel', handler);
-        run.call({ value: 'codex/gpu-tma-market-foundation' }, store, setPb7LocalBranch, syncBranchViewPanel);
-        assert.deepEqual(calls, [{ scope: 'master', value: 'codex/gpu-tma-market-foundation', runtime: 'pb8' }]);
+        let context = pb8VersionContext('master',branchState);
+        assert.equal(context.rows[0].name,'v9');
+        assert.equal(context.rows[1].name,'codex/v9-149');
+        assert.equal(context.pageRows.length,25);
+        assert.equal(context.pageCount,7);
+        let html = renderPb8VersionPanel('master',branchState);
+        assert.match(html,/id='pb8-version-search'/);
+        assert.match(html,/id='pb8-version-rows'/);
+        assert.match(html,/Last updated ↓/);
+        assert.match(html,/Page 1 of 7/);
+        store.master.pb8VersionFilter='v9';
+        context = pb8VersionContext('master',branchState);
+        assert.equal(context.rows.length,151);
+        assert.equal(context.rows[0].name,'v9');
+        assert.equal(context.pageCount,7);
+        store.master.pb8VersionPage=6;
+        context = pb8VersionContext('master',branchState);
+        assert.equal(context.pageRows.length,1);
+        assert.equal(context.selected,'master');
+        html = renderPb8VersionPanel('master',branchState);
+        assert.match(html,/Page 7 of 7/);
         """
         _run_node_assertions(
-            ["runtimeBranchKeys", "branchModel", "pb7BranchModel", "renderPb7BranchPanel"],
+            ["pb8VersionSources", "filterPb8Versions", "pb8VersionContext", "versionCommitLabel",
+             "savePb8VersionSelection", "pb8VersionUpdatedText", "pb8VersionRowHtml",
+             "renderPb8VersionPanel"],
+            bootstrap=bootstrap, assertions=assertions,
+        )
+
+    def test_pbgui_version_table_and_master_install(self) -> None:
+        """PBGui searches all branches and installs the selected master fork version."""
+        bootstrap = """
+        const window = {sessionStorage:{getItem(){return null;},setItem(){}}};
+        const url = 'https://github.com/example/pbgui.git';
+        const branchState = {current_branch:'master',current_commit:'abcdef01',
+          source_options:[{name:'fork',url:url,label:'Fork'}]};
+        const branches = Array.from({length:150}, (_,index) => 'codex/v9-' + index).concat(['v9','master']);
+        const store = {master:{pbguiBranch:'master',pbguiRemoteName:'fork',pbguiRemoteUrl:url,
+          pbguiRemoteBranches:branches,pbguiRemoteVersions:[{name:'master',updated_at:100},
+            {name:'v9',updated_at:300},{name:'codex/v9-149',updated_at:200}],
+          pbguiRemoteBranchesKey:'fork|'+url,pbguiRemoteBranchesRequest:'',pbguiVersionRestored:true,
+          pbguiVersionFilter:'',pbguiVersionPage:0},
+          detail:{kind:'master',branches:{pbgui:branchState}}};
+        const actions = [];
+        function runMasterWithLog(...args){actions.push(args);}
+        function ensureVpsUi(){throw new Error('unexpected');}
+        function js(value){return JSON.stringify(value);}
+        function esc(value){return String(value == null ? '' : value);}
+        function escAttr(value){return esc(value);}
+        function shortHash(value){return String(value || '').slice(0,8);}
+        """
+        assertions = """
+        let context = pbguiVersionContext('master',branchState);
+        assert.equal(context.rows[0].name,'v9');
+        assert.equal(context.rows[1].name,'codex/v9-149');
+        assert.equal(context.pageRows.length,25);
+        assert.equal(context.pageCount,7);
+        assert.match(renderPbguiBranchPanel('master',branchState),/Page 1 of 7/);
+        store.master.pbguiVersionFilter='v9';
+        context = pbguiVersionContext('master',branchState);
+        assert.equal(context.rows.length,151);
+        assert.equal(context.rows[0].name,'v9');
+        store.master.pbguiVersionPage=6;
+        assert.equal(pbguiVersionContext('master',branchState).pageRows.length,1);
+        store.master.pbguiBranch='v9';
+        installPbguiVersion('master');
+        assert.deepEqual(actions,[['master-switch-pbgui-branch','Install PBGui v9',
+          {branch:'v9',source_url:url}]]);
+        const oldCommit='a'.repeat(40);
+        store.master.pbguiCommit='a'.repeat(39);
+        installPbguiVersion('master');
+        assert.equal(actions.length,1);
+        store.master.pbguiCommit=oldCommit;
+        installPbguiVersion('master');
+        assert.deepEqual(actions[1],['master-switch-pbgui-branch','Install PBGui v9 @ aaaaaaaa',
+          {branch:'v9',source_url:url,commit:oldCommit}]);
+        """
+        _run_node_assertions(
+            ["pbguiVersionSources", "savedPbguiVersionSelection", "savePbguiVersionSelection",
+             "pbguiVersionContext", "filterPb8Versions", "versionCommitLabel", "pb8VersionUpdatedText",
+             "pb8VersionRowHtml", "renderPbguiBranchPanel", "installPbguiVersion"],
+            bootstrap=bootstrap, assertions=assertions,
+        )
+
+    def test_pb8_version_search_and_page_restore_after_reload(self) -> None:
+        """A search and page persist without replacing the explicitly selected branch."""
+        bootstrap = """
+        let saved = '';
+        const window = {sessionStorage:{getItem(){return saved;},setItem(_key,value){saved=value;}}};
+        const url='https://github.com/enarjord/passivbot.git';
+        const state={current_branch:'master',source_options:[{name:'origin',url:url}]};
+        const store={master:{pb8Branch:'master',pb8RemoteName:'origin',pb8RemoteUrl:url,
+          pb8RemoteBranches:Array.from({length:55},(_,i)=>'v9-'+i).concat(['master']),
+          pb8RemoteBranchesKey:'origin|'+url,pb8RemoteBranchesRequest:'',pb8VersionRestored:true,
+          pb8VersionFilter:'v9',pb8VersionPage:1,pb8VersionExplicit:false}};
+        function ensureVpsUi(){throw new Error('unexpected');}
+        """
+        assertions = """
+        savePb8VersionSelection('master',store.master);
+        assert.equal(JSON.parse(saved).page,1);
+        assert.equal(JSON.parse(saved).filter,'v9');
+        store.master.pb8VersionRestored=false;
+        store.master.pb8VersionFilter='';
+        store.master.pb8VersionPage=0;
+        store.master.pb8RemoteBranches=[];
+        store.master.pb8RemoteBranchesRequest='pending';
+        let context=pb8VersionContext('master',state);
+        assert.equal(context.ui.pb8VersionFilter,'v9');
+        assert.equal(context.ui.pb8VersionPage,1);
+        store.master.pb8RemoteBranches=Array.from({length:55},(_,i)=>'v9-'+i).concat(['master']);
+        store.master.pb8RemoteBranchesRequest='';
+        context=pb8VersionContext('master',state);
+        assert.equal(context.pageRows.length,25);
+        assert.equal(context.selected,'master');
+        """
+        _run_node_assertions(
+            ["pb8VersionSources", "savedPb8VersionSelection", "savePb8VersionSelection",
+             "filterPb8Versions", "pb8VersionContext"],
+            bootstrap=bootstrap, assertions=assertions,
+        )
+
+    def test_pb8_version_defaults_to_installed_branch_after_legacy_search(self) -> None:
+        """An old auto-selected search result must not replace the installed default."""
+        bootstrap = """
+        const saved = {'pbgui.pb8-version-selection.v1': JSON.stringify({
+          scope:'master',source_url:'https://github.com/enarjord/passivbot.git',
+          branch:'codex/v9-fill-dashboard-loopback',filter:''
+        })};
+        const window = {sessionStorage:{getItem(key){return saved[key] || null;}}};
+        const url = 'https://github.com/enarjord/passivbot.git';
+        const state = {current_branch:'master',source_options:[{name:'origin',url:url}]};
+        const store = {master:{pb8Branch:'master',pb8RemoteName:'origin',pb8RemoteUrl:url,
+          pb8VersionRestored:false,pb8RemoteBranches:['master','codex/v9-fill-dashboard-loopback'],
+          pb8RemoteBranchesKey:'origin|'+url,pb8RemoteBranchesRequest:''}};
+        function ensureVpsUi() {throw new Error('not expected');}
+        """
+        assertions = """
+        assert.equal(pb8VersionContext('master',state).selected,'master');
+        saved['pbgui.pb8-version-selection.v2'] = JSON.stringify({scope:'master',source_url:url,
+          branch:'codex/v9-fill-dashboard-loopback',explicit:true,filter:''});
+        store.master.pb8VersionRestored = false;
+        assert.equal(pb8VersionContext('master',state).selected,'codex/v9-fill-dashboard-loopback');
+        """
+        _run_node_assertions(
+            ["pb8VersionSources", "savedPb8VersionSelection", "filterPb8Versions", "pb8VersionContext"],
             bootstrap=bootstrap,
             assertions=assertions,
         )
 
-    def test_pb8_branch_selects_hold_live_rerenders_and_guides_match(self) -> None:
-        """PB8 selectors resist live replacement and both guides document explicit tracking."""
+    def test_pb8_version_install_uses_selected_controller_source(self) -> None:
+        """Install PB8 passes the selected fork and branch to the existing wheel update command."""
+        bootstrap = """
+        const calls = [];
+        const url = 'https://github.com/example/passivbot.git';
+        const state = {current_branch:'unknown',current_commit:'',source_options:[
+          {name:'origin',url:'https://github.com/enarjord/passivbot.git',label:'Official'},
+          {name:'pbgui-fork',url:url,label:'Fork'}
+        ]};
+        const selected = {pb8RemoteName:'pbgui-fork',pb8RemoteUrl:url,pb8Branch:'v8-feature',
+          pb8RemoteBranches:['master','v8-feature'],pb8RemoteBranchesKey:'pbgui-fork|'+url,
+          pb8RemoteBranchesRequest:'',pb8VersionRestored:true};
+        const store = {master:Object.assign({},selected),vps:{runner:Object.assign({},selected)},
+          detail:{kind:'master',branches:{pb8:state}}};
+        function ensureVpsUi(hostname) { return store.vps[hostname]; }
+        function runMasterWithLog(command,label,vars) { calls.push({scope:'master',command,label,vars}); }
+        function runVpsWithLog(hostname,command,label,vars) { calls.push({scope:hostname,command,label,vars}); }
+        function shortHash(value) { return String(value || '').slice(0,7); }
+        function clearPb7RemoteCache() { throw new Error('Selected source must be retained'); }
+        """
+        assertions = """
+        installPb8Version('master');
+        store.detail = {kind:'vps',hostname:'runner',branches:{pb8:state}};
+        installPb8Version('runner');
+        assert.equal(calls.length,2);
+        assert.equal(calls[0].command,'master-update-pb8');
+        assert.equal(calls[1].command,'vps-update-pb8');
+        for (const call of calls) {
+          assert.deepEqual(call.vars,{pb8_branch:'v8-feature',pb8_source_branch:'v8-feature',
+            pb8_remote_name:'pbgui-fork',pb8_remote_url:url});
+        }
+        store.vps.runner.pb8Commit='c'.repeat(39);
+        installPb8Version('runner');
+        assert.equal(calls.length,2);
+        store.vps.runner.pb8Commit='c'.repeat(40);
+        installPb8Version('runner');
+        assert.equal(calls[2].vars.pb8_commit,'c'.repeat(40));
+        store.detail = {kind:'master',branches:{pb8:state}};
+        store.master.pb8Commit='d'.repeat(40);
+        installPb8Version('master');
+        assert.equal(calls[3].vars.pb8_commit,'d'.repeat(40));
+        """
+        _run_node_assertions(
+            ["pb8VersionSources", "filterPb8Versions", "pb8VersionContext", "installPb8Version"],
+            bootstrap=bootstrap,
+            assertions=assertions,
+        )
+
+    def test_pb8_version_selects_hold_live_rerenders_and_guides_match(self) -> None:
+        """PB8 version selectors resist live replacement and both guides describe installation."""
         source = HTML_PATH.read_text(encoding="utf-8")
         render_ui_source = _extract_function(source, "renderUi")
         sync_source = _extract_function(source, "syncBranchViewPanel")
-        panel_source = _extract_function(source, "renderPb7BranchPanel")
+        panel_source = _extract_function(source, "renderPb8VersionPanel")
         english = (ROOT / "docs" / "help" / "32_vps_manager.md").read_text(encoding="utf-8")
         german = (ROOT / "docs" / "help_de" / "32_vps_manager.md").read_text(encoding="utf-8")
 
         assert "holdPb8BranchView" in render_ui_source
         assert "store.pb8BranchSelectInteracting && isPb8BranchView()" in sync_source
-        assert panel_source.count("onfocus='store.${interactionField} = true'") >= 5
-        assert "PB8 Branch Management" in english
-        assert "PB8 Branch Management" in german
+        assert "id='pb8-version-search'" in panel_source
+        assert "id='pb8-version-rows'" in panel_source
+        assert "PB8 Versions" in english
+        assert "PB8 Versions" in german
         assert "normal **Update PB8**" in english
         assert "normale Aktion **Update PB8**" in german
 

@@ -188,7 +188,7 @@ Ranks all symbols by total income and displays the top N as a horizontal bar cha
 Negative earners appear in red. Good for a quick performance ranking at a glance.
 
 Configuration:
-- **Top N** — how many symbols to include
+- **Top N** — how many symbols to include (up to 1,000)
 - **Period / From / To** — time range
 
 ### 📋 POSITIONS

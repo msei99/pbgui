@@ -74,7 +74,7 @@
                 if (seq !== loadSeq || !isCurrentGeneration()) return;
                 /* ── Top N control ── */
                 var topNCtrl = document.createElement('input');
-                topNCtrl.type = 'number'; topNCtrl.min = 1; topNCtrl.max = 500; topNCtrl.step = 1;
+                topNCtrl.type = 'number'; topNCtrl.min = 1; topNCtrl.max = 1000; topNCtrl.step = 1;
                 topNCtrl.value = currentTop;
                 topNCtrl.className = 'dt-ctrl-num';
                 topNCtrl.addEventListener('change', function () {

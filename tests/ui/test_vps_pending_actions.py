@@ -131,6 +131,7 @@ function clearTimeout(id) { timers.delete(id); }
 const refreshLocalInteractiveState = () => {};
 const filterDeletedOverviewHosts = () => {}, maybeRefreshCompletedVpsTask = () => {};
 const reconcileCurrentVpsContext = () => false;
+const resetRuntimeBranchRequests = () => {};
 const renderSummaryBar = () => {}, scheduleReconnect = () => { reconnects++; };
 const isVpsContextView = () => false;
 class WebSocket {

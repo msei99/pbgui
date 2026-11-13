@@ -12,7 +12,7 @@
     pbgui_python: "{{ install_dir }}/venv_pbgui/bin/python"
     pb8dir: "{{ install_dir }}/pb8"
     pb8venv: "{{ install_dir }}/venv_pb8"
-    pb8_required_free_bytes: "{{ pb8_min_free_bytes | default(3221225472) | int }}"
+    pb8_required_free_bytes: "{{ pb8_min_free_bytes | default(536870912 if pb8_install_profile == 'live' else 3221225472) | int }}"
     pb8_branch_switch: "{{ (pb8_branch | default('') | string | trim | length) > 0 }}"
     pb8_target_branch: "{{ pb8_branch | default('master') }}"
     pb8_source_branch_value: "{{ pb8_source_branch | default(pb8_target_branch) }}"
@@ -74,54 +74,11 @@
         executable: "{{ pbgui_python }}"
       notify: Release PB8 update writer ownership
 
-    - name: Check PB8 prerequisites
-      shell: |
-        command -v git
-        command -v curl
-        command -v gcc
-        command -v python3.12
-        python3.12 -c 'import venv, ensurepip'
-      args:
-        executable: /bin/bash
-      changed_when: false
-
-    - name: Install rustup when missing
-      shell: |
-        if ! command -v rustup >/dev/null 2>&1; then
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
-        fi
-      args:
-        executable: /bin/bash
-
-    - name: Install PB8 Rust toolchain
-      shell: |
-        if [ -f "$HOME/.cargo/env" ]; then
-          source "$HOME/.cargo/env"
-        fi
-        rustup toolchain install 1.90.0
-      args:
-        executable: /bin/bash
-      changed_when: false
-
     - name: Ensure PB8 update state directory exists
       file:
         path: "{{ pbgdir }}/data/locks"
         state: directory
         mode: "0700"
-
-    - name: Mark PB8 runtime unavailable until validation completes
-      copy:
-        dest: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
-        content: "PB8 installation or update in progress\n"
-        mode: "0600"
-      when: not pb8_branch_switch
-
-    - name: Wait for already-starting PB8 runners to cross the launch boundary
-      script:
-        cmd: "master_update_lock.py --barrier {{ pbgdir | quote }} --timeout 120"
-        executable: "{{ pbgui_python }}"
-      changed_when: false
-      when: not pb8_branch_switch
 
     - name: Inspect existing PB8 checkout
       stat:
@@ -138,12 +95,12 @@
         msg: "PB8 target exists but is not a Git checkout: {{ pb8dir }}"
       when: not pb8_git.stat.exists and pb8_target.stat.exists
 
-    - name: Require installed PB8 checkout for branch switch
-      assert:
-        that:
-          - pb8_git.stat.exists
-        fail_msg: "Install PB8 before switching its branch."
-      when: pb8_branch_switch
+    # A clone left by an interrupted first install has no index yet; its
+    # "deleted" entries are not local work and must not block the retry.
+    - name: Inspect PB8 checkout index
+      stat:
+        path: "{{ pb8dir }}/.git/index"
+      register: pb8_git_index
 
     - name: Check PB8 checkout for tracked changes
       command:
@@ -156,14 +113,14 @@
         chdir: "{{ pb8dir }}"
       register: pb8_git_status
       changed_when: false
-      when: pb8_branch_switch
+      when: pb8_branch_switch and pb8_git_index.stat.exists
 
     - name: Refuse PB8 branch switch with tracked changes
       assert:
         that:
           - pb8_git_status.stdout == ''
         fail_msg: "Uncommitted tracked changes detected in PB8. Commit or stash them before switching branches."
-      when: pb8_branch_switch
+      when: pb8_branch_switch and pb8_git_index.stat.exists
 
     - name: Clone official Passivbot without checking out source
       command:
@@ -211,21 +168,6 @@
         - not pb8_git.stat.exists
         - not pb8_branch_switch
 
-    - name: Checkout verified official Passivbot v8 commit
-      command:
-        argv:
-          - "{{ pbgui_python }}"
-          - "{{ pbgdir }}/pb7_guard.py"
-          - --repo
-          - "{{ pb8dir }}"
-          - --ref
-          - refs/remotes/pbgui-pb7-pin/master
-          - --expected-major
-          - "8"
-          - --checkout
-      register: pb8_repo
-      changed_when: "'checkout_changed=true' in pb8_repo.stdout"
-      when: not pb8_branch_switch
 
     - name: Inspect selected PB8 remote
       command:
@@ -342,6 +284,42 @@
       changed_when: false
       when: pb8_branch_switch
 
+    - name: Prepare central PB8 wheels before runtime changes
+      include_tasks: tasks/pb8_live_wheels_prepare.yml
+
+    - name: Mark PB8 runtime unavailable until validation completes
+      copy:
+        dest: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
+        content: "PB8 installation or update in progress\n"
+        mode: "0600"
+      when: not pb8_branch_switch
+
+
+    - name: Wait for already-starting PB8 runners to cross the launch boundary
+      script:
+        cmd: "master_update_lock.py --barrier {{ pbgdir | quote }} --timeout 120"
+        executable: "{{ pbgui_python }}"
+      changed_when: false
+      when: not pb8_branch_switch
+
+
+    - name: Checkout verified official Passivbot v8 commit
+      command:
+        argv:
+          - "{{ pbgui_python }}"
+          - "{{ pbgdir }}/pb7_guard.py"
+          - --repo
+          - "{{ pb8dir }}"
+          - --ref
+          - "{{ pb8_wheel_commit.stdout }}"
+          - --expected-major
+          - "8"
+          - --checkout
+      register: pb8_repo
+      changed_when: "'checkout_changed=true' in pb8_repo.stdout"
+      when: not pb8_branch_switch
+
+
     - name: Wait for starting PB8 runners before branch checkout
       script:
         cmd: "master_update_lock.py --barrier {{ pbgdir | quote }} --timeout 120"
@@ -363,7 +341,7 @@
           - checkout
           - -B
           - "{{ pb8_target_branch }}"
-          - "{{ pb8_resolved_commit.stdout }}"
+          - "{{ pb8_wheel_commit.stdout }}"
       args:
         chdir: "{{ pb8dir }}"
       register: pb8_branch_checkout
@@ -397,60 +375,45 @@
           - "{{ pb8venv }}"
       when: not pb8_python.stat.exists
 
-    - name: Upgrade PB8 pip
+    - name: Install binary PB8 dependencies
       command:
         argv:
           - "{{ pb8venv }}/bin/python"
           - -m
           - pip
           - install
-          - --upgrade
-          - pip
+          - --no-index
+          - "--only-binary=:all:"
+          - --find-links
+          - "{{ pb8_wheel_remote_stage.path }}/bundle"
+          - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.python_wheel }}{{ pb8_wheel_extras }}"
 
-    - name: Select PB8 GPU dependencies on target host
+    - name: Install verified PB8 wheels
+      command:
+        argv:
+          - "{{ pb8venv }}/bin/python"
+          - -m
+          - pip
+          - install
+          - --no-index
+          - "--only-binary=:all:"
+          - --no-deps
+          - --force-reinstall
+          - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.python_wheel }}"
+          - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.rust_wheel }}"
+
+    - name: Install source-bound PB8 Cargo lockfile
+      copy:
+        src: "{{ pb8_wheel_remote_stage.path }}/bundle/Cargo.lock"
+        dest: "{{ pb8dir }}/passivbot-rust/Cargo.lock"
+        remote_src: true
+        mode: "0600"
+
+    - name: Validate centrally built PB8 runtime
       script:
-        cmd: "pb8_gpu_install.py {{ pb8dir | quote }} --gpu {{ pb8_gpu_profile | default('auto') | quote }}"
+        cmd: "pb8_wheels.py runtime --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --repo {{ pb8dir | quote }} --commit {{ pb8_wheel_commit.stdout | quote }} --receipt {{ (pbgdir ~ '/data/state/pb8-wheel.json') | quote }}"
         executable: "{{ pb8venv }}/bin/python"
-      register: pb8_gpu_dependencies
       changed_when: false
-      when: pb8_install_profile == 'full'
-
-    - name: Validate PB8 GPU dependency profile
-      assert:
-        that:
-          - pb8_gpu_dependencies.stdout | trim in ['full', 'full,gpu-mps', 'full,gpu-cuda']
-      when: pb8_install_profile == 'full'
-
-    - name: Install PB8 full profile
-      shell: |
-        if [ -f "$HOME/.cargo/env" ]; then
-          source "$HOME/.cargo/env"
-        fi
-        "{{ pb8venv }}/bin/python" -m pip install --no-cache-dir --upgrade -e {{ (pb8dir ~ '[' ~ (pb8_gpu_dependencies.stdout | trim) ~ ']') | quote }}
-      args:
-        executable: /bin/bash
-      when: pb8_install_profile == 'full'
-
-    - name: Install PB8 live profile
-      shell: |
-        if [ -f "$HOME/.cargo/env" ]; then
-          source "$HOME/.cargo/env"
-        fi
-        "{{ pb8venv }}/bin/python" -m pip install --no-cache-dir --upgrade -e "{{ pb8dir }}"
-      args:
-        executable: /bin/bash
-      when: pb8_install_profile == 'live'
-
-    - name: Install PB8 Rust build helper
-      command:
-        argv:
-          - "{{ pb8venv }}/bin/python"
-          - -m
-          - pip
-          - install
-          - --upgrade
-          - -r
-          - "{{ pb8dir }}/requirements-rust.txt"
 
     - name: Validate PB8 CLI
       command:
@@ -459,21 +422,33 @@
           - --help
       changed_when: false
 
-    - name: Rebuild and validate PB8 Rust extension
+    - name: Validate PB8 schema without source compilation
       command:
         argv:
           - "{{ pb8venv }}/bin/python"
           - -c
-          - "from rust_utils import check_and_maybe_compile, verify_loaded_runtime_extension; check_and_maybe_compile(force=True); import passivbot_rust; verify_loaded_runtime_extension(); from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
+          - "from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
       args:
         chdir: "{{ pb8dir }}"
       changed_when: false
 
-    - name: Remove PB8 Rust build artifacts on live-only runners
-      file:
-        path: "{{ pb8dir }}/passivbot-rust/target"
-        state: absent
+    - name: Remove unused Rust build tools on verified VPS
+      script:
+        cmd: "pb_wheel_status.py {{ pbgdir | quote }}"
+        executable: "{{ pbgui_python }}"
+      register: pb8_rust_cleanup
+      changed_when: "(pb8_rust_cleanup.stdout | from_json).cleaned | default(false)"
       when: pb8_install_profile == 'live'
+
+    - name: Remove obsolete Ubuntu rustup package on verified VPS
+      apt:
+        name: rustup
+        state: absent
+      become: yes
+      ignore_errors: yes
+      when:
+        - pb8_install_profile == 'live'
+        - (pb8_rust_cleanup.stdout | from_json).cleaned | default(false)
 
     - name: Save PB8 runtime paths after validation
       command:
@@ -612,3 +587,18 @@
       file:
         path: "{{ install_dir }}/.pbgui-pb8-update-active"
         state: absent
+
+    - name: Clean master PB8 wheel staging
+      file:
+        path: "{{ pb8_wheel_master_stage.path }}"
+        state: absent
+      delegate_to: localhost
+      vars:
+        ansible_python_interpreter: "{{ ansible_playbook_python }}"
+      when: pb8_wheel_master_stage is defined and pb8_wheel_master_stage.path is defined
+
+    - name: Clean runner PB8 wheel staging
+      file:
+        path: "{{ pb8_wheel_remote_stage.path }}"
+        state: absent
+      when: pb8_wheel_remote_stage is defined and pb8_wheel_remote_stage.path is defined

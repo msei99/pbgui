@@ -18,6 +18,7 @@ from secure_files import atomic_write_private_text, ensure_private_directory
 SERVICE = "VPSMonitor"
 SCHEMA_VERSION = 1
 DEFAULT_INTERVAL_SECONDS = 60.0
+MAX_CACHED_HEADS = 1000
 PASSIVBOT_UPSTREAM_URL = "https://github.com/enarjord/passivbot.git"
 PBGUI_UPSTREAM_URL = "https://github.com/msei99/pbgui.git"
 
@@ -110,10 +111,15 @@ class UpstreamReleaseCollector:
         pb8_raw = str(pb8dir() or "").strip()
         pb7_path = Path(pb7_raw).expanduser() if pb7_raw else None
         pb8_path = Path(pb8_raw).expanduser() if pb8_raw else None
+        previous_pbgui = previous.get("pbgui")
+        if not isinstance(previous_pbgui, dict) or previous_pbgui.get("source_url") != PBGUI_UPSTREAM_URL:
+            previous_pbgui = None
+        pbgui_release = self._collect_repository(
+            "pbgui", None, PBGUI_UPSTREAM_URL, "main", previous_pbgui, now
+        )
+        pbgui_release["source_url"] = PBGUI_UPSTREAM_URL
         repositories = {
-            "pbgui": self._collect_repository(
-                "pbgui", self.pbgui_dir, PBGUI_UPSTREAM_URL, "main", previous.get("pbgui"), now
-            ),
+            "pbgui": pbgui_release,
             "pb7": self._collect_repository(
                 "pb7",
                 pb7_path,
@@ -160,14 +166,16 @@ class UpstreamReleaseCollector:
         if result.returncode != 0:
             return self._failed_entry(name, default_branch, previous_entry, now, f"git exit {result.returncode}")
         heads: dict[str, str] = {}
-        for line in str(result.stdout or "").splitlines()[:1000]:
+        for line in str(result.stdout or "").splitlines():
             fields = line.strip().split()
             if len(fields) != 2 or not fields[1].startswith("refs/heads/"):
                 continue
             commit = fields[0].lower()
             if len(commit) not in {40, 64} or any(char not in "0123456789abcdef" for char in commit):
                 continue
-            heads[fields[1][len("refs/heads/"):]] = commit
+            branch = fields[1][len("refs/heads/"):]
+            if branch == default_branch or len(heads) < MAX_CACHED_HEADS - (default_branch not in heads):
+                heads[branch] = commit
         target_commit = heads.get(default_branch, "")
         if not target_commit:
             return self._failed_entry(name, default_branch, previous_entry, now, "default branch missing")

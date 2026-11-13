@@ -524,6 +524,7 @@ def test_hype_lookup_connects_editor_helper_and_date_apply(log_page, tmp_path, w
             window.testLookupSignatures.push(optimizeOhlcvStartLookupSignature(config));
             return config;
         };
+        _optStartDateController = null;
     }''')
     posts = []
 

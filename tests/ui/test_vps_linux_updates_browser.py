@@ -77,6 +77,9 @@ def detail_manager(request):
         fixture['detail'] = page.evaluate("buildProvisionalVpsDetail('test-host')")
         fixture['detail'].pop('provisional')
         fixture['detail']['status']['pb8_installed'] = True
+        fixture['detail']['branches']['pbgui']['source_options'] = [
+            {'name': 'origin', 'url': 'https://github.com/msei99/pbgui.git', 'label': 'PBGui (origin)'}
+        ]
         try:
             yield page, fixture
             assert not errors
@@ -148,12 +151,12 @@ def test_vps_detail_error_and_404_reload(detail_manager):
     page.locator('#sidebar-actions').get_by_role('button', name='Overview', exact=True).click()
     page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
     expect(page.locator('#alertModalBody')).to_have_text('This VPS is no longer available. Returning to Overview.')
-    assert page.url.endswith('#overview')
+    assert page.evaluate('store.view') == 'overview'
     assert page.evaluate('[store.view,store.hostname]') == ['overview', '']
     page.reload()
     publish_state(page)
     expect(page.locator(OVERVIEW)).to_be_visible()
-    assert page.url.endswith('#overview')
+    assert page.evaluate('store.view') == 'overview'
     assert page.evaluate('[store.view,store.hostname]') == ['overview', '']
 
 
@@ -162,19 +165,75 @@ def test_vps_detail_automatic_updates_navigation_and_controls(detail_manager):
     __tracebackhide__ = True
     page, fixture = detail_manager
     page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
-    page.locator('#sidebar-actions').get_by_role('button', name='PBGui Branch', exact=True).click()
-    expect(page.locator('#viewRoot')).to_contain_text('VPS PBGui Branch Management')
+    page.locator('#sidebar-actions').get_by_role('button', name='PBGui Versions', exact=True).click()
+    expect(page.locator('#viewRoot')).to_contain_text('PBGui versions')
     page.wait_for_timeout(3200)
     assert len(fixture['gets']) >= 1
     for repo in ['PBGui', 'PB7', 'PB8']:
-        page.locator('#sidebar-actions').get_by_role('button', name=repo + ' Branch', exact=True).click()
+        page.locator('#sidebar-actions').get_by_role('button', name=repo + (' Branch' if repo == 'PB7' else ' Versions'), exact=True).click()
         if repo == 'PBGui':
-            expect(page.locator('#viewRoot')).to_contain_text('No branch history loaded yet.')
-            expect(page.locator('#viewRoot').get_by_role('button', name='+50', exact=True)).to_be_visible()
-            expect(page.locator('#viewRoot').get_by_role('button', name='All', exact=True)).to_be_visible()
+            expect(page.locator('#viewRoot')).to_contain_text('PBGui versions')
+            expect(page.locator('#viewRoot').get_by_role('button', name='Install PBGui')).to_be_disabled()
+            search = page.locator('#pbgui-version-search')
+            search.fill('feature')
+            page.evaluate('''() => {
+              const ui=ensureVpsUi('test-host',store.detail);
+              handleMessage({type:'remote_branches',request_id:ui.pbguiRemoteBranchesRequest,
+                remote_url:ui.pbguiRemoteUrl,branches:['main','feature-branch'],
+                versions:[{name:'main',updated_at:100},{name:'feature-branch',updated_at:200}]});
+            }''')
+            expect(page.locator('#pbgui-version-rows tr[data-branch]')).to_have_count(1)
+            page.locator('#pbgui-version-rows tr[data-branch]').click()
+            expect(page.locator('#pbgui-version-selected')).to_have_text('Selected: feature-branch @ latest')
+            expect(page.locator('#viewRoot').get_by_role('button', name='Install PBGui')).to_be_enabled()
         else:
-            # PB7/PB8 supply their default branch even before history arrives.
-            expect(page.locator('#viewRoot')).to_contain_text('VPS ' + repo + ' Branch Management')
+            if repo == 'PB8':
+                expect(page.locator('#viewRoot')).to_contain_text('PB8 versions')
+                expect(page.locator('#viewRoot').get_by_role('button', name='Install PB8')).to_be_disabled()
+                assert page.evaluate("ensureVpsUi('test-host', store.detail).pb8RemoteBranchesKey") == 'origin|https://github.com/enarjord/passivbot.git'
+                search = page.locator('#pb8-version-search')
+                search.fill('feature')
+                expect(search).to_be_focused()
+                page.evaluate('''() => {
+                  const ui=ensureVpsUi('test-host',store.detail);
+                  handleMessage({type:'remote_branches',request_id:ui.pb8RemoteBranchesRequest,
+                    remote_url:ui.pb8RemoteUrl,branches:['master','v8-feature'],
+                    versions:[{name:'master',updated_at:100},{name:'v8-feature',updated_at:200}]});
+                }''')
+                expect(page.locator('#pb8-version-rows tr[data-branch]')).to_have_count(1)
+                expect(page.locator('#pb8-version-count')).to_have_text('1 of 2 versions')
+                page.locator('#pb8-version-rows tr[data-branch]').click()
+                expect(page.locator('#pb8-version-selected')).to_have_text('Selected: v8-feature @ latest')
+                expect(page.locator('#viewRoot').get_by_role('button', name='Install PB8')).to_be_enabled()
+                page.evaluate("window.selectedPb8Input = document.getElementById('pb8-version-search')")
+                publish_state(page)
+                page.evaluate('''() => handleMessage({type:'detail',data:store.detail,
+                  context_generation:store.contextGeneration})''')
+                assert page.evaluate("document.getElementById('pb8-version-search') === window.selectedPb8Input")
+                search.fill('FEATURE')
+                expect(page.locator('#pb8-version-count')).to_have_text('1 of 2 versions')
+                expect(page.locator('#pb8-version-rows tr[data-branch]')).to_have_count(1)
+                page.evaluate('renderUi()')
+                expect(search).to_be_focused()
+                expect(search).to_have_value('FEATURE')
+                search.fill('missing')
+                expect(page.locator('#pb8-version-rows')).to_contain_text('No matching versions')
+                search.fill('')
+                expect(page.locator('#pb8-version-rows tr[data-branch]')).to_have_count(2)
+                page.evaluate("document.getElementById('pb8-version-search').blur()")
+                page.evaluate('''() => {
+                  store.detail.branches.pb8.source_options=[
+                    {name:'origin',url:'https://github.com/enarjord/passivbot.git',label:'Passivbot (official)'},
+                    {name:'pbgui-fork',url:'https://github.com/example/passivbot.git',label:'Fork'}];
+                  syncBranchViewPanel();
+                }''')
+                source_select = page.locator('#viewRoot .field', has_text='Repository').locator('select')
+                source_select.select_option('https://github.com/example/passivbot.git')
+                assert page.evaluate("ensureVpsUi('test-host', store.detail).pb8RemoteBranchesKey") == 'pbgui-fork|https://github.com/example/passivbot.git'
+                expect(page.locator('#viewRoot').get_by_role('button', name='Install PB8')).to_be_disabled()
+            else:
+                expect(page.locator('#viewRoot')).to_contain_text('VPS PB7 Branch Management')
+                expect(page.locator('#viewRoot label', has_text='Selected Remote URL')).to_be_visible()
             assert page.evaluate('''repo => {
               const detail=JSON.parse(JSON.stringify(store.detail));
               return renderPb7BranchPanel('test-host',detail.branches[repo]||{},repo).includes('Use Refresh');
@@ -195,7 +254,7 @@ def test_vps_detail_automatic_updates_navigation_and_controls(detail_manager):
     }''')
     assert page.evaluate('''() => editInput===document.activeElement && editInput.isConnected
       && editInput.value===editValue && store.view==='vps-setup' && store.hostname==='test-host' ''')
-    page.locator('#sidebar-actions').get_by_role('button', name='PBGui Branch', exact=True).click()
+    page.locator('#sidebar-actions').get_by_role('button', name='PBGui Versions', exact=True).click()
     destination = page.url
     for width in [759, 761, 1450]:
         page.set_viewport_size({'width': width, 'height': 1000})
@@ -216,19 +275,19 @@ def test_vps_detail_automatic_updates_navigation_and_controls(detail_manager):
         assert page.locator('#pbgui-shared-help-box .lang-pill').evaluate('(e)=>e.scrollWidth<=e.clientWidth')
         assert page.url == destination
         page.locator('#pbgui-shared-help-close').click()
-    expect(page.locator('#viewRoot').get_by_role('button', name='Already Selected', exact=True)).to_be_visible()
+    expect(page.locator('#viewRoot').get_by_role('button', name='Install PBGui', exact=True)).to_be_visible()
     page.locator('#pbgui-guide-btn').click()
     expect(page.locator('#pbgui-shared-help-ovl')).to_have_class('visible')
     assert page.url == destination
     page.reload()
     publish_state(page)
     assert page.url == destination
-    expect(page.locator('#viewRoot')).to_contain_text('VPS PBGui Branch Management')
+    expect(page.locator('#viewRoot')).to_contain_text('PBGui versions')
     assert page.locator('#sidebar').bounding_box()['width'] == 420
     page.locator('#sidebar-actions').get_by_role('button', name='Overview', exact=True).click()
     expect(page.get_by_role('button', name='Refresh', exact=True)).to_have_count(0)
     page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
-    page.locator('#sidebar-actions').get_by_role('button', name='PBGui Branch', exact=True).click()
+    page.locator('#sidebar-actions').get_by_role('button', name='PBGui Versions', exact=True).click()
     count = len(fixture['gets'])
     page.wait_for_timeout(3200)
     assert len(fixture['gets']) > count
@@ -243,6 +302,122 @@ def test_vps_detail_automatic_updates_navigation_and_controls(detail_manager):
     assert len(fixture['gets']) > count
     assert page.url == destination
     assert page.evaluate('[store.hostname,store.view]') == ['test-host', 'vps-pbgui-branch']
+
+
+def test_pb8_version_selection_survives_browser_reload(detail_manager):
+    """The chosen controller fork and branch return after refreshing the same VPS view."""
+    page, fixture = detail_manager
+    fixture['detail']['branches']['pb8']['source_options'] = [
+        {'name': 'origin', 'url': 'https://github.com/enarjord/passivbot.git', 'label': 'Passivbot (official)'},
+        {'name': 'pbgui-fork', 'url': 'https://github.com/example/passivbot.git', 'label': 'Fork'},
+    ]
+    page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
+    page.locator('#sidebar-actions').get_by_role('button', name='PB8 Versions').click()
+    page.wait_for_function('store.detail?.branches?.pb8?.source_options?.length===2')
+    page.locator('#viewRoot .field', has_text='Repository').locator('select').select_option('https://github.com/example/passivbot.git')
+    page.evaluate('''() => {
+      const ui=ensureVpsUi('test-host',store.detail);
+      handleMessage({type:'remote_branches',request_id:ui.pb8RemoteBranchesRequest,
+        remote_url:ui.pb8RemoteUrl,branches:['master','v8-feature']});
+    }''')
+    page.locator('#pb8-version-search').fill('FEATURE')
+    page.locator('#pb8-version-rows tr[data-branch]').click()
+    older_commit = 'c' * 40
+    page.evaluate('''() => {
+      const ui=ensureVpsUi('test-host',store.detail);
+      const commits=Array.from({length:50},(_,index)=>({
+        full:index===49?'c'.repeat(40):index.toString(16).padStart(40,'0'),
+        short:index.toString(16).padStart(7,'0'),message:'PB8 commit '+index,date:'yesterday'}));
+      handleMessage({type:'remote_branch_commits',request_id:ui.pb8RemoteCommitsRequest,
+        remote_url:ui.pb8RemoteUrl,branch:'v8-feature',commits:commits});
+    }''')
+    page.locator('#pb8-version-commit').select_option(older_commit)
+    page.locator('#pb8-version-more-commits').click()
+    assert page.evaluate('ensureVpsUi("test-host",store.detail).pb8RemoteCommitLimit') == 100
+    page.evaluate('''() => {
+      window.pb8InstallCalls=[];
+      window.runVpsWithLog=(...args)=>pb8InstallCalls.push(args);
+      installPb8Version('test-host');
+    }''')
+    assert page.evaluate('pb8InstallCalls[0][3].pb8_commit') == older_commit
+    page.reload()
+    publish_state(page)
+    page.wait_for_function('store.detail && !store.detail.provisional && store.detail.branches?.pb8?.source_options?.length===2')
+    expect(page.locator('#viewRoot')).to_contain_text('PB8 versions')
+    expect(page.locator('#pb8-version-selected')).to_have_text('Selected: v8-feature @ ccccccc')
+    assert page.evaluate('[store.view,ensureVpsUi("test-host",store.detail).pb8RemoteUrl,ensureVpsUi("test-host",store.detail).pb8Branch]') == [
+        'vps-pb8-branch', 'https://github.com/example/passivbot.git', 'v8-feature'
+    ]
+    assert page.evaluate('ensureVpsUi("test-host",store.detail).pb8VersionFilter') == 'FEATURE'
+    assert page.evaluate('ensureVpsUi("test-host",store.detail).pb8Commit') == older_commit
+    assert page.evaluate('ensureVpsUi("test-host",store.detail).pb8RemoteCommitLimit') == 100
+    page.wait_for_function("Boolean(ensureVpsUi('test-host',store.detail).pb8RemoteBranchesRequest)")
+    page.evaluate('''() => {
+      const ui=ensureVpsUi('test-host',store.detail);
+      handleMessage({type:'remote_branches',request_id:ui.pb8RemoteBranchesRequest,
+        remote_url:ui.pb8RemoteUrl,branches:['master','v8-feature']});
+    }''')
+    expect(page.locator('#pb8-version-count')).to_have_text('1 of 2 versions')
+
+
+def test_pbgui_versions_choose_fork_and_restore_selection(detail_manager):
+    """PBGui versions sort by update, select a fork, and retain the choice on reload."""
+    page, fixture = detail_manager
+    fork_url = 'https://github.com/example/pbgui.git'
+    fixture['detail']['branches']['pbgui']['source_options'].append(
+        {'name': 'fork', 'url': fork_url, 'label': 'PBGui fork'}
+    )
+    page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
+    page.locator('#sidebar-actions').get_by_role('button', name='PBGui Versions').click()
+    page.wait_for_function('store.detail?.branches?.pbgui?.source_options?.length===2')
+    page.locator('#viewRoot .field', has_text='Repository').locator('select').select_option(fork_url)
+    page.evaluate('''() => {
+      const ui=ensureVpsUi('test-host',store.detail);
+      handleMessage({type:'remote_branches',request_id:ui.pbguiRemoteBranchesRequest,
+        remote_url:ui.pbguiRemoteUrl,branches:['old-branch','new-branch'],
+        versions:[{name:'old-branch',updated_at:100},{name:'new-branch',updated_at:200}]});
+    }''')
+    expect(page.locator('#pbgui-version-rows tr[data-branch]')).to_have_count(2)
+    assert page.locator('#pbgui-version-rows tr[data-branch]').first.get_attribute('data-branch') == 'new-branch'
+    page.locator('#pbgui-version-search').fill('new')
+    page.locator('#pbgui-version-rows tr[data-branch]').click()
+    older_commit = 'a' * 40
+    page.evaluate('''() => {
+      const ui=ensureVpsUi('test-host',store.detail);
+      const commits=Array.from({length:50},(_,index)=>({
+        full:index===49?'a'.repeat(40):index.toString(16).padStart(40,'0'),
+        short:index.toString(16).padStart(7,'0'),message:'Synthetic commit '+index,date:'yesterday'}));
+      handleMessage({type:'remote_branch_commits',request_id:ui.pbguiRemoteCommitsRequest,
+        remote_url:ui.pbguiRemoteUrl,branch:'new-branch',commits:commits});
+    }''')
+    page.locator('#pbgui-version-commit').select_option(older_commit)
+    expect(page.locator('#pbgui-version-selected')).to_have_text('Selected: new-branch @ aaaaaaa')
+    page.locator('#pbgui-version-more-commits').click()
+    assert page.evaluate("ensureVpsUi('test-host',store.detail).pbguiRemoteCommitLimit") == 100
+    page.evaluate('''() => {
+      window.installCalls=[];
+      window.runVpsWithLog=(...args)=>installCalls.push(args);
+      installPbguiVersion('test-host');
+    }''')
+    assert page.evaluate('installCalls[0][3]') == {
+        'branch': 'new-branch', 'source_url': fork_url, 'commit': older_commit,
+    }
+    manual_commit = 'f' * 40
+    page.locator('#pbgui-version-commit-sha').fill(manual_commit)
+    expect(page.locator('#viewRoot').get_by_role('button', name='Install PBGui')).to_be_enabled()
+    page.evaluate("installPbguiVersion('test-host')")
+    assert page.evaluate('installCalls[1][3].commit') == manual_commit
+    page.locator('#pbgui-version-commit').select_option(older_commit)
+    page.reload()
+    publish_state(page)
+    page.wait_for_function('store.detail?.branches?.pbgui?.source_options?.length===2')
+    expect(page.locator('#viewRoot')).to_contain_text('PBGui versions')
+    assert page.evaluate('[store.view,ensureVpsUi("test-host",store.detail).pbguiRemoteUrl,ensureVpsUi("test-host",store.detail).pbguiBranch]') == [
+        'vps-pbgui-branch', fork_url, 'new-branch'
+    ]
+    assert page.evaluate('ensureVpsUi("test-host",store.detail).pbguiVersionFilter') == 'new'
+    assert page.evaluate('ensureVpsUi("test-host",store.detail).pbguiCommit') == older_commit
+    assert page.evaluate('ensureVpsUi("test-host",store.detail).pbguiRemoteCommitLimit') == 100
 
 
 @pytest.fixture
@@ -863,3 +1038,55 @@ def test_systemd_installed_disabled_services_are_complete_in_live_ui(detail_mana
     expect(page.locator('#alertModalBody')).not_to_contain_text('Will change')
     expect(page.locator('#systemd-migrate-confirm')).to_have_count(0)
     page.locator('#alertModalBtnRow').get_by_role('button', name='Close', exact=True).click()
+
+
+@pytest.mark.parametrize('changes,count,tone,warning', [
+    ({'upgrades': 3, 'installable_updates': 0, 'deferred_updates': 3}, '0', 'ok', False),
+    ({'upgrades': 5, 'installable_updates': 2, 'deferred_updates': 3}, '2', 'error', True),
+    ({'upgrades': 3, 'installable_updates': None, 'deferred_updates': 3}, '0', 'ok', False),
+    ({'upgrades': 3, 'installable_updates': 0, 'deferred_updates': 3, 'state': 'stale'}, '0', 'warning', False),
+    ({'upgrades': 0, 'installable_updates': 0, 'new_installs': 1}, '0', 'error', True),
+    ({'upgrades': 0, 'installable_updates': 0, 'removals': 1}, '0', 'error', True),
+    ({'available': False}, 'N/A', 'warning', True),
+])
+def test_detail_linux_update_indicators_follow_installable_changes(detail_manager, changes, count, tone, warning):
+    """Detail indicators follow actionable changes and update in place, retaining deferred details."""
+    page, fixture = detail_manager
+    status = fixture['detail']['status']
+    status['pending_updates'] = 3
+    status['package_status'] = dict(state='ok', available=True, upgrades=5,
+                                  installable_updates=5, deferred_updates=0,
+                                  new_installs=0, removals=0, packages=[])
+    page.locator('[data-vps-action="select-vps"][data-host="test-host"]').click()
+    page.wait_for_function('store.detail && !store.detail.provisional')
+    status['package_status'].update(changes)
+    page.evaluate('detail => handleMessage({type:"detail",context_generation:store.contextGeneration,data:detail})', fixture['detail'])
+    expect(page.locator('[data-role="updates-count"]')).to_have_text(count)
+    expect(page.locator('[data-role="updates-dot"]')).to_have_class('dot ' + tone)
+    button = page.locator('#sidebar-actions').get_by_role('button', name='Update Linux', exact=True)
+    expect(button).to_have_class('sb-btn warning' if warning else 'sb-btn ok')
+    # Both local-master and remote-host actions share the same actionable-count rule.
+    assert page.evaluate('status => hasActionableLinuxUpdates(status)', status) is warning
+    if changes.get('deferred_updates'):
+        expect(page.locator('[data-role="updates-sub"]')).to_contain_text('3 deferred by apt')
+    # The same open detail must recover automatically when installable updates arrive.
+    status['package_status'].update(available=True, state='ok', upgrades=4,
+                                    installable_updates=1, deferred_updates=3)
+    page.evaluate('detail => handleMessage({type:"detail",context_generation:store.contextGeneration,data:detail})', fixture['detail'])
+    expect(page.locator('[data-role="updates-count"]')).to_have_text('1')
+    expect(button).to_have_class('sb-btn warning')
+
+
+def test_completed_recap_removes_stale_overview_running_badge(manager):
+    """An automatic terminal recap clears a stale badge without navigation or reload."""
+    page = manager
+    row = dict(name='test-host', hostname='test-host', nav='vps', role='slave', online=True,
+               task_status='starting', task_command='vps-update-pb', task_command_text='Update PBGui and PB7',
+               task_step='Restart remote master PBApiServer', task_current_index=44, task_total_steps=44)
+    page.evaluate('row => handleMessage({type:"state",data:{overview:{rows:[row]},vps:[],deploys:{}}})', row)
+    expect(page.locator('tr[data-overview-host="test-host"]')).to_contain_text('Task Running')
+    for failed in (0, 1):
+        row['task_recap'] = dict(ok=21, changed=6, failed=failed, unreachable=0)
+        page.evaluate('row => handleMessage({type:"state",data:{overview:{rows:[row]},vps:[],deploys:{}}})', row)
+        expect(page.locator('tr[data-overview-host="test-host"]')).not_to_contain_text('Task Running')
+    assert page.evaluate('store.view') == 'overview'

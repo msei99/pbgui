@@ -27,15 +27,25 @@
       register: current_branch
       changed_when: false
 
+    - name: Get selected PBGui source
+      command:
+        argv: [git, remote, get-url, origin]
+      args:
+        chdir: "{{ install_dir }}/pbgui"
+      register: current_pbgui_source
+      changed_when: false
+      no_log: true
+
     - name: clone pbgui repository
       git:
-        repo: https://github.com/msei99/pbgui.git
+        repo: "{{ current_pbgui_source.stdout }}"
         dest: "{{ install_dir }}/pbgui"
         version: "{{ current_branch.stdout }}"
         refspec: "+refs/heads/{{ current_branch.stdout }}:refs/remotes/origin/{{ current_branch.stdout }}"
         update: yes
         force: yes
       register: pbgui_repo
+      no_log: true
 
     - name: Reconcile pbgui requirements
       pip:

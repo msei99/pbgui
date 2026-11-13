@@ -47,11 +47,21 @@ LOCAL_PUBLIC_KEY="${LOCAL_PUBLIC_KEY:-}"
 UPLOADED_SETUP_SYSTEMD_PATH="${UPLOADED_SETUP_SYSTEMD_PATH:-}"
 INSTALLER_BRANCH="${INSTALLER_BRANCH:-}"
 PB7_REF="${PB7_REF:-}"
+PB8_REF="${PB8_REF:-}"
+PB7_BUNDLE_PATH="${PB7_BUNDLE_PATH:-}"
+PB8_BUNDLE_PATH="${PB8_BUNDLE_PATH:-}"
 
-if [[ ! "$PB7_REF" =~ ^[0-9a-f]{40}$ ]]; then
-  err "PB7 ref must be an exact lowercase 40-character commit SHA."
+if [[ ! "$PB7_REF" =~ ^[0-9a-f]{40}$ || ! "$PB8_REF" =~ ^[0-9a-f]{40}$ ]]; then
+  err "PB7 and PB8 refs must be exact lowercase 40-character commit SHAs."
   exit 1
 fi
+if [[ ! "$PB7_BUNDLE_PATH" =~ ^/tmp/pbgui_remote_master_wheels_[0-9a-f]{16}/pb7$ ||
+      ! "$PB8_BUNDLE_PATH" =~ ^/tmp/pbgui_remote_master_wheels_[0-9a-f]{16}/pb8$ ]]; then
+  err "Invalid remote wheel bundle staging paths."
+  exit 1
+fi
+WHEEL_STAGE_ROOT="$(dirname "$PB7_BUNDLE_PATH")"
+trap 'rm -rf "$WHEEL_STAGE_ROOT"' EXIT
 
 eval "$(python3 - "$INSTALL_DIR" <<'PY'
 import shlex
@@ -154,6 +164,7 @@ if [[ -z "$TARGET_HOME" ]]; then
 fi
 TARGET_GROUP="$(id -gn "$TARGET_USER")"
 info "Using install parent directory: $INSTALL_DIR"
+chown -R "$TARGET_USER:$TARGET_GROUP" "$WHEEL_STAGE_ROOT"
 
 if [[ -n "$LOCAL_PUBLIC_KEY" ]]; then
   info "Installing SSH public key for $TARGET_USER..."
@@ -227,6 +238,11 @@ else
     run_as_user "git clone https://github.com/msei99/pbgui.git '$INSTALL_DIR/pbgui'"
   fi
 fi
+info "Verifying uploaded source-bound PB7 and PB8 wheels..."
+run_as_user "python3.12 '$INSTALL_DIR/pbgui/pb8_wheels.py' verify --product pb7 --bundle '$PB7_BUNDLE_PATH' --commit '$PB7_REF'"
+run_as_user "python3.12 '$INSTALL_DIR/pbgui/pb8_wheels.py' verify --product pb8 --bundle '$PB8_BUNDLE_PATH' --commit '$PB8_REF'"
+run_as_user "python3.12 '$INSTALL_DIR/pbgui/pb8_wheels.py' receipt --receipt '$INSTALL_DIR/pbgui/data/state/pb7-wheel.json'"
+run_as_user "python3.12 '$INSTALL_DIR/pbgui/pb8_wheels.py' receipt --receipt '$INSTALL_DIR/pbgui/data/state/pb8-wheel.json'"
 if [[ -d "$INSTALL_DIR/pb7/.git" ]]; then
   info "Using existing PB7 checkout."
   run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb7' --ref '$PB7_REF' --expected-major 7 --fetch-url https://github.com/enarjord/passivbot.git"
@@ -238,53 +254,70 @@ fi
 run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb7' --ref '$PB7_REF' --expected-major 7 --fetch-url https://github.com/enarjord/passivbot.git --checkout"
 PB8_UPDATE_OWNER="$INSTALL_DIR/.pbgui-pb8-update-active"
 run_as_user "python3 '$INSTALL_DIR/pbgui/master_update_lock.py' --acquire-writer '$INSTALL_DIR'"
-trap 'run_as_user "rmdir '\''$PB8_UPDATE_OWNER'\'' 2>/dev/null || true"' EXIT
+trap 'run_as_user "rmdir '\''$PB8_UPDATE_OWNER'\'' 2>/dev/null || true"; rm -rf "$WHEEL_STAGE_ROOT"' EXIT
 run_as_user "umask 077; mkdir -p '$INSTALL_DIR/pbgui/data/locks'; : > '$INSTALL_DIR/pbgui/data/locks/pb8-runtime-invalid'"
 run_as_user "python3 '$INSTALL_DIR/pbgui/master_update_lock.py' --barrier '$INSTALL_DIR/pbgui' --timeout 120"
 if [[ -d "$INSTALL_DIR/pb8/.git" ]]; then
   info "Fetching and verifying official PB8 master without changing origin."
-  run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb8' --ref refs/remotes/pbgui-pb7-pin/master --expected-major 8 --fetch-url https://github.com/enarjord/passivbot.git"
+  run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb8' --ref '$PB8_REF' --expected-major 8 --fetch-url https://github.com/enarjord/passivbot.git"
 else
   if [[ -e "$INSTALL_DIR/pb8" ]]; then
     printf 'PB8 target exists but is not a Git checkout: %s\n' "$INSTALL_DIR/pb8" >&2
     exit 1
   fi
   run_as_user "git clone --no-checkout https://github.com/enarjord/passivbot.git '$INSTALL_DIR/pb8'"
-  run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb8' --ref refs/remotes/pbgui-pb7-pin/master --expected-major 8 --fetch-url https://github.com/enarjord/passivbot.git"
+  run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb8' --ref '$PB8_REF' --expected-major 8 --fetch-url https://github.com/enarjord/passivbot.git"
 fi
-run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb8' --ref refs/remotes/pbgui-pb7-pin/master --expected-major 8 --checkout"
+run_as_user "python3 '$INSTALL_DIR/pbgui/pb7_guard.py' --repo '$INSTALL_DIR/pb8' --ref '$PB8_REF' --expected-major 8 --checkout"
 if [[ -n "$UPLOADED_SETUP_SYSTEMD_PATH" && -f "$UPLOADED_SETUP_SYSTEMD_PATH" ]]; then
   info "Installing local systemd setup helper into PBGui checkout..."
   install -D -m 755 -o "$TARGET_USER" -g "$TARGET_GROUP" "$UPLOADED_SETUP_SYSTEMD_PATH" "$INSTALL_DIR/pbgui/setup/setup_systemd.sh"
 fi
 
 info "Creating Python virtualenvs..."
-PB7_REQUIREMENTS="$INSTALL_DIR/pb7/requirements.txt"
 PBGUI_REQUIREMENTS="$INSTALL_DIR/pbgui/requirements.txt"
 [[ -f "$PBGUI_REQUIREMENTS" ]] || PBGUI_REQUIREMENTS="$INSTALL_DIR/pbgui/requirements_vps.txt"
 run_as_user "python3.12 -m venv '$INSTALL_DIR/venv_pb7'"
 run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' -m pip install --upgrade pip"
-run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' -m pip install -r '$PB7_REQUIREMENTS'"
-run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' -m pip install maturin"
 run_as_user "python3.12 -m venv '$INSTALL_DIR/venv_pb8'"
 run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' -m pip install --upgrade pip"
 run_as_user "python3.12 -m venv '$INSTALL_DIR/venv_pbgui'"
 run_as_user "'$INSTALL_DIR/venv_pbgui/bin/python' -m pip install --upgrade pip"
 run_as_user "'$INSTALL_DIR/venv_pbgui/bin/python' -m pip install -r '$PBGUI_REQUIREMENTS'"
 
-info "Building passivbot-rust..."
+info "Preparing remote master for future wheel builds..."
 run_as_user "if ! command -v rustup >/dev/null 2>&1; then curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal; fi"
 run_as_user "source '$TARGET_HOME/.cargo/env' && rustup toolchain install 1.90.0 && rustup default 1.90.0"
-run_as_user "source '$TARGET_HOME/.cargo/env' && source '$INSTALL_DIR/venv_pb7/bin/activate' && cd '$INSTALL_DIR/pb7/passivbot-rust' && maturin develop --release"
-run_as_user "source '$INSTALL_DIR/venv_pb7/bin/activate' && cd '$INSTALL_DIR/pb7' && python -c \"import sys; sys.path.insert(0, 'src'); from rust_utils import stamp_compiled_extensions, source_fingerprint; stamp_compiled_extensions(source_fingerprint()); print('Rust source stamp updated.')\""
-
-info "Installing Passivbot v8 full profile..."
+info "Installing verified PB7 and PB8 wheels..."
+run_as_user "python3.12 '$INSTALL_DIR/pbgui/pb8_wheels.py' cache --product pb7 --bundle '$PB7_BUNDLE_PATH' --cache '$INSTALL_DIR/pbgui/data/cache/pb7-wheels'"
+run_as_user "python3.12 '$INSTALL_DIR/pbgui/pb8_wheels.py' cache --product pb8 --bundle '$PB8_BUNDLE_PATH' --cache '$INSTALL_DIR/pbgui/data/cache/pb8-wheels'"
+PB7_PYTHON_WHEELS=("$PB7_BUNDLE_PATH"/passivbot-*.whl)
+PB7_RUST_WHEELS=("$PB7_BUNDLE_PATH"/passivbot_rust-*.whl)
+PB8_PYTHON_WHEELS=("$PB8_BUNDLE_PATH"/passivbot-*.whl)
+PB8_RUST_WHEELS=("$PB8_BUNDLE_PATH"/passivbot_rust-*.whl)
+if [[ ${#PB7_PYTHON_WHEELS[@]} -ne 1 || ${#PB7_RUST_WHEELS[@]} -ne 1 ||
+      ${#PB8_PYTHON_WHEELS[@]} -ne 1 || ${#PB8_RUST_WHEELS[@]} -ne 1 ]]; then
+  err "Expected one Python and one Rust wheel per verified bundle."
+  exit 1
+fi
+run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' -m pip download --only-binary=:all: --dest '$PB7_BUNDLE_PATH' --find-links '$PB7_BUNDLE_PATH' '${PB7_PYTHON_WHEELS[0]}[full]'"
+run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' '$INSTALL_DIR/pbgui/pb8_wheels.py' capacity --product pb7 --bundle '$PB7_BUNDLE_PATH' --repo '$INSTALL_DIR/pb7'"
+run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' -m pip install --no-index --only-binary=:all: --find-links '$PB7_BUNDLE_PATH' '${PB7_PYTHON_WHEELS[0]}[full]'"
+run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' -m pip install --no-index --only-binary=:all: --no-deps --force-reinstall '${PB7_PYTHON_WHEELS[0]}' '${PB7_RUST_WHEELS[0]}'"
+run_as_user "install -m 600 '$PB7_BUNDLE_PATH/Cargo.lock' '$INSTALL_DIR/pb7/passivbot-rust/Cargo.lock'"
+run_as_user "'$INSTALL_DIR/venv_pb7/bin/python' '$INSTALL_DIR/pbgui/pb8_wheels.py' runtime --product pb7 --bundle '$PB7_BUNDLE_PATH' --repo '$INSTALL_DIR/pb7' --commit '$PB7_REF' --receipt '$INSTALL_DIR/pbgui/data/state/pb7-wheel.json'"
+run_as_user "'$INSTALL_DIR/venv_pb7/bin/passivbot' --help"
 PB8_GPU_EXTRAS=$(run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' '$INSTALL_DIR/pbgui/pb8_gpu_install.py' '$INSTALL_DIR/pb8'")
 case "$PB8_GPU_EXTRAS" in
   full|full,gpu-mps|full,gpu-cuda) ;;
   *) err "Invalid PB8 GPU dependency profile"; exit 1 ;;
 esac
-run_as_user "source '$TARGET_HOME/.cargo/env' && '$INSTALL_DIR/venv_pb8/bin/python' -m pip install --upgrade -e '$INSTALL_DIR/pb8[$PB8_GPU_EXTRAS]'"
+run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' -m pip download --only-binary=:all: --dest '$PB8_BUNDLE_PATH' --find-links '$PB8_BUNDLE_PATH' '${PB8_PYTHON_WHEELS[0]}[$PB8_GPU_EXTRAS]'"
+run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' '$INSTALL_DIR/pbgui/pb8_wheels.py' capacity --product pb8 --bundle '$PB8_BUNDLE_PATH' --repo '$INSTALL_DIR/pb8'"
+run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' -m pip install --no-index --only-binary=:all: --find-links '$PB8_BUNDLE_PATH' '${PB8_PYTHON_WHEELS[0]}[$PB8_GPU_EXTRAS]'"
+run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' -m pip install --no-index --only-binary=:all: --no-deps --force-reinstall '${PB8_PYTHON_WHEELS[0]}' '${PB8_RUST_WHEELS[0]}'"
+run_as_user "install -m 600 '$PB8_BUNDLE_PATH/Cargo.lock' '$INSTALL_DIR/pb8/passivbot-rust/Cargo.lock'"
+run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' '$INSTALL_DIR/pbgui/pb8_wheels.py' runtime --product pb8 --bundle '$PB8_BUNDLE_PATH' --repo '$INSTALL_DIR/pb8' --commit '$PB8_REF' --receipt '$INSTALL_DIR/pbgui/data/state/pb8-wheel.json'"
 run_as_user "'$INSTALL_DIR/venv_pb8/bin/passivbot' --help"
 run_as_user "'$INSTALL_DIR/venv_pb8/bin/python' -c \"import passivbot_rust; from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)\""
 
@@ -314,6 +347,7 @@ chown "$TARGET_USER:$TARGET_GROUP" "$INSTALL_DIR/pbgui/pbgui.ini"
 chmod 600 "$INSTALL_DIR/pbgui/pbgui.ini"
 run_as_user "rm -f '$INSTALL_DIR/pbgui/data/locks/pb8-runtime-invalid'"
 run_as_user "rmdir '$PB8_UPDATE_OWNER'"
+rm -rf "$WHEEL_STAGE_ROOT"
 trap - EXIT
 PBG_PASSWORD_ENV="$PBG_PASSWORD" python3 - "$INSTALL_DIR/pbgui/data/auth/secrets.toml" <<'PY'
 import os, pathlib, sys
