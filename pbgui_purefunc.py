@@ -609,7 +609,7 @@ def import_passivbot_rust():
     return pbr
 
 PBGDIR = Path(__file__).resolve().parent
-PBGUI_VERSION = "v2.10.16"
+PBGUI_VERSION = "v2.11"
 _serial_path = PBGDIR / 'api' / 'serial.txt'
 PBGUI_SERIAL = _serial_path.read_text().strip() if _serial_path.exists() else ''
 
@@ -1013,6 +1013,54 @@ def list_remote_git_branches(remote_url: str, timeout_sec: int = 20) -> list[str
             branches.append(ref[len("refs/heads/"):])
 
     return sorted(set(branches))
+
+
+def list_remote_git_branch_heads(remote_url: str, timeout_sec: int = 30) -> list[dict[str, int | str]]:
+    """Read every remote branch head and its commit time without fetching trees or blobs."""
+    remote_url = (remote_url or "").strip()
+    if not remote_url:
+        return []
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="pbgui-branch-heads-") as temp_dir:
+            init = subprocess.run(
+                ["git", "init", "--bare", "--quiet", temp_dir],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            if init.returncode != 0:
+                raise RuntimeError("Could not initialize the temporary branch index.")
+            env = dict(os.environ, GIT_TERMINAL_PROMPT="0")
+            fetch = subprocess.run(
+                ["git", f"--git-dir={temp_dir}", "-c", "protocol.version=2", "fetch",
+                 "--quiet", "--no-tags", "--depth=1", "--filter=tree:0", remote_url,
+                 "+refs/heads/*:refs/remotes/pbgui/*"],
+                capture_output=True, text=True, timeout=timeout_sec, check=False, env=env,
+            )
+            if fetch.returncode != 0:
+                raise RuntimeError("Could not fetch remote branch heads.")
+            refs = subprocess.run(
+                ["git", f"--git-dir={temp_dir}", "for-each-ref",
+                 "--format=%(refname:strip=3)\t%(committerdate:unix)", "refs/remotes/pbgui"],
+                capture_output=True, text=True, timeout=10, check=False,
+            )
+            if refs.returncode != 0:
+                raise RuntimeError("Could not read remote branch dates.")
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Timed out loading remote branch dates.") from exc
+    except OSError as exc:
+        raise RuntimeError("Could not run Git to load remote branch dates.") from exc
+
+    rows: list[dict[str, int | str]] = []
+    for line in refs.stdout.splitlines():
+        name, separator, timestamp = line.partition("\t")
+        if not separator or not name:
+            continue
+        try:
+            updated_at = int(timestamp)
+        except ValueError:
+            continue
+        rows.append({"name": name, "updated_at": updated_at})
+    return rows
 
 
 def list_remote_git_branch_commits(remote_url: str, branch_name: str, limit: int = 50, timeout_sec: int = 30) -> list[dict]:
