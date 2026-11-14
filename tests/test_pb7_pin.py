@@ -65,6 +65,10 @@ def test_verify_passivbot_major_accepts_matching_checkout(
     version_path = tmp_path / "src" / "passivbot_version.py"
     version_path.parent.mkdir()
     version_path.write_text(f'__version__ = "{version}"\n', encoding="utf-8")
+    if expected_major == 8:
+        schema_path = tmp_path / "src" / "config" / "schema.py"
+        schema_path.parent.mkdir()
+        schema_path.write_text('CONFIG_SCHEMA_VERSION = "v8.0.0"\n', encoding="utf-8")
 
     assert pb7_guard.verify_passivbot_major(tmp_path, expected_major) == version
 

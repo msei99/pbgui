@@ -10,23 +10,25 @@ import subprocess
 
 
 SERVICE = "PassivbotRuntime"
+MAX_SOURCE_BYTES = 256 * 1024
 _SCHEMA_RE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 _SCHEMA_GENERATIONS = {"8": "pb8", "9": "pb9"}
 
 
-def _read_string_literal(repo_dir: Path, relative_path: str, name: str) -> tuple[str, bytes]:
-    """Read a top-level literal and retain its exact inspected source bytes."""
-    path = repo_dir / relative_path
+def read_source_string_literal(source: str | bytes, name: str, *, source_name: str = "Passivbot source") -> str:
+    """Read one literal declaration without executing source, bounded to 256 KiB.
+
+    UTF-8 BOM is accepted. AST Name stores detect ordinary/conditional duplicate
+    assignments; this is not a proof against arbitrary dynamic rebinding.
+    Only standard-library APIs available with Python 3.8 are used here.
+    """
     try:
-        path = path.resolve()
-        if not path.is_relative_to(repo_dir):
-            raise ValueError(f"{relative_path} resolves outside the source directory")
-        if not path.is_file():
-            raise ValueError(f"{relative_path} is missing or is not a regular file")
-        source = path.read_bytes()
-        tree = ast.parse(source.decode("utf-8"))
-    except (OSError, UnicodeError, SyntaxError, RuntimeError) as exc:
-        raise ValueError(f"Cannot parse {relative_path} ({type(exc).__name__})") from exc
+        encoded = source.encode("utf-8") if isinstance(source, str) else source
+        if len(encoded) > MAX_SOURCE_BYTES:
+            raise ValueError(f"{source_name} exceeds the 256 KiB source limit")
+        tree = ast.parse(encoded.decode("utf-8-sig"))
+    except (UnicodeError, SyntaxError, RecursionError) as exc:
+        raise ValueError(f"Cannot parse {source_name} ({type(exc).__name__})") from exc
 
     # Detect AST Name stores, including conditional and compound assignments.
     # This declaration reader does not prove the absence of dynamic rebinding.
@@ -42,8 +44,33 @@ def _read_string_literal(repo_dir: Path, relative_path: str, name: str) -> tuple
             continue
         if isinstance(target, ast.Name) and target.id == name and len(writes) == 1:
             if isinstance(node.value, ast.Constant) and isinstance(node.value.value, str):
-                return node.value.value, source
-    raise ValueError(f"{relative_path}: {name} must have exactly one top-level string literal assignment")
+                return node.value.value
+    raise ValueError(f"{source_name}: {name} must have exactly one top-level string literal assignment")
+
+
+def generation_from_schema(schema: str) -> str:
+    """Classify a literal schema major; never infer a generation from a package."""
+    match = _SCHEMA_RE.fullmatch(schema)
+    return _SCHEMA_GENERATIONS.get(match[1], "unknown") if match else "unknown"
+
+
+def _read_string_literal(repo_dir: Path, relative_path: str, name: str) -> tuple[str, bytes]:
+    """Read a top-level literal and retain its exact inspected source bytes."""
+    path = repo_dir / relative_path
+    try:
+        path = path.resolve()
+        # Keep this helper usable when imported by the system-Python guard.
+        try:
+            path.relative_to(repo_dir)
+        except ValueError as exc:
+            raise ValueError(f"{relative_path} resolves outside the source directory") from exc
+        if not path.is_file():
+            raise ValueError(f"{relative_path} is missing or is not a regular file")
+        with path.open("rb") as stream:
+            source = stream.read(MAX_SOURCE_BYTES + 1)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"Cannot read {relative_path} ({type(exc).__name__})") from exc
+    return read_source_string_literal(source, name, source_name=relative_path), source
 
 
 def _read_commit(repo_dir: Path, sources: dict[str, bytes]) -> str:
@@ -125,9 +152,8 @@ def classify_passivbot_source(repo_dir: str | Path | None) -> dict:
 
     schema = result["config_schema"]
     if schema is not None:
-        match = _SCHEMA_RE.fullmatch(schema)
-        generation = _SCHEMA_GENERATIONS.get(match[1]) if match else None
-        if generation is None:
+        generation = generation_from_schema(schema)
+        if generation == "unknown":
             result["errors"].append("Unrecognized config schema; expected a v8.x.y or v9.x.y schema")
         else:
             result["generation"] = generation

@@ -2,6 +2,11 @@
 
 ## Development
 
+- Reject v9 config schemas in PB8 guard checks for both local source trees and
+  selected Git refs before process stops or checkout. Preserve PB7's package-only
+  check, PB8 return values and CLI markers. Share static schema/literal helpers
+  with UTF-8 BOM support and a 256 KiB parsing limit.
+
 - Add an unconnected, read-only Passivbot source classifier that distinguishes
   PB8 and PB9 by their config schema rather than their shared package version.
   Inspect Python declarations with AST and report Git identity and diagnostics

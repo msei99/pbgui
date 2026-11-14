@@ -12,6 +12,8 @@ import sys
 import time
 from pathlib import Path
 
+from passivbot_runtime import generation_from_schema, read_source_string_literal
+
 
 PB7_PIN_PATH = Path(__file__).with_name("pb7_ref.txt")
 PB7_UPSTREAM_URL = "https://github.com/enarjord/passivbot.git"
@@ -32,11 +34,11 @@ def load_pb7_pinned_commit(path: Path = PB7_PIN_PATH) -> str:
 PB7_PINNED_COMMIT = load_pb7_pinned_commit()
 
 
-def _version_source(repo_dir: Path, ref: str | None = None) -> str:
-    """Read Passivbot's version module from a checkout or a Git ref."""
+def _source_file(repo_dir: Path, relative_path: str, ref: str | None = None) -> str:
+    """Read a fixed Passivbot source path from the worktree or selected Git ref."""
     if ref:
         proc = subprocess.run(
-            ["git", "-C", str(repo_dir), "show", f"{ref}:src/passivbot_version.py"],
+            ["git", "-C", str(repo_dir), "show", f"{ref}:{relative_path}"],
             check=False,
             capture_output=True,
             text=True,
@@ -47,11 +49,20 @@ def _version_source(repo_dir: Path, ref: str | None = None) -> str:
             raise RuntimeError(f"Could not inspect Passivbot ref {ref}: {detail}")
         return proc.stdout
 
-    version_path = repo_dir / "src" / "passivbot_version.py"
+    source_path = repo_dir / relative_path
+    description = "version" if relative_path == "src/passivbot_version.py" else "schema"
     try:
-        return version_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise RuntimeError(f"Could not read Passivbot version file: {version_path}") from exc
+        source_path.resolve().relative_to(repo_dir.resolve())
+        if not source_path.is_file():
+            raise FileNotFoundError(source_path)
+        return source_path.read_text(encoding="utf-8")
+    except (OSError, ValueError, RuntimeError) as exc:
+        raise RuntimeError(f"Could not read Passivbot {description} file: {source_path}") from exc
+
+
+def _version_source(repo_dir: Path, ref: str | None = None) -> str:
+    """Read Passivbot's version module from a checkout or a Git ref."""
+    return _source_file(repo_dir, "src/passivbot_version.py", ref)
 
 
 def _declared_version(source: str) -> str:
@@ -232,6 +243,19 @@ def verify_passivbot_major(repo_dir: str | Path, expected_major: int, *, ref: st
         raise RuntimeError(
             f"Refusing {target}: expected Passivbot v{expected_major}, found v{version}."
         )
+    if expected_major == 8:
+        try:
+            schema = read_source_string_literal(
+                _source_file(Path(repo_dir), "src/config/schema.py", ref),
+                "CONFIG_SCHEMA_VERSION", source_name="src/config/schema.py",
+            )
+        except (ValueError, OSError, subprocess.SubprocessError) as exc:
+            raise RuntimeError(f"Could not inspect Passivbot v8 config schema: {exc}") from exc
+        if generation_from_schema(schema) != "pb8":
+            target = f"ref {ref}" if ref else "checkout"
+            raise RuntimeError(
+                f"Refusing {target}: expected Passivbot v8 config schema, found {schema}."
+            )
     return version
 
 

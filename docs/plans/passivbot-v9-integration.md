@@ -1,7 +1,7 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
-Stand: 14. November 2026. Status: Bestandsaufnahme und erste Codeänderung
-von Claude geprüft; Restkorrekturen umgesetzt, weiterhin nicht verdrahtet.
+Stand: 14. November 2026. Status: erster Zwischenstand committed;
+PB8-Schema-Prüfung im Guard umgesetzt und für Claudes Review bereit.
 
 ## Vorgehen
 
@@ -96,57 +96,55 @@ Für jeden Schritt: Umsetzung, unabhängiges Review, Korrekturen, passende
 Tests, Changelog und bei Bedarf Serial-Bump sowie EN/DE-Guides.
 Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
 
+## Umgesetzte Zwischenstände
+
+1. **Quellklassifikation, Commit `32f00ed5`.** `classify_passivbot_source()`
+   unterscheidet Schema-Majors, liest AST statt Bot-Code auszuführen und meldet
+   fehlende Metadaten unabhängig von der Generation. Absolute Pfade sind Pflicht.
+   Git liest ohne geerbte Repository-/Config-Overrides; nur passende Metadaten
+   erhalten einen Commit, mit ausschließlich CRLF/LF-neutralem Vergleich.
+   Von Claude unabhängig geprüft; damalige fokussierte Prüfung: 128 Tests grün.
+2. **Guard-Schutz für den PB8-Slot, Review ausstehend.** Nur für
+   `expected_major == 8` prüft `verify_passivbot_major()` zusätzlich das Schema
+   aus dem Arbeitsbaum oder gewählten Git-Ref. V9/ungültige Schemas scheitern
+   mit `RuntimeError` vor Stop/Checkout. PB7 verlangt weiterhin kein Schema.
+   Rückgabewerte und CLI-Marker bleiben gleich; Zielmajor 9 bleibt gesperrt.
+   Gemeinsame reine Helfer lesen Literale mit 256-KiB-Limit und UTF-8-BOM und
+   ordnen Schema-Majors zu. Der volle Klassifikator wird nicht im Guard benutzt.
+
+Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
+Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
+Guard-Datei wurde bei der Quellsuche nicht gefunden. Die neu importierten
+Parser-Helfer verwenden Standardbibliothek-APIs von Python 3.8; ein tatsächlicher
+Python-3.8-Testlauf wurde nicht durchgeführt.
+
+Aktuelle fokussierte Offline-Prüfung: `test_pb7_pin`, `test_passivbot_runtime`,
+`test_pb8_schema_guard`, `test_pb8_installation`, `test_master_installer_maintenance`
+und `test_welcome_pb8`: **209 passed in 9.44s**. Geprüft wurden insbesondere die
+Ablehnung vor Stop/Checkout im CLI und Installer sowie der eigenständige
+Skriptaufruf außerhalb des PBGui-Arbeitsverzeichnisses. Keine vollständige Suite,
+keine Bot-/Remote-Ausführung und kein Windows-Testlauf.
+
+`pb7_guard` wird beim API-Start importiert; `api/serial.txt` wurde für die
+Guard-Änderung von 3697 auf 3698 erhöht.
+
+## Offen für spätere Schritte
+
+- Git-Umgebungsbereinigung im Guard; der bisherige Ablauf bleibt hier erhalten.
+- Bei breiterer Verwendung des Klassifikators: stabile Fehlercodes und klare
+  Ablehnungsregel. Generation/Commit allein sind bei Fehlern kein Erfolgsnachweis.
+  Der Guard benutzt Ausnahmen statt der Fehlerliste des Klassifikators.
+- Vollständiger Dirty-Status für Backtest-Provenienz; der Klassifikator belegt
+  nur die beiden Metadatendateien. Dynamische Neubindung wird nicht vollständig
+  durch die AST-Deklarationsprüfung ausgeschlossen.
+- Neue asynchrone Aufrufer dürfen synchrone Git-Lesevorgänge nicht direkt im
+  Event-Loop ausführen. Der bisherige synchrone Guard-/Installer-Pfad bleibt so.
+- Breite Status-/Archiv-Funktionen, v9-Installation und Laufzeit-Adapter folgen
+  in getrennten Änderungen. Keine bestehende PB8-Installation wurde umgestellt.
+
 ## Nächster Auftrag an Claude
 
-Claude hat die drei Korrekturen aus dem ersten Code-Review bestätigt und das
-unverdrahtete Modul als commit-reif bewertet. Der aktuelle Stand umfasst:
-
-- Git liest mit bereinigter Umgebung und ohne globale/System-Konfiguration;
-  geerbte Repository- und Config-Overrides können den Commit nicht umleiten.
-- Die eingelesenen Metadatenbytes werden mit dem ermittelten Commit nach
-  ausschließlicher CRLF/LF-Normalisierung verglichen, ohne Git-Filter auszuführen.
-  Bei anderer Abweichung bleibt `commit` leer und eine Diagnose wird gesetzt;
-  die Generation beschreibt weiterhin das gelesene Schema.
-- `None`, leere und reine Whitespace-Pfade werden vor jedem Dateizugriff
-  abgelehnt. Nach `expanduser()` sind absolute Pfade zwingend; auch `Path("")`,
-  `.` und `src/..` werden abgelehnt. Git-Testfixtures sind isoliert.
-
-Aktuelle Codex-Validierung: `tests/test_passivbot_runtime.py`,
-`tests/test_welcome_pb8.py` und `tests/test_pb8_installation.py` zusammen:
-**128 passed in 8.01s**. Enthalten sind Tests gegen Git-Umleitungsvariablen,
-staged/unstaged Metadaten, Änderungen während des Einlesens, nicht gesetzte
-und relative Pfade, verlinkte Worktrees und einen echten autocrlf-Checkout,
-einschließlich Ablehnung einer anschließenden Schemaänderung. Das ist kein
-Nachweis eines Testlaufs unter Windows. Ausschließlich fokussierte Offline-Tests;
-keine vollständige Suite und keine Bot-/Remote-Ausführung.
-Das neue Modul ist noch nicht beim API-Start importiert; kein Serial-Bump.
-
-Vor der Verdrahtung bleiben aus dem Review zu behandeln: stabile Fehlercodes
-und eine klare Ablehnungsregel für Aufrufer, gesonderte PB7-Behandlung,
-Dateigrößenlimit/BOM-Verarbeitung sowie Ausführung außerhalb des Event-Loops.
-Der Kommentar zur AST-Prüfung ist eingegrenzt: dynamische Neubindung wird
-nicht vollständig ausgeschlossen. Eine Git-Ref-Prüfung vor Checkout fehlt
-weiterhin und gehört zur nächsten Phase.
-Der Commit belegt nur die geprüften Metadatendateien. Für Backtest-Provenienz
-in Schritt 4 ist zusätzlich der Dirty-Status des gesamten Baums nötig.
-Ein vorhandener Commit trotz fehlender Metadatendatei ist kein Erfolgsnachweis;
-Aufrufer müssen die Fehlerliste auswerten.
-
-> Lies AGENTS.md, docs/architecture.md und diesen Plan. Prüfe ausschließlich
-> lesend passivbot_runtime.py und tests/test_passivbot_runtime.py sowie die
-> begleitenden Plan-/Changelog-Änderungen. Die neuen Python-Dateien sind
-> möglicherweise noch untracked; lies sie direkt. Prüfe die Klassifikation
-> ausschließlich über Schema-Major, unbekannte und nicht literale Schemas,
-> fehlende Metadaten, Git-Zuordnung und den Nachweis ohne Codeausführung.
-> Die Klassifikation ist keine Bereitschaftsprüfung; fehlende Paket-/Git-Daten
-> werden unabhängig von der Generation als Fehler gemeldet. Bestehende
-> Aufrufer bleiben absichtlich unverändert. Die drei mittleren Befunde sind
-> bereits bestätigt; prüfe gezielt die nachfolgenden Restkorrekturen für
-> absolute Pfade und CRLF/LF-Vergleich. Keine Installation, Bot-/Runtime-
-> Änderung, Remote-Aktion oder vollständige Testsuite. Gib Befunde im Chat aus;
-> ändere keine Dateien und starte keine nächste Implementierungsphase.
-
-Nach bestandenem Review und Nutzerfreigabe für den Commit folgt die Planung
-der Verdrahtung in `verify_passivbot_major()`, einschließlich seiner Git-Ref-
-Prüfung vor einem Checkout. Die breite Funktion `pb8_runtime_status()` bleibt
-in der ersten Änderung unberührt. Spätere Aufgaben können die Rollen tauschen.
+> Prüfe die neue PB8-Schema-Prüfung in pb7_guard.py, die gemeinsamen Helfer in
+> passivbot_runtime.py und die Tests, einschließlich test_pb8_schema_guard.py.
+> Achte auf Ablehnung vor Stop/Checkout, PB7-Kompatibilität und eigenständige
+> Skriptausführung. Nur lesen, nichts ändern; melde Fehler oder Commit-Reife.

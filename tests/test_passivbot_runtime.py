@@ -10,6 +10,37 @@ import passivbot_runtime
 from passivbot_runtime import classify_passivbot_source
 
 
+@pytest.mark.parametrize("source", [
+    '\ufeffCONFIG_SCHEMA_VERSION = "v9.0.0"\n',
+    b'\xef\xbb\xbfCONFIG_SCHEMA_VERSION = "v9.0.0"\r\n',
+])
+def test_literal_reader_accepts_utf8_bom(source):
+    """Both decoded and byte source may carry the conventional UTF-8 BOM."""
+    assert passivbot_runtime.read_source_string_literal(source, "CONFIG_SCHEMA_VERSION") == "v9.0.0"
+
+
+@pytest.mark.parametrize("source", [
+    b"#" + b"x" * passivbot_runtime.MAX_SOURCE_BYTES,
+    "#" + "\u00e9" * (passivbot_runtime.MAX_SOURCE_BYTES // 2),
+])
+def test_literal_reader_rejects_oversized_bytes_before_ast(source, monkeypatch):
+    """The size gate measures UTF-8 bytes and runs before AST allocation."""
+    def forbidden(*args, **kwargs):
+        """Ensure oversized input never reaches ast.parse."""
+        pytest.fail("oversized source was parsed")
+
+    monkeypatch.setattr(passivbot_runtime.ast, "parse", forbidden)
+    with pytest.raises(ValueError, match="exceeds the 256 KiB source limit"):
+        passivbot_runtime.read_source_string_literal(source, "CONFIG_SCHEMA_VERSION")
+
+
+def test_literal_reader_accepts_exact_size_limit():
+    """A source exactly at the byte limit remains parseable."""
+    literal = b'CONFIG_SCHEMA_VERSION = "v8.6.0"\n#'
+    source = literal + b"x" * (passivbot_runtime.MAX_SOURCE_BYTES - len(literal))
+    assert passivbot_runtime.read_source_string_literal(source, "CONFIG_SCHEMA_VERSION") == "v8.6.0"
+
+
 @pytest.fixture
 def source_tree(tmp_path: Path) -> Path:
     """Create a minimal source tree without reading a real bot installation."""
