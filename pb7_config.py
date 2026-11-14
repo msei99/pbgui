@@ -370,6 +370,7 @@ def load_pb7_config(
     *,
     verbose: bool = False,
     neutralize_added: bool = False,
+    pb9_context=None,
 ) -> dict:
     """Load a config through passivbot's full pipeline.
 
@@ -379,7 +380,17 @@ def load_pb7_config(
     When ``neutralize_added=True``, bot parameters that were silently
     injected by the pipeline are set to their neutral (feature-off) values
     and a ``_pbgui_param_status`` key is attached for UI display.
+
+    An explicit ``pb9_context`` selects the isolated v9 file loader. In that
+    mode ``path`` is a JSON basename below its approved root, and PB7-only
+    options must retain their defaults. The returned source stays sparse.
     """
+    if pb9_context is not None:
+        from pb9_config_storage import load_pb9_config_file
+
+        return load_pb9_config_file(
+            path, pb9_context, verbose=verbose, neutralize_added=neutralize_added,
+        )
     path = str(path)
 
     # 1) Quick raw read to grab pbgui (and any future PBGui-only keys)

@@ -1,8 +1,9 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
-Stand: 14. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung,
-Vorlagenadapter und Inline-Validierung committed; die In-Memory-Dokumentgrenze
-ist fokussiert getestet, unabhängig geprüft und zum Commit freigegeben.
+Stand: 15. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung,
+Vorlagenadapter, Inline-Validierung und Dokumentgrenze committed; der explizite
+v9-Dateiladepfad ist fokussiert getestet und unabhängig geprüft;
+Commit ist freigegeben.
 
 ## Vorgehen
 
@@ -271,7 +272,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    v9-/Rust-Integration bleibt offen. Kein API-Startimport geändert, daher
    kein zusätzlicher Serial-Bump (weiterhin 3701).
 
-8. **In-Memory-Dokumentgrenze, zum Commit freigegeben.** `validate_pb9_document()`
+8. **In-Memory-Dokumentgrenze, Commit `67245d68`.** `validate_pb9_document()`
    erstellt einen strikten JSON-Snapshot (maximal 1 MiB), bevor Runtime-Arbeit
    beginnt. Nur Root-`pbgui` wird abgetrennt und muss ein JSON-Objekt sein;
    ein fehlender Schlüssel bleibt als `None` erkennbar. Der native Anteil
@@ -303,6 +304,48 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    keine verbleibenden konkreten Fehler. Rein statischer Review, kein eigener
    Testlauf; echte native v9-/Rust-Integration bleibt offen.
    Kein API-Startimport geändert, daher kein weiterer Serial-Bump (3701).
+
+9. **Expliziter, nur lesender Dateipfad, zum Commit freigegeben.**
+   `load_pb7_config(..., pb9_context=PB9FileContext(...))` wählt ausdrücklich
+   den neuen `pb9_config_storage`-Lader, bevor PB7-Code ausgeführt wird.
+   Ohne Kontext bleibt der bestehende Ablauf unverändert; PB7-spezifische
+   Optionen sind im v9-Modus nicht erlaubt. `path` ist hier ein sichtbarer
+   JSON-Dateiname direkt im ausdrücklich gewählten absoluten `approved_root`.
+   Es gibt keine automatische Wahl über Dokument-Metadaten und keine neue
+   Produktionsdatenwurzel, API-/UI-Anbindung oder Schreibfunktion.
+
+   Der Lader öffnet alle Root-Komponenten und die Datei über No-Follow-
+   Deskriptoren. Nichtblockierendes Öffnen verhindert Warten auf FIFOs;
+   `fstat` verlangt eine reguläre Datei. Dateigröße und tatsächliches Lesen
+   sind auf 1 MiB begrenzt, auch wenn die Datei nach `fstat` wächst. Striktes
+   UTF-8/JSON verwirft doppelte Schlüssel auf jeder Ebene, Nicht-Objekte,
+   NaN/Infinity und Float-Überlauf. Die separate Dokument-/Anfrageprüfung
+   bleibt anschließend bestehen. Es gibt keine Sperren oder Schreibvorgänge.
+
+   Die vorhandene Dokumentgrenze validiert die Sparse-Quelle in ihrer v9-
+   Umgebung; nur ursprünglich vorhandene Root-GUI-Metadaten werden wieder
+   angefügt. Ermittelte Provenienz wird nicht in die Konfiguration geschrieben.
+   Der öffentliche Rückgabewert bleibt ein Config-Dict. Speichern folgt als
+   eigener Schritt nach diesem Ladepfad. Wegen `pb7_config` am API-Start ist
+   `api/serial.txt` auf **3702** erhöht; produktive Aufrufer sind nicht umgestellt.
+   Fokussiert geprüft: v9-Storage/Config/Runtime/Quellklassifikation **281 passed
+   in 15.64s**; PB7-Bridge, PB8-Config und PB7-Pin **233 passed, 2 skipped in
+   5.71s**. Der Bridge-Lauf in der Sandbox hing an `asyncio.run`/Executor-
+   Abschluss; ein Minimalfall reproduzierte dies nur in der Sandbox. Die
+   fokussierte Wiederholung außerhalb der Sandbox lief offline durch, ohne
+   Test- oder Produktänderung als Umgehung. Keine echte v9-/Rust-Integration.
+   Nach dem ersten Claude-Review: Roots werden nicht aus `HOME` expandiert;
+   neue öffentliche Datei-/Parserfehler entstehen außerhalb ihrer Handler,
+   ohne rohe Exception-Ursache oder -Kontext. Tests prüfen auch formatierte
+   Tracebacks und leere `__context__`/`__cause__`. Die Bereinigung versucht
+   alle Deskriptoren zu schließen, auch nach einem Close-Fehler; Procfs-Zählung
+   prüft ausbleibende FD-Leaks. Root-`pbgui` steht in der Rückgabe aktuell am
+   Dict-Ende; Werte bleiben identisch, die spätere Schreibformatierung ist offen.
+   Claude Fable 5.2 / medium bestätigte beim abschließenden Quellabgleich:
+   commitfähig, kein verbleibender P1–P3-Befund. Nichtblockierend bleiben ein
+   vorübergehender Traceback-Zyklus beim internen Close-Fehler bis zum GC und
+   die nicht separat geprüfte `__cause__` dieses Fehlerzweigs; öffentliche
+   Datei-/Parserfehler enthalten keine rohe Ursachenkette.
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
@@ -362,6 +405,13 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
   in getrennten Änderungen. Keine bestehende PB8-Installation wurde umgestellt.
 
 ## Abgeschlossener Claude-Review
+
+Aktueller Review des Dateiladepfads mit `claude-fable-5-2`, Effort `medium`:
+commitfähig, kein verbleibender P1–P3-Befund. Literal absolute Roots,
+bereinigte Fehlerketten und vollständige Close-Versuche sind bestätigt.
+Der Recheck las den konkreten Quellstand samt Dispatch; keine eigene Ausführung.
+Die verbleibenden Hinweise zur späteren Key-Reihenfolge und zu einem internen
+kurzlebigen Traceback-Zyklus sind oben dokumentiert.
 
 Aktueller Review der Dokumentgrenze mit `claude-fable-5-2`, Effort `medium`:
 commit-reif, keine verbleibenden konkreten Fehler. Beide nichtblockierenden

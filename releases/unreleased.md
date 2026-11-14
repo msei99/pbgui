@@ -2,6 +2,12 @@
 
 ## Development
 
+- Add an explicit, read-only PB9 file context to the shared config loader.
+  Read only bounded regular JSON files beneath an approved directory using
+  no-follow descriptors, reject duplicate keys/nonfinite numbers, and validate
+  the authored source with its isolated PB9 runtime. Retain sparse source and
+  GUI metadata without the PB7 pipeline. No saving or UI/API binding is added.
+
 - Add an in-memory PB9 document boundary that validates an independent authored
   snapshot while keeping root GUI metadata outside the native helper. Return
   sparse config, unchanged GUI metadata and inspected source identity separately;

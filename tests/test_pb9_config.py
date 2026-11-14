@@ -643,3 +643,22 @@ def test_document_limit_is_distinct_from_helper_envelope_budget(validation_runti
     assert caught.value.error_codes == ("invalid_request",)
     assert inspections == [True]
     _assert_no_native_import(validation_runtime)
+
+
+def test_shared_file_loader_reaches_isolated_native_validator(validation_runtime, tmp_path):
+    """Read a real fixture file through the shared entry point and fake native helper."""
+    from pb7_config import load_pb7_config
+    from pb9_config_storage import PB9FileContext
+
+    root = tmp_path / "library"
+    root.mkdir()
+    document = {"config_version": "v9.0.0", "bot": {"long": {}, "short": {}},
+                "optimize": {"bounds": {}}, "pbgui": {"name": "Example"}}
+    path = root / "example.json"
+    path.write_text(json.dumps(document, indent=4), encoding="utf-8")
+    before = path.read_bytes()
+    context = PB9FileContext(root, validation_runtime.root, validation_runtime.python)
+    assert load_pb7_config(path.name, pb9_context=context) == document
+    native_input = json.loads(validation_runtime.record.read_text())["config"]
+    assert native_input == {key: value for key, value in document.items() if key != "pbgui"}
+    assert path.read_bytes() == before
