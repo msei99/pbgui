@@ -2,6 +2,12 @@
 
 ## Development
 
+- Add an unconnected, read-only PB9 layout detector with a lazy INI wrapper for
+  pb9dir/pb9venv. Check source and environment separation, static Python version,
+  CLI and Rust artifact presence without starting the runtime. Report detection
+  separately from readiness; missing Git identity is a warning and Rust stamp
+  presence is reported without requiring or verifying it.
+
 - Reject v9 config schemas in PB8 guard checks for both local source trees and
   selected Git refs before process stops or checkout. Preserve PB7's package-only
   check, PB8 return values and CLI markers. Share static schema/literal helpers

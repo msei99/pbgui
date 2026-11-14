@@ -1,12 +1,15 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
-Stand: 14. November 2026. Status: erster Zwischenstand committed;
-PB8-Schema-Prüfung im Guard umgesetzt und für Claudes Review bereit.
+Stand: 14. November 2026. Status: Quellklassifikation und Guard-Schutz committed;
+getrennte PB9-Laufzeiterkennung unabhängig geprüft und zum Commit freigegeben.
 
 ## Vorgehen
 
 Wir entwickeln in kleinen, abgeschlossenen Schritten direkt auf `main`.
 Codex und Claude wechseln sich bei Umsetzung und unabhängigem Review ab.
+Claude-Reviews können direkt über die lokale CLI mit Fable 5.2 und Effort
+medium erfolgen. Claudes Rückmeldung wird im Chat angezeigt, zusätzlich zur
+Zusammenfassung von Codex; manuelles Kopieren ist nicht erforderlich.
 Pro Aufgabe bearbeitet nur einer dieselben Dateien. Normale PBGui-Arbeit
 und Veröffentlichungen stabiler Zwischenstände bleiben möglich.
 Jede Aufgabe erhält vorab einen begrenzten Umfang und ein Abnahmekriterium.
@@ -104,13 +107,30 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    Git liest ohne geerbte Repository-/Config-Overrides; nur passende Metadaten
    erhalten einen Commit, mit ausschließlich CRLF/LF-neutralem Vergleich.
    Von Claude unabhängig geprüft; damalige fokussierte Prüfung: 128 Tests grün.
-2. **Guard-Schutz für den PB8-Slot, Review ausstehend.** Nur für
+2. **Guard-Schutz für den PB8-Slot, Commit `0b980aad`.** Nur für
    `expected_major == 8` prüft `verify_passivbot_major()` zusätzlich das Schema
    aus dem Arbeitsbaum oder gewählten Git-Ref. V9/ungültige Schemas scheitern
    mit `RuntimeError` vor Stop/Checkout. PB7 verlangt weiterhin kein Schema.
    Rückgabewerte und CLI-Marker bleiben gleich; Zielmajor 9 bleibt gesperrt.
    Gemeinsame reine Helfer lesen Literale mit 256-KiB-Limit und UTF-8-BOM und
    ordnen Schema-Majors zu. Der volle Klassifikator wird nicht im Guard benutzt.
+3. **Getrennte PB9-Erkennung, Review bestanden.** `pb9_runtime.py` prüft
+   Quellschema, Trennung von PB7/PB8-Quellbäumen, eigenes Env-Verzeichnis,
+   Interpreter-/CLI-Dateien und Rust-Präsenz. Python 3.12/3.14 wird ausschließlich
+   aus `pyvenv.cfg` erkannt. Interpreter-Symlinkziele werden nicht zum Vergleich
+   von Env-Verzeichnissen verwendet; PBGui selbst zählt als reserviertes Env.
+   Das Sammelflag heißt `detected`, nicht `ready`. ABI, CLI-Verhalten und
+   Rust-/Quellübereinstimmung werden nicht durch Dateipräsenz bewiesen.
+
+   Ein fehlender Commit wird bei gültigen Quelldeklarationen nur gewarnt und
+   separat gemeldet; Schema-/Lesefehler blockieren die Erkennung. Der optionale
+   Rust-Stempel wird nur als `rust_stamp_present` gemeldet. Eine verbindliche
+   Stempelprüfung gehört zum späteren Installationsschritt.
+
+   `pb9_runtime_status()` lädt erst bei Aufruf den bestehenden INI-Leser und
+   fragt in einem Snapshot nur die sechs Pfadschlüssel ab. `pb9dir`/`pb9venv`
+   werden noch nicht registriert oder geschrieben. Es gibt keine Aufrufer,
+   UI-/Installer-Anbindung oder Änderungen an PB8-Funktionen.
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
@@ -128,6 +148,13 @@ keine Bot-/Remote-Ausführung und kein Windows-Testlauf.
 `pb7_guard` wird beim API-Start importiert; `api/serial.txt` wurde für die
 Guard-Änderung von 3697 auf 3698 erhöht.
 
+Für die neue PB9-Erkennung wurden `test_pb9_runtime`, `test_passivbot_runtime`,
+`test_welcome_pb8` und `test_pb8_installation` geprüft: **167 passed in 6.41s**.
+Fixtures liegen ausschließlich unter `tmp_path`; Marker-Code, Interpreter und
+CLI bleiben unausgeführt. Ein PB8-Regressionstest vergleicht den Status mit und
+ohne v9-INI-Schlüssel. Kein Windows-Testlauf. Da das neue Modul nicht beim
+API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
+
 ## Offen für spätere Schritte
 
 - Git-Umgebungsbereinigung im Guard; der bisherige Ablauf bleibt hier erhalten.
@@ -142,9 +169,13 @@ Guard-Änderung von 3697 auf 3698 erhöht.
 - Breite Status-/Archiv-Funktionen, v9-Installation und Laufzeit-Adapter folgen
   in getrennten Änderungen. Keine bestehende PB8-Installation wurde umgestellt.
 
-## Nächster Auftrag an Claude
+## Abgeschlossener Claude-Review
 
-> Prüfe die neue PB8-Schema-Prüfung in pb7_guard.py, die gemeinsamen Helfer in
-> passivbot_runtime.py und die Tests, einschließlich test_pb8_schema_guard.py.
-> Achte auf Ablehnung vor Stop/Checkout, PB7-Kompatibilität und eigenständige
-> Skriptausführung. Nur lesen, nichts ändern; melde Fehler oder Commit-Reife.
+Direkter CLI-Aufruf mit `claude-fable-5-2`, Effort `medium`, ausschließlich
+Lesewerkzeugen und ohne Testwiederholung. Ergebnis: commit-reif, keine
+blockierenden Fehler. Die 167 Tests sind Codex-Evidenz, kein Claude-Testlauf.
+
+> Prüfe pb9_runtime.py und tests/test_pb9_runtime.py auf getrennte Quellbäume
+> und Envs, statische Erkennung ohne Codeausführung und unverändertes PB8.
+> Fehlender Commit und Rust-Stempel sind vorerst kein Erkennungshindernis.
+> Nur lesen, nichts ändern; melde Fehler oder Commit-Reife.
