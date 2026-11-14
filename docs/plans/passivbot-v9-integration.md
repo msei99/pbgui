@@ -1,8 +1,8 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
-Stand: 14. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung
-und Vorlagenadapter committed; native Inline-Validierung umgesetzt,
-fokussiert getestet, unabhängig geprüft und zum Commit freigegeben.
+Stand: 14. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung,
+Vorlagenadapter und Inline-Validierung committed; die In-Memory-Dokumentgrenze
+ist fokussiert getestet, unabhängig geprüft und zum Commit freigegeben.
 
 ## Vorgehen
 
@@ -217,7 +217,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    bewertet den Stand als commit-reif. Die Prozess-Invariante ist im Code
    festgehalten: SIGCHLD darf nicht ignoriert werden, und ein fremder Reaper
    darf den Leader nicht vor der Gruppenbereinigung einsammeln.
-7. **Native Inline-Validierung, zum Commit freigegeben.** `validate_pb9_config()`
+7. **Native Inline-Validierung, Commit `394324ed`.** `validate_pb9_config()`
    liefert nur `valid` und Quellzuordnung. Der isolierte Helper ruft
    `config.load.prepare_config(config, base_config_path="", verbose=False,
    target="canonical", runtime=None)` auf und verwirft das aufbereitete
@@ -270,6 +270,39 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    Alle nativen Fälle verwenden Fake-Module in temporären Envs; echte
    v9-/Rust-Integration bleibt offen. Kein API-Startimport geändert, daher
    kein zusätzlicher Serial-Bump (weiterhin 3701).
+
+8. **In-Memory-Dokumentgrenze, zum Commit freigegeben.** `validate_pb9_document()`
+   erstellt einen strikten JSON-Snapshot (maximal 1 MiB), bevor Runtime-Arbeit
+   beginnt. Nur Root-`pbgui` wird abgetrennt und muss ein JSON-Objekt sein;
+   ein fehlender Schlüssel bleibt als `None` erkennbar. Der native Anteil
+   durchläuft unverändert `validate_pb9_config()`. Die Rückgabe trennt
+   autorisierte Sparse-Quelle (`config`), GUI-Metadaten (`pbgui`) und ermittelte
+   Herkunft (`source`). Es wird nichts bereinigt, ergänzt oder in die Quelle
+   zurückgeschrieben; keine Dateilader, API-/UI-Anbindung oder Migration.
+   Snapshot und Rückgabe teilen keine veränderlichen Objekte mit dem Aufrufer.
+   Das geht bewusst über Claudes vorgeschlagene flache Kopie hinaus, damit
+   spätere Aufruferänderungen nicht die geprüfte Quelle oder Metadaten verändern.
+   Native Regeln gelten weiter für verschachtelte GUI-/interne Schlüssel und
+   Dateiverweise. Ungültige Dokumente ergeben vor Runtime-Inspektion den Code
+   `invalid_document`; native Fehler werden ohne Teilergebnis weitergereicht.
+   PB7/PB8-Dateilader bleiben unverändert; die spätere Dateianbindung muss deren
+   Versionsgrenze ausdrücklich lösen, statt v9 in den PB7-Pfad zu geben.
+   Fokussiert geprüft: `test_pb9_config`, `test_pb9_runtime`,
+   `test_passivbot_runtime`: **225 passed in 13.14s**. Fake-Helper-Tests prüfen
+   die Metadaten-Trennung, unabhängige Snapshots, unveränderte Sparse-Quelle,
+   fehlende/leere Metadaten, ungültiges JSON und Größenlimit vor Inspektion,
+   fortgeltende native Ablehnungsregeln und Fehler ohne Teilergebnis.
+   Nach dem ersten Claude-Review wird der Metadaten-Typ am fertigen Snapshot
+   geprüft. Ein Regressionstest ändert den Aufruferwert zwischen strikter
+   JSON-Prüfung und Snapshot-Erzeugung. Dokumentlimit und Helper-Anfragelimit
+   bleiben getrennt: beide messen ASCII-escapte JSON-Bytes, die Anfrage enthält
+   zusätzlich Runtime-Daten. Ein Dokument knapp unter/am Limit kann deshalb
+   nach Runtime-Inspektion mit `invalid_request` scheitern, noch vor Helper-Start;
+   das ist separat getestet und im Funktionsvertrag/Changelog beschrieben.
+   Claude Fable 5.2 / medium bestätigte nach den Korrekturen: commit-reif,
+   keine verbleibenden konkreten Fehler. Rein statischer Review, kein eigener
+   Testlauf; echte native v9-/Rust-Integration bleibt offen.
+   Kein API-Startimport geändert, daher kein weiterer Serial-Bump (3701).
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
@@ -329,6 +362,12 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
   in getrennten Änderungen. Keine bestehende PB8-Installation wurde umgestellt.
 
 ## Abgeschlossener Claude-Review
+
+Aktueller Review der Dokumentgrenze mit `claude-fable-5-2`, Effort `medium`:
+commit-reif, keine verbleibenden konkreten Fehler. Beide nichtblockierenden
+Hinweise des ersten Reviews sind korrigiert: Metadaten-Typ am Snapshot und
+explizit getrennte Größenlimits. Der Recheck las den konkreten Quellstand;
+Tests wurden ausschließlich von Codex ausgeführt.
 
 Aktueller Review der Inline-Validierung mit `claude-fable-5-2`, Effort `medium`:
 Nach Korrektur der Dateiverweis-Prüfung commit-reif unter den bestehenden

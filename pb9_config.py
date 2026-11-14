@@ -14,11 +14,12 @@ import time
 
 from logging_helpers import human_log as _log
 from pb9_runtime import inspect_pb9_runtime
-from pb9_config_helper import MAX_VALIDATION_BYTES, _HelperError, check_inline_config
+from pb9_config_helper import MAX_VALIDATION_BYTES, _HelperError, _require_json_value, check_inline_config
 
 
 SERVICE = "PB9Config"
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+MAX_DOCUMENT_BYTES = 1024 * 1024
 _HELPER_PATH = Path(__file__).with_name("pb9_config_helper.py")
 _SUPPORTED_PLATFORM = sys.platform.startswith("linux") and hasattr(os, "waitid")
 _ENV_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "SYSTEMROOT", "WINDIR",
@@ -196,6 +197,42 @@ def validate_pb9_config(config: dict, pb9dir: str | Path | None, pb9venv: str | 
     version migration or runtime compilation is requested.
     """
     return _config_operation("validate", pb9dir, pb9venv, other_slots, timeout=timeout, config=config)
+
+
+def validate_pb9_document(document: dict, pb9dir: str | Path | None, pb9venv: str | Path | None,
+                          other_slots: dict | None = None, *, timeout: float = 60) -> dict:
+    """Validate an authored snapshot, keeping root GUI metadata out of native code.
+
+    Return separate ``config``, ``pbgui`` and inspected ``source`` fields. Missing
+    root ``pbgui`` remains None; a present value must be a strict JSON object.
+    The strict JSON snapshot is independent of caller-owned nested objects, and
+    native preparation never replaces it with hydrated defaults. This is an
+    in-memory boundary only: no loading, saving, migration or metadata rewriting.
+    Source identity is reported separately, never trusted from GUI metadata.
+    The document limit counts ASCII-escaped JSON bytes. The separate helper
+    request cap also includes runtime identity, so near-limit native payloads can
+    still fail with ``invalid_request`` after runtime inspection, before launch.
+    """
+    try:
+        if not isinstance(document, dict):
+            raise PB9ConfigError("invalid_document")
+        _require_json_value(document)
+        encoded = json.dumps(document, allow_nan=False).encode("utf-8")
+        if len(encoded) > MAX_DOCUMENT_BYTES:
+            raise PB9ConfigError("invalid_document")
+        snapshot = json.loads(encoded)
+        if "pbgui" in snapshot and not isinstance(snapshot["pbgui"], dict):
+            raise PB9ConfigError("invalid_document")
+    except (ValueError, TypeError, RuntimeError) as exc:
+        error = exc if isinstance(exc, PB9ConfigError) else PB9ConfigError("invalid_document")
+        _log(SERVICE, "PB9 config document rejected", level="ERROR",
+             meta={"operation": "document", "error_codes": list(error.error_codes)})
+        if error is exc:
+            raise
+        raise error from exc
+    metadata = snapshot.pop("pbgui", None)
+    validation = validate_pb9_config(snapshot, pb9dir, pb9venv, other_slots, timeout=timeout)
+    return {"config": snapshot, "pbgui": metadata, "source": validation["source"]}
 
 
 def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: float, config=None) -> dict:

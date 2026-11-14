@@ -2,6 +2,15 @@
 
 ## Development
 
+- Add an in-memory PB9 document boundary that validates an independent authored
+  snapshot while keeping root GUI metadata outside the native helper. Return
+  sparse config, unchanged GUI metadata and inspected source identity separately;
+  reject non-JSON or oversized documents before runtime inspection. Existing
+  PB7/PB8 file loaders and all persistence paths remain unchanged.
+  The document cap counts ASCII-escaped JSON bytes; the helper's independent
+  request cap also includes its runtime envelope and may reject near-limit
+  native payloads after inspection, before launching a process.
+
 - Add native in-memory PB9 validation through the isolated helper. Gate supported
   inline inputs before native imports, reject external coin/config references,
   GUI/internal metadata and symbolmap-dependent coin sources, and return only

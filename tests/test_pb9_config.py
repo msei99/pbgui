@@ -1,4 +1,4 @@
-"""Native template bridge tests using only isolated, minimal fixture runtimes."""
+"""Native config bridge and document tests using only isolated fixture runtimes."""
 
 import ast
 import copy
@@ -502,3 +502,144 @@ def test_parent_rejects_nonfinite_json_protocol_constants(runtime, monkeypatch):
     with pytest.raises(pb9_config.PB9ConfigError) as caught:
         pb9_config.load_pb9_template(runtime.root, runtime.python)
     assert caught.value.error_codes == ("invalid_response",)
+
+
+@pytest.mark.parametrize("metadata", [None, {}, {"name": "Example", "runtime": "pb8",
+                                               "source": {"commit": "authored-note"}, "notes": ["keep"]}])
+def test_document_keeps_gui_metadata_and_provenance_separate(validation_runtime, metadata):
+    """Only native sparse source reaches the helper; GUI notes cannot define provenance."""
+    document = {"config_version": "v9.0.0", "bot": {"long": {}, "short": {}},
+                "optimize": {"bounds": {}}}
+    if metadata is not None:
+        document["pbgui"] = copy.deepcopy(metadata)
+    before = copy.deepcopy(document)
+    result = pb9_config.validate_pb9_document(document, validation_runtime.root, validation_runtime.python)
+    expected_config = {key: value for key, value in before.items() if key != "pbgui"}
+    assert set(result) == {"config", "pbgui", "source"}
+    assert result["config"] == expected_config
+    assert result["pbgui"] == metadata
+    assert result["source"]["config_schema"] == "v9.0.0"
+    assert result["source"]["commit"] != "authored-note"
+    assert json.loads(validation_runtime.record.read_text())["config"] == expected_config
+    assert document == before
+    result["config"]["bot"]["long"]["caller_isolation"] = True
+    if metadata:
+        result["pbgui"]["notes"].append("result-only")
+    assert document == before
+
+
+@pytest.mark.parametrize("document", [None, [], "not a document", {"pbgui": None}, {"pbgui": []},
+    {"pbgui": {"bad": float("nan")}}, {"pbgui": {"bad": (1, 2)}},
+    {"pbgui": {1: "non-string key"}}, {"pbgui": {"bad": object()}},
+    {"pbgui": {"note": "x" * pb9_config.MAX_DOCUMENT_BYTES}},
+])
+def test_invalid_documents_fail_before_runtime_inspection(document, monkeypatch):
+    """Malformed or oversized GUI documents cannot inspect or start a runtime."""
+    def forbidden(*args, **kwargs):
+        """The document check must run before either runtime inspection or launch."""
+        pytest.fail("invalid document reached runtime")
+
+    monkeypatch.setattr(pb9_config, "inspect_pb9_runtime", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_document(document, None, None)
+    assert caught.value.error_codes == ("invalid_document",)
+
+
+@pytest.mark.parametrize(("patch", "code"), [
+    ({"bot": {"long": {"pbgui": {}}}}, "invalid_config"),
+    ({"bot": {"_raw": {}}}, "invalid_config"),
+    ({"config_version": "v8.6.0"}, "config_version_mismatch"),
+    ({"coin_overrides": {"BTC": {}}}, "external_reference_rejected"),
+])
+def test_document_retains_native_fail_closed_rules(validation_runtime, patch, code):
+    """Removing root GUI metadata never bypasses native schema and reference guards."""
+    document = {"config_version": "v9.0.0", "pbgui": {"name": "Example"}, **patch}
+    before = copy.deepcopy(document)
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_document(document, validation_runtime.root, validation_runtime.python)
+    assert caught.value.error_codes == (code,)
+    assert document == before
+    _assert_no_native_import(validation_runtime)
+
+
+def test_document_native_rejection_returns_no_partial_document(validation_runtime):
+    """An unsuccessful native check raises its existing code instead of exposing a result."""
+    validation_runtime.loader.write_text(
+        'def prepare_config(config, **kwargs):\n    raise ValueError("fixture-private-native-rejection")\n',
+        encoding="utf-8")
+    document = {"config_version": "v9.0.0", "pbgui": {"name": "Example"}}
+    before = copy.deepcopy(document)
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_document(document, validation_runtime.root, validation_runtime.python)
+    assert caught.value.error_codes == ("native_config_rejected",)
+    assert document == before
+
+
+def test_document_snapshot_precedes_runtime_work(validation_runtime, monkeypatch):
+    """Caller edits during validation cannot change the returned or validated snapshot."""
+    document = {"config_version": "v9.0.0", "bot": {"long": {}}, "pbgui": {"notes": ["initial"]}}
+    before = copy.deepcopy(document)
+    original_inspect = pb9_config.inspect_pb9_runtime
+
+    def inspect_after_caller_edit(*args, **kwargs):
+        """Model a caller changing its mutable form while runtime work proceeds."""
+        document["bot"]["long"]["later"] = True
+        document["pbgui"]["notes"].append("later")
+        return original_inspect(*args, **kwargs)
+
+    monkeypatch.setattr(pb9_config, "inspect_pb9_runtime", inspect_after_caller_edit)
+    result = pb9_config.validate_pb9_document(document, validation_runtime.root, validation_runtime.python)
+    expected_config = {key: value for key, value in before.items() if key != "pbgui"}
+    assert result["config"] == expected_config
+    assert json.loads(validation_runtime.record.read_text())["config"] == expected_config
+    assert result["pbgui"] == before["pbgui"]
+    assert document["pbgui"]["notes"] == ["initial", "later"]
+
+
+def test_document_metadata_type_is_checked_on_captured_snapshot(monkeypatch):
+    """A caller edit during capture cannot return null as if metadata were absent."""
+    document = {"config_version": "v9.0.0", "pbgui": {}}
+    original_check = pb9_config._require_json_value
+
+    def check_before_caller_edit(value):
+        """Change to another JSON value after the initial strict JSON check."""
+        original_check(value)
+        document["pbgui"] = None
+
+    def forbidden(*args, **kwargs):
+        """The captured metadata error must be rejected before runtime work."""
+        pytest.fail("invalid captured metadata reached runtime")
+
+    monkeypatch.setattr(pb9_config, "_require_json_value", check_before_caller_edit)
+    monkeypatch.setattr(pb9_config, "inspect_pb9_runtime", forbidden)
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_document(document, None, None)
+    assert caught.value.error_codes == ("invalid_document",)
+
+
+def test_document_limit_is_distinct_from_helper_envelope_budget(validation_runtime, monkeypatch):
+    """A near-limit document can fail the separate request budget after inspection."""
+    document = {"config_version": "v9.0.0", "bot": {"global": {"universe": {"approved_coins": [""]}}}}
+    padding = pb9_config.MAX_DOCUMENT_BYTES - len(json.dumps(document).encode("utf-8"))
+    document["bot"]["global"]["universe"]["approved_coins"] = ["X" * padding]
+    assert len(json.dumps(document).encode("utf-8")) == pb9_config.MAX_DOCUMENT_BYTES
+    status = pb9_config.inspect_pb9_runtime(validation_runtime.root, validation_runtime.python)
+    inspections = []
+
+    def inspect(*args, **kwargs):
+        """Return an already inspected fake runtime, avoiding Git subprocesses."""
+        inspections.append(True)
+        return status
+
+    def forbidden(*args, **kwargs):
+        """An oversized protocol request must never launch its helper."""
+        pytest.fail("oversized protocol request launched helper")
+
+    monkeypatch.setattr(pb9_config, "inspect_pb9_runtime", inspect)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_document(document, validation_runtime.root, validation_runtime.python)
+    assert caught.value.error_codes == ("invalid_request",)
+    assert inspections == [True]
+    _assert_no_native_import(validation_runtime)
