@@ -287,15 +287,29 @@ def save_ini(section : str, parameter : str, value : str):
 
     update_ini(mutate)
 
-def save_ini_section(section: str, values: dict[str, str]) -> None:
+def save_ini_section(
+    section: str, values: dict[str, str], *,
+    validate: Callable[[configparser.ConfigParser, set[tuple[str, str]]], None] | None = None,
+) -> None:
+    """Save a batch, optionally validating its changed keys under the same lock."""
     for parameter in (values or {}):
         _reject_retired_credential_ini_field(section, str(parameter))
 
     def mutate(pb_config: configparser.ConfigParser) -> None:
+        """Validate the complete candidate parser before atomic publication."""
         if not pb_config.has_section(section):
             pb_config.add_section(section)
+        changed_keys = set()
         for parameter, value in (values or {}).items():
-            pb_config.set(section, str(parameter), _normalize_ini_value(str(parameter), str(value)))
+            key = str(parameter)
+            previous = (pb_config.get(section, key, raw=True)
+                        if validate is not None and pb_config.has_option(section, key) else None)
+            normalized = _normalize_ini_value(key, str(value))
+            pb_config.set(section, key, normalized)
+            if validate is not None and previous != normalized:
+                changed_keys.add((section, pb_config.optionxform(key)))
+        if validate is not None:
+            validate(pb_config, changed_keys)
 
     update_ini(mutate)
 

@@ -167,7 +167,7 @@ def test_pb8_only_setup_save_applies_on_next_operation(monkeypatch) -> None:
     saved: list[tuple[str, dict[str, str]]] = []
     monkeypatch.setattr(auth, "pb7_runtime_status", lambda: dict(previous))
     monkeypatch.setattr(auth, "pb8_runtime_status", lambda: dict(previous_pb8))
-    monkeypatch.setattr(auth, "save_ini_section", lambda section, values: saved.append((section, values)))
+    monkeypatch.setattr(auth, "save_ini_section", lambda section, values, **_kwargs: saved.append((section, values)))
     monkeypatch.setattr(auth, "_bootstrap_payload", lambda _session: {"setup": current})
 
     result = auth.save_setup(

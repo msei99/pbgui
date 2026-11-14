@@ -54,6 +54,12 @@ Important fields:
 
 Use the **Browse** buttons to pick directories and the Python interpreter from the server filesystem.
 
+If experimental PB9 paths have already been configured separately, changed PB7/PB8
+source paths must not overlap the reserved PB9 source tree, and their interpreters
+must not reuse its environment. A conflict rejects the entire save; the existing
+settings and your form entries remain available for correction. Unchanged paths
+and unrelated name/role changes do not require a working PB9 installation.
+
 The role is picked up by fresh operation cycles after saving. Changes to the
 PB7 path, PB7 interpreter, or bot name require the PBRun service to restart;
 the save confirmation reports the required apply timing.

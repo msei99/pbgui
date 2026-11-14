@@ -2,6 +2,12 @@
 
 ## Development
 
+- Protect existing PB9 path reservations when saving PB7/PB8 paths from Welcome.
+  Validate only actual changes under the INI transaction lock, reject conflicts
+  with HTTP 409 and stable error-code headers, and retain raw interpreter
+  identity when legacy normalization follows a symlink. Unrelated settings and
+  installations without PB9 keep their existing behavior.
+
 - Add a validated PB9 path writer using the existing locked, atomic INI
   transaction. Save both canonical paths together while preserving interpreter
   symlinks, reject invalid layouts without publication, and support explicitly

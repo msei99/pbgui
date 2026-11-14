@@ -54,6 +54,13 @@ Wichtige Felder:
 
 Mit den **Browse**-Buttons kannst du Verzeichnisse und den Python-Interpreter direkt aus dem Server-Dateisystem auswaehlen.
 
+Wenn experimentelle PB9-Pfade bereits separat konfiguriert wurden, duerfen
+geaenderte PB7/PB8-Quellpfade den reservierten PB9-Quellbaum nicht ueberlappen.
+Die Interpreter duerfen dessen Umgebung nicht gemeinsam verwenden. Ein Konflikt
+lehnt den gesamten Speichervorgang ab; bisherige Einstellungen und Formulareingaben
+bleiben zur Korrektur erhalten. Unveraenderte Pfade und unabhaengige Namens- oder
+Rollenaenderungen erfordern keine funktionsfaehige PB9-Installation.
+
 Die Rolle wird nach dem Speichern von neuen Arbeitszyklen uebernommen.
 Aenderungen an PB7-Pfad, PB7-Interpreter oder Bot-Namen erfordern einen Neustart
 des PBRun-Dienstes; die Speicherbestaetigung zeigt die jeweilige Apply-Semantik.

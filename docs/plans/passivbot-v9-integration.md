@@ -1,8 +1,8 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
 Stand: 14. November 2026. Status: Quellklassifikation und Guard-Schutz committed;
-getrennte PB9-Erkennung committed; sichere Pfadspeicherung umgesetzt,
-fokussierte Tests und unabhängiges Review bestanden.
+getrennte PB9-Erkennung und Pfadspeicherung committed; Gegenprüfung im
+Welcome-Speicherweg umgesetzt, fokussiert getestet und unabhängig geprüft.
 
 ## Vorgehen
 
@@ -16,6 +16,9 @@ und Veröffentlichungen stabiler Zwischenstände bleiben möglich.
 Jede Aufgabe erhält vorab einen begrenzten Umfang und ein Abnahmekriterium.
 Unfertige v9-Funktionen bleiben ausgeblendet oder gesperrt.
 Commits und Pushes benötigen weiterhin die ausdrückliche Zustimmung des Nutzers.
+Nach einem freigegebenen Commit geht Codex direkt zum nächsten geplanten Schritt
+über, ohne eine weitere Aufforderung abzuwarten. Weitere Commits brauchen erneut
+die ausdrückliche Freigabe; Remote-Aktionen bleiben separat freigabepflichtig.
 
 ## Verbindliche Grenzen
 
@@ -132,7 +135,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    fragt in einem Snapshot nur die sechs Pfadschlüssel ab. `pb9dir`/`pb9venv`
    werden noch nicht registriert oder geschrieben. Es gibt keine Aufrufer,
    UI-/Installer-Anbindung oder Änderungen an PB8-Funktionen.
-4. **Sichere Pfadspeicherung, Review bestanden.** `save_pb9_runtime_paths()`
+4. **Sichere Pfadspeicherung, Commit `e5a84ea0`.** `save_pb9_runtime_paths()`
    prüft die neue Konfiguration gegen die PB7/PB8-Werte desselben gesperrten
    INI-Parsers. Nur ein erkanntes Layout wird als Paar gespeichert; Fehler
    brechen vor der atomaren Veröffentlichung mit stabilen Fehlercodes ab.
@@ -153,6 +156,26 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    fokussierte Läufe wurden wegen eines Hängers in diesem Test abgebrochen.
    Claude Fable 5.2 / medium hat den Stand rein lesend als commit-reif geprüft;
    keine Tests durch Claude wiederholt. Keine produktive INI geändert.
+5. **Gegenprüfung im Welcome-Speicherweg, Review bestanden.** Der optionale
+   `save_ini_section`-Hook erhält nur tatsächlich geänderte Schlüssel des
+   Kandidaten unter demselben INI-Lock. `check_slot_change()` prüft geänderte
+   PB7/PB8-Pfade gegen die gespeicherte PB9-Reservierung, ohne Bot-/Git-/Artefakt-
+   Inspektion. Ohne PB9-Konfiguration entfällt die Prüfung.
+
+   `save_setup` bildet Konflikte auf HTTP 409 mit verständlichem Text und
+   `X-PBGUI-Error-Codes` ab. Die ursprünglichen Interpreter-Anfragen werden
+   zusätzlich geprüft, damit die bestehende PB8-Symlink-Auflösung keinen
+   Env-Konflikt verdeckt. Unveränderte Pfade und reine Identitätsänderungen
+   bleiben möglich. Andere Aufrufer verwenden keinen Hook.
+
+   Fokussierte Offline-Prüfung: `test_pb9_slot_change`, `test_pb9_runtime`,
+   `test_ini_apply_metadata`, `test_ini_transactions`, `test_welcome_pb8` und
+   `test_pb8_installation`: **178 passed in 6.16s**. Die API- und gemeinsamen
+   Laufzeitänderungen erhöhen die Serial von 3699 auf 3700. EN/DE-Welcome-
+   Guides wurden ergänzt; HTML, Navigation und Asset-Versionen bleiben gleich.
+   Zusätzlich: `test_help_coverage`, **3 passed in 0.30s**.
+   Claude Fable 5.2 / medium: keine blockierenden Befunde, commit-reif; rein
+   lesend am aktuellen Quellstand, ohne eigenen Testlauf und ohne Git-Diff.
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
@@ -179,8 +202,14 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
 
 ## Offen für spätere Schritte
 
-- Vor produktiver Anbindung muss auch das Ändern von PB7/PB8-Pfaden auf
-  Konflikte mit gespeicherten PB9-Pfaden geprüft werden.
+- Installer-/VPS-Schreibwege benötigen vor ihrer PB9-Anbindung ebenfalls
+  Konfliktprüfungen; die aktuelle Gegenprüfung schützt nur Welcome `save_setup`.
+- Beim Welcome-Hook gilt die Erkennung unveränderter Werte für kanonisch
+  gespeicherte Werte. Alte manuelle Trailing-Slashes oder PB8-Interpreter-
+  Symlinks können durch die vorhandene Normalisierung als Änderung gelten und
+  einen bestehenden Konflikt erneut melden. Frei angegebene Interpreter
+  außerhalb von bin/Scripts ergeben bei aktiver PB9-Reservierung den Code
+  `other_slot_path_invalid`, statt eine Env-Trennung zu behaupten.
 - Vor API-/UI-Anbindung: Interpolationsfehler bei Prozentzeichen in Pfaden
   ebenfalls auf stabile Fehlercodes abbilden; aktuell bleibt die INI unverändert,
   die ConfigParser-Ausnahme ist aber nicht PB9RuntimePathError.
@@ -197,6 +226,11 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
   in getrennten Änderungen. Keine bestehende PB8-Installation wurde umgestellt.
 
 ## Abgeschlossener Claude-Review
+
+Aktueller Review der Gegenprüfung mit `claude-fable-5-2`, Effort `medium`:
+commit-reif, keine blockierenden Befunde. Die Randfälle alter nichtkanonischer
+Werte und ungeeigneter Interpreterpfade sind oben dokumentiert. Der aktuelle
+Quellstand wurde gelesen; ein Diff war Claude bei diesem Aufruf nicht verfügbar.
 
 Aktueller Review der Pfadspeicherung mit `claude-fable-5-2`, Effort `medium`:
 commit-reif, keine blockierenden Fehler. Hinweise zu INI-Interpolation,

@@ -88,7 +88,7 @@ def test_welcome_setup_returns_apply_metadata_for_changed_fields(monkeypatch) ->
     saved: list[tuple[str, dict[str, str]]] = []
     monkeypatch.setattr(auth_api, "pb7_runtime_status", lambda: previous)
     monkeypatch.setattr(auth_api, "pb8_runtime_status", lambda: {"pb8dir": "", "pb8venv": ""})
-    monkeypatch.setattr(auth_api, "save_ini_section", lambda section, values: saved.append((section, values)))
+    monkeypatch.setattr(auth_api, "save_ini_section", lambda section, values, **_kwargs: saved.append((section, values)))
     monkeypatch.setattr(auth_api, "_bootstrap_payload", lambda session: {"setup": {**current, "pb8": {"pb8dir": "", "pb8venv": ""}}})
 
     result = auth_api.save_setup(

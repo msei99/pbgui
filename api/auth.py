@@ -1178,6 +1178,8 @@ async def change_password(
 @router.post("/setup")
 def save_setup(payload: SetupConfigRequest, session: SessionToken = Depends(require_auth)) -> dict:
     """Persist PB7/PB8 paths and host identity from the welcome page."""
+    from pb9_runtime import PB9RuntimePathError, check_slot_change
+
     previous_setup = pb7_runtime_status()
     previous_pb8 = pb8_runtime_status()
     role = "master" if payload.role == "master" else "slave"
@@ -1193,7 +1195,25 @@ def save_setup(payload: SetupConfigRequest, session: SessionToken = Depends(requ
         setup_values["pb8dir"] = _validated_setup_path(payload.pb8dir, "Passivbot V8 path")
     if payload.pb8venv is not None:
         setup_values["pb8venv"] = _validated_setup_path(payload.pb8venv, "Passivbot V8 python interpreter")
-    save_ini_section("main", setup_values)
+    requested_interpreters = {"pb7venv": payload.pb7venv.strip()}
+    if payload.pb8venv is not None:
+        requested_interpreters["pb8venv"] = payload.pb8venv.strip()
+
+    def validate_slot_change(parser, changed_keys):
+        """Validate against the PB9 reservation from the locked INI generation."""
+        check_slot_change(parser, changed_keys, requested_values=requested_interpreters)
+
+    try:
+        save_ini_section("main", setup_values, validate=validate_slot_change)
+    except PB9RuntimePathError as exc:
+        codes = ",".join(exc.error_codes)
+        _log(SERVICE, "Setup path change rejected: PB9 runtime separation", level="WARNING",
+             meta={"error_codes": list(exc.error_codes)})
+        raise HTTPException(
+            status_code=409,
+            detail="Runtime paths conflict with the configured PB9 slot; setup was not saved.",
+            headers={"X-PBGUI-Error-Codes": codes},
+        ) from exc
 
     response = _bootstrap_payload(session)
     current_setup = response["setup"]

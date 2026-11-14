@@ -237,6 +237,45 @@ def pb9_runtime_status() -> dict:
                                {key: values[key] for key in _SLOT_KEYS})
 
 
+def check_slot_change(parser: configparser.ConfigParser, changed_keys: set[tuple[str, str]], *,
+                      requested_values: dict[str, str] | None = None) -> None:
+    """Reject changed PB7/PB8 paths overlapping a configured PB9 reservation.
+
+    Inspect paths only, never source metadata, artifacts or Git. Optional raw
+    interpreter requests preserve environment identity when a legacy caller's
+    normalization follows the executable symlink before this hook runs.
+    """
+    changes = {key for section, key in changed_keys if section == "main" and key in _SLOT_KEYS}
+    if not changes:
+        return
+    pb9_paths = {key: parser.get("main", key, raw=True, fallback="")
+                 for key in ("pb9dir", "pb9venv")}
+    if not any(value.strip() for value in pb9_paths.values()):
+        return
+    status = _empty_status()
+    for key in sorted(changes):
+        value = parser.get("main", key, raw=True, fallback="")
+        if not value.strip():
+            continue
+        try:
+            if key.endswith("dir") and pb9_paths["pb9dir"].strip():
+                if _overlaps(_absolute_path(value), _absolute_path(pb9_paths["pb9dir"])):
+                    _diagnostic(status, "source_overlap", "Runtime source overlaps the configured PB9 source")
+            elif key.endswith("venv") and pb9_paths["pb9venv"].strip():
+                roots = {_venv_root(_absolute_path(value, interpreter=True))}
+                requested = (requested_values or {}).get(key, "")
+                if requested.strip():
+                    # Existing PB7 settings also accept cwd-relative paths.
+                    requested_path = Path(requested).expanduser().absolute()
+                    roots.add(_venv_root(_absolute_path(requested_path, interpreter=True)))
+                if _venv_root(_absolute_path(pb9_paths["pb9venv"], interpreter=True)) in roots:
+                    _diagnostic(status, "venv_shared", "Runtime shares the configured PB9 environment")
+        except (OSError, ValueError, RuntimeError, TypeError):
+            _diagnostic(status, "other_slot_path_invalid", "Cannot verify changed runtime path separation from PB9")
+    if status["errors"]:
+        raise PB9RuntimePathError(status)
+
+
 def save_pb9_runtime_paths(pb9dir: str | Path | None, pb9venv: str | Path | None) -> dict:
     """Validate and save both PB9 paths in one locked, atomic INI transaction.
 
