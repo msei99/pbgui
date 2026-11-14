@@ -1,7 +1,8 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
 Stand: 14. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung
-committed; native v9-Vorlagenanbindung umgesetzt, getestet und unabhängig geprüft.
+und Vorlagenadapter committed; native Inline-Validierung umgesetzt,
+fokussiert getestet, unabhängig geprüft und zum Commit freigegeben.
 
 ## Vorgehen
 
@@ -175,7 +176,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    Zusätzlich: `test_help_coverage`, **3 passed in 0.30s**.
    Claude Fable 5.2 / medium: keine blockierenden Befunde, commit-reif; rein
    lesend am aktuellen Quellstand, ohne eigenen Testlauf und ohne Git-Diff.
-6. **Native Vorlagenanbindung, Review bestanden.** `pb9_config.py` bietet
+6. **Native Vorlagenanbindung, Commit `b7cbb702`.** `pb9_config.py` bietet
    `load_pb9_template()` nach statischer Erkennung der getrennten Runtime.
    Ein eigener Einmal-Prozess mit `-I` lädt nur `config.schema.get_template_config()`
    und Paketmetadaten aus dem ausgewählten Checkout. Schema und Modulpfade
@@ -216,6 +217,59 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    bewertet den Stand als commit-reif. Die Prozess-Invariante ist im Code
    festgehalten: SIGCHLD darf nicht ignoriert werden, und ein fremder Reaper
    darf den Leader nicht vor der Gruppenbereinigung einsammeln.
+7. **Native Inline-Validierung, zum Commit freigegeben.** `validate_pb9_config()`
+   liefert nur `valid` und Quellzuordnung. Der isolierte Helper ruft
+   `config.load.prepare_config(config, base_config_path="", verbose=False,
+   target="canonical", runtime=None)` auf und verwirft das aufbereitete
+   Ergebnis. Die ursprüngliche Sparse-Quelle bleibt unverändert beim Aufrufer;
+   normalisierte Exporte und Speichern folgen separat.
+
+   Parent und Helper verwenden dieselbe reine Eingangsprüfung aus dem
+   Standardbibliothek-Teil des Helpers, ohne dabei native Module zu importieren.
+   Root-Schema muss genau zum gewählten Runtime-Schema passen. GUI-Metadaten
+   (`pbgui`) und interne `_`-Schlüssel, auch in gepunkteten Pfaden, sind kein
+   Teil der unterstützten nativen Eingabe und werden abgelehnt, nicht entfernt.
+   Native Value/Type/KeyError-Werte werden zu `native_config_rejected`, andere
+   native Fehler zu `native_validation_failed`, jeweils ohne rohe Fehlerdaten.
+
+   I/O-Audit an Ref `ad9d6ede`: `config.normalize` bindet Universe-Quellen;
+   `config.universe.resolve_universe_sources` liest explizite Dateiquellen,
+   tokenisiert Inline-Listen aber mit `resolve_files=False`. `None` und der
+   explizite `approved_coins: "all"`-Zweig sind dateifrei. Skalare sonstige
+   Quellen, Pfadpräfixe/-suffixe, Coin-Overrides und Override-Dateipfade werden
+   vor nativen Imports abgelehnt, einschließlich Szenarien/gepunkteter Patches.
+   `config.hsl.require_current_hsl_schema` kann Override-Dateien laden;
+   `config.hydrate.normalize_backtest_coin_sources` kann über
+   `utils.symbol_to_coin` eine Symbolmap lesen. Deshalb bleiben nichtleere
+   Coin-Overrides und `coin_sources` sowie Dataset-Dateipfade ausgeschlossen.
+   Die Datei-Lader `load_input_config`/`load_raw_config` werden nicht aufgerufen.
+
+   Validierungsanfragen sind auf 1 MiB begrenzt; das 16-KiB-Template-Limit
+   bleibt bestehen. Der gemeinsame Linux-Transport mit Gruppenbereinigung,
+   Deadline und 2-MiB-Ausgabelimit wird weiterverwendet. Parent-Antworten
+   lehnen jetzt ebenfalls NaN/Infinity ab. Der Helper startet zusätzlich mit
+   `-B`, damit native Imports keine Bytecode-Caches im Quellbaum schreiben.
+
+   Fokussiert geprüft: `test_pb9_config`, `test_pb9_runtime`,
+   `test_passivbot_runtime`: **204 passed in 10.37s**. Test-Marker belegen,
+   dass abgelehnte Eingaben weder das native Paket noch `config.load`
+   importieren. Erfolgsfälle prüfen die kwargs, Unverändertheit, Source-Bindung,
+   Größenlimits, Fehlertext-Isolation und Prozessbereinigung bei Timeout.
+   Nach dem ersten Claude-Review prüft das Gate zusätzlich komplette
+   Listenelemente vor dem Aufteilen an Kommas (`a,.txt`/`sub/x, .json`);
+   Importfehler bleiben Runtime-Fehler. Ein erfolgreicher 350-KiB-Request
+   prüft Teilschreibvorgänge über der Pipe-Puffergröße und vollständigen Empfang.
+   Weitere Regressionen decken Dotfile-Endungen und native Pfadnormalisierung
+   ab (`x.json/`, `x.txt/.`, innere `..`-Segmente); die Prüfung entfernt für
+   den Endungsvergleich abschließende Slash-/Punktzeichen und sperrt Traversal.
+   Auch unerwartete Schema-Importfehler erhalten den Validierungs-Fehlercode.
+   Claude Fable 5.2 / medium bestätigte im abschließenden Quellabgleich:
+   kein verbleibender konkreter Datei-Read-Bypass unter den dokumentierten
+   Grenzen. Der optionale isolierte Test der `..`-Regel ohne Dateiendung
+   bleibt offen; der vorhandene Traversal-Fall trifft auch die Endungsregel.
+   Alle nativen Fälle verwenden Fake-Module in temporären Envs; echte
+   v9-/Rust-Integration bleibt offen. Kein API-Startimport geändert, daher
+   kein zusätzlicher Serial-Bump (weiterhin 3701).
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
@@ -268,13 +322,21 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
   beendet, beenden den Aufruf aber spätestens an der Deadline. Rohes Schreiben
   auf fd 1 kann das Protokoll verwerfen; echte Rust-Integration bleibt zu prüfen.
   Striktes NaN/Infinity-Parsing im Parent und Abbildung seltener
-  SubprocessError-Werte sind weitere nichtblockierende Review-Hinweise.
+  SubprocessError-Werte sind mit der Inline-Validierung umgesetzt.
 - Neue asynchrone Aufrufer dürfen synchrone Git-Lesevorgänge nicht direkt im
   Event-Loop ausführen. Der bisherige synchrone Guard-/Installer-Pfad bleibt so.
 - Breite Status-/Archiv-Funktionen, v9-Installation und Laufzeit-Adapter folgen
   in getrennten Änderungen. Keine bestehende PB8-Installation wurde umgestellt.
 
 ## Abgeschlossener Claude-Review
+
+Aktueller Review der Inline-Validierung mit `claude-fable-5-2`, Effort `medium`:
+Nach Korrektur der Dateiverweis-Prüfung commit-reif unter den bestehenden
+Grenzen. Der letzte Recheck verglich den übergebenen Helper und Testdiff mit
+den nativen Quellbelegen; keine Ausführung und kein eigener Testlauf.
+Ein früherer Review konnte Kopien unter `/tmp` nicht lesen; die folgenden
+Prüfungen erhielten die öffentlichen Belege im erlaubten Arbeitsverzeichnis
+beziehungsweise direkt im Prompt. Temporäre Repo-Kopien wurden entfernt.
 
 Aktueller Review des Vorlagenadapters mit `claude-fable-5-2`, Effort `medium`:
 Nach Ersatz des Thread-Transports durch die Linux-Prozessgruppen-/Selector-Lösung

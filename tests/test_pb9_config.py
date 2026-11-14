@@ -1,6 +1,7 @@
 """Native template bridge tests using only isolated, minimal fixture runtimes."""
 
 import ast
+import copy
 import json
 import os
 from pathlib import Path
@@ -69,6 +70,7 @@ def test_template_is_loaded_in_own_process_and_preserves_authored_shape(runtime)
     assert result["source"]["commit_available"] is False
     assert Path(result["source"]["schema_module_file"]) == runtime.schema
     assert sys.modules.get("config.schema") is previous
+    assert list(runtime.root.rglob("__pycache__")) == []
 
 
 def test_requests_have_no_shared_module_or_template_cache(runtime):
@@ -169,7 +171,7 @@ def test_protocol_module_outside_selected_source_is_rejected(runtime, monkeypatc
     assert caught.value.error_codes == ("runtime_identity_mismatch",)
 
 
-def test_helper_exposes_only_template_operation(runtime):
+def test_helper_rejects_start_operation(runtime):
     """The helper has no migration, save, optimizer or bot-start operation."""
     request = {"operation": "start", "pb9_dir": str(runtime.root),
                "config_schema": "v9.0.0", "package_version": "8.2.0.dev0"}
@@ -289,3 +291,214 @@ def test_grandchild_holding_stdout_cannot_outlive_request(runtime, tmp_path, mon
                     os.kill(record["pid"], signal.SIGKILL)
             except (FileNotFoundError, ProcessLookupError):
                 pass
+
+
+@pytest.fixture
+def validation_runtime(runtime, tmp_path):
+    """Record native validation calls in a fake module without real v9/Rust code."""
+    runtime.import_marker = tmp_path / "native_load_imported"
+    runtime.source_import_marker = tmp_path / "native_config_imported"
+    runtime.record = tmp_path / "native_validation_call.json"
+    runtime.loader = runtime.root / "src" / "config" / "load.py"
+    (runtime.loader.parent / "__init__.py").write_text(
+        f'from pathlib import Path\nPath({str(runtime.source_import_marker)!r}).write_text("imported")\n',
+        encoding="utf-8")
+    runtime.loader.write_text(
+        'import json\nfrom pathlib import Path\n'
+        f'Path({str(runtime.import_marker)!r}).write_text("imported")\n'
+        'def prepare_config(config, **kwargs):\n'
+        f'    Path({str(runtime.record)!r}).write_text(json.dumps({{"config": config, "kwargs": kwargs}}))\n'
+        '    config.setdefault("bot", {}).setdefault("long", {})["expanded"] = True\n'
+        '    config["_raw"] = {"internal": True}\n'
+        '    return config\n', encoding="utf-8")
+    return runtime
+
+
+def _assert_no_native_import(runtime):
+    """Both package initialization and the native loader must remain untouched."""
+    assert not runtime.source_import_marker.exists()
+    assert not runtime.import_marker.exists()
+
+
+def test_native_validation_preserves_caller_source_and_uses_canonical_kwargs(validation_runtime):
+    """Native preparation validates only; expanded results never replace authored input."""
+    runtime = validation_runtime
+    config = {"config_version": "v9.0.0", "bot": {"long": {}, "short": {}},
+              "optimize": {"bounds": {}}, "coin_overrides": {}}
+    before = copy.deepcopy(config)
+    previous = sys.modules.get("config.load")
+    result = pb9_config.validate_pb9_config(config, runtime.root, runtime.python)
+    assert result["valid"] is True
+    assert runtime.source_import_marker.exists()
+    assert runtime.import_marker.exists()
+    assert "config" not in result
+    assert result["source"]["load_module_file"] == str(runtime.loader)
+    assert config == before
+    assert sys.modules.get("config.load") is previous
+    call = json.loads(runtime.record.read_text())
+    assert call["config"] == before
+    assert call["kwargs"] == {"base_config_path": "", "verbose": False, "target": "canonical", "runtime": None}
+
+
+@pytest.mark.parametrize("approved", [[], ["BTC", "binance:ETH/USDT:USDT"], None, "all"])
+def test_inline_universe_and_no_io_all_sentinel_are_supported(validation_runtime, approved):
+    """Audited native list/inheritance/all branches never request coin-list files."""
+    config = {"config_version": "v9.0.0", "bot": {"global": {"universe": {
+        "approved_coins": approved, "ignored_coins": []}}}}
+    assert pb9_config.validate_pb9_config(config, validation_runtime.root, validation_runtime.python)["valid"] is True
+
+
+_INVALID_INLINE_CASES = [
+    ({}, "config_version_mismatch"),
+    ({"config_version": "v8.6.0"}, "config_version_mismatch"),
+    ({"config_version": "v9.1.0"}, "config_version_mismatch"),
+    ({"pbgui": {"note": "GUI-only"}}, "invalid_config"),
+    ({"_raw": {"live": {"approved_coins": "/foreign"}}}, "invalid_config"),
+    ({"optimize": {"fixed_runtime_overrides": {"bot._coins_sources": []}}}, "invalid_config"),
+    ({"live": {"base_config_path": "/foreign/config.json"}}, "external_reference_rejected"),
+    ({"coin_overrides": {"BTC": {"strategy": {}}}}, "external_reference_rejected"),
+    ({"optimize": {"fixed_runtime_overrides": {"coin_overrides.BTC": {}}}}, "external_reference_rejected"),
+    ({"optimize": {"fixed_runtime_overrides": {"coin_overrides.BTC.override_config_path": "/foreign"}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": "BTC"}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"ignored_coins": "all"}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": ["../coins.txt"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": [" /foreign"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": ["coin-list.JSON"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": ["~/.secrets"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": ["C:\\foreign"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": ["BTC,/foreign"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": ["a,.txt"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"ignored_coins": ["sub/x, .json"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": [".txt"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"ignored_coins": ["sub/.json"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": ["a,sub/.hjson"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": ["api-keys.json/"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": ["sub/x.txt/."]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"ignored_coins": ["a,x.hjson//"]}}}}, "external_reference_rejected"),
+    ({"bot": {"global": {"universe": {"approved_coins": ["a/../x.json/"]}}}}, "external_reference_rejected"),
+    ({"optimize": {"fixed_runtime_overrides": {"bot.long.universe.approved_coins.0": "/foreign"}}}, "external_reference_rejected"),
+    ({"backtest": {"scenarios": [{"overrides": {"bot.long.universe.ignored_coins": ["file:///foreign"]}}]}}, "external_reference_rejected"),
+    ({"backtest": {"coin_sources": {"BTC": "binance"}}}, "external_reference_rejected"),
+    ({"optimize": {"fixed_runtime_overrides": {"backtest.coin_sources.BTC": "binance"}}}, "external_reference_rejected"),
+    ({"backtest": {"organillo_csv": "/foreign/input.csv"}}, "external_reference_rejected"),
+    ({"bot": {"long": {"value": float("nan")}}}, "invalid_config"),
+]
+
+
+@pytest.mark.parametrize(("patch", "code"), _INVALID_INLINE_CASES)
+def test_inline_gate_rejects_before_parent_starts_any_process(validation_runtime, monkeypatch, patch, code):
+    """Unsupported input cannot reach a native process or read config references."""
+    config = {"config_version": "v9.0.0", **copy.deepcopy(patch)}
+    if patch == {}:
+        config = {}
+
+    def forbidden(*args, **kwargs):
+        """A gate or schema failure must precede the helper launch."""
+        pytest.fail("invalid inline config launched a process")
+
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_config(config, validation_runtime.root, validation_runtime.python)
+    assert caught.value.error_codes == (code,)
+    _assert_no_native_import(validation_runtime)
+
+
+@pytest.mark.parametrize(("patch", "code"), [case for case in _INVALID_INLINE_CASES
+                                         if case[0].get("config_version") != "v9.1.0"])
+def test_helper_repeats_inline_gate_before_native_import(validation_runtime, patch, code):
+    """Direct protocol callers cannot bypass the same gate with a file reference."""
+    config = {"config_version": "v9.0.0", **copy.deepcopy(patch)}
+    if patch == {}:
+        config = {}
+    request = {"operation": "validate", "pb9_dir": str(validation_runtime.root),
+               "config_schema": "v9.0.0", "package_version": "8.2.0.dev0", "config": config}
+    proc = subprocess.run([str(validation_runtime.python), "-I", str(pb9_config._HELPER_PATH)],
+                          input=json.dumps(request), text=True, capture_output=True, timeout=5)
+    assert json.loads(proc.stdout) == {"ok": False, "error_code": code}
+    _assert_no_native_import(validation_runtime)
+
+
+def test_validation_rejects_python_tuples_before_json_can_coerce_them(validation_runtime):
+    """Tuple inputs are a parent-only case because JSON would turn them into lists."""
+    config = {"config_version": "v9.0.0", "bot": {"long": {"value": (1, 2)}}}
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_config(config, validation_runtime.root, validation_runtime.python)
+    assert caught.value.error_codes == ("invalid_config",)
+    _assert_no_native_import(validation_runtime)
+
+
+@pytest.mark.parametrize(("exception", "code"), [
+    ("ValueError", "native_config_rejected"), ("TypeError", "native_config_rejected"),
+    ("KeyError", "native_config_rejected"), ("OSError", "native_validation_failed"),
+])
+def test_native_validation_failures_never_return_or_log_raw_error_text(validation_runtime, exception, code):
+    """Native rejection data remains private; only the fixed diagnostic crosses back."""
+    import logging_helpers
+
+    secret = "fixture-private-native-error"
+    validation_runtime.loader.write_text(
+        f'def prepare_config(config, **kwargs):\n    raise {exception}({secret!r})\n', encoding="utf-8")
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_config({"config_version": "v9.0.0"}, validation_runtime.root, validation_runtime.python)
+    assert caught.value.error_codes == (code,)
+    assert secret not in str(caught.value)
+    for path in logging_helpers.LOG_ROOT.glob("*.log"):
+        assert secret not in path.read_text()
+
+
+def test_validation_protocol_accepts_more_than_template_input_budget(validation_runtime):
+    """A large request exercises partial pipe writes beyond the Linux pipe buffer."""
+    config = {"config_version": "v9.0.0", "bot": {"global": {"universe": {"approved_coins": ["BTC"] * 50000}}}}
+    assert len(json.dumps(config)) > 300000
+    assert pb9_config.validate_pb9_config(config, validation_runtime.root, validation_runtime.python)["valid"] is True
+    assert json.loads(validation_runtime.record.read_text())["config"] == config
+
+
+@pytest.mark.parametrize("exception", ["ValueError", "TypeError", "KeyError"])
+def test_loader_import_failure_is_not_an_authored_config_rejection(validation_runtime, exception):
+    """Import failures are runtime failures even when they resemble input exceptions."""
+    validation_runtime.loader.write_text(f'raise {exception}("fixture-only-import-error")\n', encoding="utf-8")
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_config({"config_version": "v9.0.0"}, validation_runtime.root, validation_runtime.python)
+    assert caught.value.error_codes == ("native_validation_failed",)
+
+
+def test_validation_schema_import_failure_uses_validation_error_code(validation_runtime):
+    """Unexpected schema-import failure belongs to validation, not template loading."""
+    with validation_runtime.schema.open("a", encoding="utf-8") as stream:
+        stream.write('\nraise OSError("fixture-only-schema-error")\n')
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_config({"config_version": "v9.0.0"}, validation_runtime.root, validation_runtime.python)
+    assert caught.value.error_codes == ("native_validation_failed",)
+
+
+def test_validation_budget_rejects_oversized_requests_without_native_import(validation_runtime):
+    """Input larger than the validation protocol cap never reaches config.load."""
+    config = {"config_version": "v9.0.0", "note": "x" * (1024 * 1024)}
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_config(config, validation_runtime.root, validation_runtime.python)
+    assert caught.value.error_codes == ("invalid_request",)
+    _assert_no_native_import(validation_runtime)
+
+
+def test_validation_uses_the_same_timeout_and_reaping_owner(validation_runtime, tmp_path):
+    """A validation timeout cannot retain its native process."""
+    pid_file = tmp_path / "validation.pid"
+    validation_runtime.loader.write_text(
+        'import os, time\nfrom pathlib import Path\n'
+        f'def prepare_config(config, **kwargs):\n    Path({str(pid_file)!r}).write_text(str(os.getpid()))\n'
+        '    time.sleep(60)\n', encoding="utf-8")
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_config({"config_version": "v9.0.0"}, validation_runtime.root, validation_runtime.python, timeout=2)
+    assert caught.value.error_codes == ("helper_timeout",)
+    assert pid_file.exists()
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+
+
+def test_parent_rejects_nonfinite_json_protocol_constants(runtime, monkeypatch):
+    """Even unused response properties must be strict JSON."""
+    monkeypatch.setattr(pb9_config, "_run_helper", lambda *args: b'{"ok":true,"extra":NaN}')
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.load_pb9_template(runtime.root, runtime.python)
+    assert caught.value.error_codes == ("invalid_response",)

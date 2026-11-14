@@ -2,6 +2,12 @@
 
 ## Development
 
+- Add native in-memory PB9 validation through the isolated helper. Gate supported
+  inline inputs before native imports, reject external coin/config references,
+  GUI/internal metadata and symbolmap-dependent coin sources, and return only
+  acceptance plus source identity. Keep the caller's sparse config untouched;
+  no migration, file loading/saving, API binding or runtime compilation is added.
+
 - Add an isolated PB9 authored-template adapter using a one-request helper in
   the selected environment. Bound execution time and protocol output, strip
   ambient Python/provider environment settings, verify source-module and schema

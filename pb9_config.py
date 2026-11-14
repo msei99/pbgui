@@ -1,4 +1,4 @@
-"""Isolated one-request client for native PB9 authored configuration templates."""
+"""Isolated one-request client for native PB9 templates and inline validation."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import time
 
 from logging_helpers import human_log as _log
 from pb9_runtime import inspect_pb9_runtime
+from pb9_config_helper import MAX_VALIDATION_BYTES, _HelperError, check_inline_config
 
 
 SERVICE = "PB9Config"
@@ -23,35 +24,39 @@ _SUPPORTED_PLATFORM = sys.platform.startswith("linux") and hasattr(os, "waitid")
 _ENV_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "SYSTEMROOT", "WINDIR",
              "TMPDIR", "TMP", "TEMP", "TZ"}
 _HELPER_CODES = {"invalid_request", "runtime_identity_mismatch", "native_template_failed",
-                 "helper_output_limit", "invalid_template"}
+                 "helper_output_limit", "invalid_template", "invalid_config", "config_version_mismatch",
+                 "external_reference_rejected", "native_config_rejected", "native_validation_failed"}
 
 
 class PB9ConfigError(RuntimeError):
-    """Report fixed template failure codes without exposing subprocess data."""
+    """Report fixed config failure codes without exposing subprocess data."""
 
     def __init__(self, code: str):
         """Keep codes available for later authenticated API error mapping."""
         self.error_codes = (code,)
-        super().__init__("PB9 template request failed: " + code)
+        super().__init__("PB9 config request failed: " + code)
 
 
-def _run_helper(status: dict, timeout: float) -> bytes:
+def _run_helper(status: dict, timeout: float, *, operation: str = "template", config: dict | None = None) -> bytes:
     """Own one process group and nonblocking pipes under a single deadline.
 
     Requires normal SIGCHLD handling: no SIG_IGN or external child reaper.
     Cleanup covers descendants remaining in this group, not detached sessions.
     """
-    request = json.dumps({
-        "operation": "template", "pb9_dir": status["pb9dir"],
+    payload = {
+        "operation": operation, "pb9_dir": status["pb9dir"],
         "config_schema": status["config_schema"], "package_version": status["package_version"],
-    }).encode("utf-8")
-    if len(request) > 16384:
+    }
+    if operation == "validate":
+        payload["config"] = config
+    request = json.dumps(payload, allow_nan=False).encode("utf-8")
+    if len(request) > (MAX_VALIDATION_BYTES if operation == "validate" else 16384):
         raise PB9ConfigError("invalid_request")
     env = {key: value for key, value in os.environ.items() if key.upper() in _ENV_KEYS}
     env["PATH"] = os.pathsep.join((str(Path(status["pb9venv"]).parent), os.defpath))
     output = bytearray()
     proc = subprocess.Popen(
-        [status["pb9venv"], "-I", str(_HELPER_PATH)], cwd=status["pb9dir"], env=env,
+        [status["pb9venv"], "-I", "-B", str(_HELPER_PATH)], cwd=status["pb9dir"], env=env,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
         start_new_session=True,
     )
@@ -124,10 +129,14 @@ def _run_helper(status: dict, timeout: float) -> bytes:
     return bytes(output)
 
 
-def _checked_response(raw: bytes, status: dict) -> dict:
+def _checked_response(raw: bytes, status: dict, *, operation: str = "template") -> dict:
     """Bind the native result to the selected source and static schema identity."""
     try:
-        response = json.loads(raw)
+        def reject_constant(_value):
+            """The protocol permits strict JSON only, even on unexpected responses."""
+            raise ValueError("nonfinite JSON constant")
+
+        response = json.loads(raw, parse_constant=reject_constant)
     except (ValueError, UnicodeError, RecursionError) as exc:
         raise PB9ConfigError("invalid_response") from exc
     if not isinstance(response, dict) or not isinstance(response.get("ok"), bool):
@@ -136,24 +145,33 @@ def _checked_response(raw: bytes, status: dict) -> dict:
         code = response.get("error_code")
         raise PB9ConfigError(code if isinstance(code, str) and code in _HELPER_CODES else "helper_failed")
     result = response.get("result")
-    if not isinstance(result, dict) or not isinstance(result.get("config"), dict):
+    if not isinstance(result, dict):
+        raise PB9ConfigError("invalid_response")
+    if operation == "template" and not isinstance(result.get("config"), dict):
+        raise PB9ConfigError("invalid_response")
+    if operation == "validate" and result.get("valid") is not True:
         raise PB9ConfigError("invalid_response")
     src = (Path(status["pb9dir"]) / "src").resolve()
-    for key in ("schema_module_file", "version_module_file"):
+    module_keys = ("schema_module_file", "version_module_file") + (("load_module_file",) if operation == "validate" else ())
+    for key in module_keys:
         value = result.get(key)
         if not isinstance(value, str) or not Path(value).is_absolute() or not Path(value).resolve().is_relative_to(src):
             raise PB9ConfigError("runtime_identity_mismatch")
     if (result.get("config_schema") != status["config_schema"]
             or result.get("package_version") != status["package_version"]
-            or result["config"].get("config_version") != status["config_schema"]):
+            or operation == "template" and result["config"].get("config_version") != status["config_schema"]):
         raise PB9ConfigError("runtime_identity_mismatch")
-    return {"config": result["config"], "source": {
+    source = {
         "repo_dir": status["pb9dir"], "config_schema": status["config_schema"],
         "package_version": status["package_version"], "commit": status["commit"],
         "commit_available": status["commit_available"],
         "schema_module_file": result["schema_module_file"],
         "version_module_file": result["version_module_file"],
-    }}
+    }
+    if operation == "validate":
+        source["load_module_file"] = result["load_module_file"]
+        return {"valid": True, "source": source}
+    return {"config": result["config"], "source": source}
 
 
 def load_pb9_template(pb9dir: str | Path | None, pb9venv: str | Path | None,
@@ -165,18 +183,44 @@ def load_pb9_template(pb9dir: str | Path | None, pb9venv: str | Path | None,
     offload this call and register in-flight ownership with shutdown handling.
     Commit metadata describes the inspected declarations, not full-tree cleanliness.
     """
+    return _config_operation("template", pb9dir, pb9venv, other_slots, timeout=timeout)
+
+
+def validate_pb9_config(config: dict, pb9dir: str | Path | None, pb9venv: str | Path | None,
+                        other_slots: dict | None = None, *, timeout: float = 60) -> dict:
+    """Validate supported inline native source, retaining the caller's original dict.
+
+    GUI/internal metadata, file-backed coins/overrides and symbolmap-dependent
+    coin_sources are intentionally unsupported. Native preparation is used only
+    to check acceptance; its expanded result is discarded. No file load/save,
+    version migration or runtime compilation is requested.
+    """
+    return _config_operation("validate", pb9dir, pb9venv, other_slots, timeout=timeout, config=config)
+
+
+def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: float, config=None) -> dict:
+    """Apply shared preflight, isolation and sanitized failure mapping."""
     try:
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 120 or not math.isfinite(timeout):
             raise PB9ConfigError("invalid_timeout")
         if not _SUPPORTED_PLATFORM:
             raise PB9ConfigError("unsupported_platform")
+        if operation == "validate":
+            check_inline_config(config)
         status = inspect_pb9_runtime(pb9dir, pb9venv, other_slots)
         if not status["detected"]:
             raise PB9ConfigError("runtime_not_detected")
-        return _checked_response(_run_helper(status, timeout), status)
-    except (OSError, ValueError, RuntimeError) as exc:
-        error = exc if isinstance(exc, PB9ConfigError) else PB9ConfigError("helper_failed")
-        _log(SERVICE, "PB9 template request failed", level="ERROR", meta={"error_codes": list(error.error_codes)})
+        if operation == "validate":
+            check_inline_config(config, status["config_schema"])
+            raw = _run_helper(status, timeout, operation=operation, config=config)
+        else:
+            raw = _run_helper(status, timeout)
+        return _checked_response(raw, status, operation=operation)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        error = (exc if isinstance(exc, PB9ConfigError) else
+                 PB9ConfigError(str(exc) if isinstance(exc, _HelperError) and str(exc) in _HELPER_CODES else "helper_failed"))
+        _log(SERVICE, "PB9 config request failed", level="ERROR",
+             meta={"operation": operation, "error_codes": list(error.error_codes)})
         if error is exc:
             raise
         raise error from exc
