@@ -37,6 +37,16 @@ def test_registry_covers_editable_setting_families_without_values() -> None:
     assert all("value" not in vars(item) and "default" not in vars(item) for item in SETTING_APPLY_REGISTRY.values())
 
 
+def test_pb9_paths_apply_on_next_operation_without_welcome_registration() -> None:
+    """PB9 metadata is available without exposing the unfinished Welcome setup."""
+    keys = {("main", "pb9dir"), ("main", "pb9venv")}
+    result = apply_metadata_for(keys)
+    assert result["timing"] == "next_operation"
+    assert result["restart_required"] is False
+    assert result["owners"] == ["PB9Runtime"]
+    assert not keys.intersection(APPLY_GROUPS["welcome_setup"])
+
+
 def test_apply_metadata_has_stable_shape_and_mixed_group_priority() -> None:
     """Mixed groups expose one deterministic highest-impact timing."""
     payload = apply_metadata("pbdata", "api_server")
@@ -312,10 +322,18 @@ def test_api_server_mixed_metadata_omits_unchanged_restart_fields(monkeypatch) -
 
 def test_runtime_restart_reason_lifecycle_and_status(monkeypatch) -> None:
     """Runtime reasons augment serial state and a clean process state has none."""
+    async def inline_read(function, *args, **kwargs):
+        """Exercise status logic without an unrelated executor shutdown in this unit test."""
+        return function(*args, **kwargs)
+
+    monkeypatch.setattr(PBApiServer.asyncio, "to_thread", inline_read)
     PBApiServer._runtime_restart_reasons.clear()
     monkeypatch.setattr(PBApiServer, "_startup_serial", 7)
     monkeypatch.setattr(PBApiServer, "_read_serial", lambda: 7)
     monkeypatch.setattr(PBApiServer, "_restart_block_state", lambda: asyncio.sleep(0, result=(False, "")))
+    monkeypatch.setattr(PBApiServer, "_vast_supervisor_restart_state", lambda: [])
+    monkeypatch.setattr(PBApiServer, "_local_master_name", lambda: "fixture-host")
+    monkeypatch.setattr(PBApiServer, "auth_runtime_status", lambda: {"mode": "disabled"})
     monkeypatch.setattr(
         PBApiServer,
         "_runtime_service_restart_state",

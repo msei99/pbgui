@@ -15,6 +15,16 @@ SERVICE = "PB9Runtime"
 _SLOT_KEYS = ("pb7dir", "pb7venv", "pb8dir", "pb8venv")
 
 
+class PB9RuntimePathError(ValueError):
+    """Reject a path update with stable codes and no persisted partial state."""
+
+    def __init__(self, status: dict):
+        """Keep validation diagnostics available without embedding setting values."""
+        self.error_codes = tuple(status["error_codes"])
+        self.errors = tuple(status["errors"])
+        super().__init__("PB9 paths were not saved: " + ", ".join(self.error_codes))
+
+
 def _empty_status() -> dict:
     """Return static evidence fields, deliberately without an installation-ready flag."""
     return {
@@ -225,3 +235,38 @@ def pb9_runtime_status() -> dict:
         return status
     return inspect_pb9_runtime(values["pb9dir"], values["pb9venv"],
                                {key: values[key] for key in _SLOT_KEYS})
+
+
+def save_pb9_runtime_paths(pb9dir: str | Path | None, pb9venv: str | Path | None) -> dict:
+    """Validate and save both PB9 paths in one locked, atomic INI transaction.
+
+    Two empty values explicitly remove both keys. Otherwise the static layout
+    must be detected; validation failure raises PB9RuntimePathError before any
+    persistence. Other slot paths come from the same locked parser generation.
+    Interpreter symlink targets remain unresolved. No interpreter is executed.
+    This synchronous operation must be offloaded by any future async caller.
+    """
+    from pbgui_purefunc import update_ini
+
+    clear = all(value is None or (isinstance(value, str) and not value.strip())
+                for value in (pb9dir, pb9venv))
+
+    def mutate(parser: configparser.ConfigParser) -> dict:
+        """Check separation before publishing either of the new path values."""
+        if clear:
+            if parser.has_section("main"):
+                for key in ("pb9dir", "pb9venv"):
+                    parser.remove_option("main", key)
+            return _empty_status()
+        other_slots = {key: parser.get("main", key) if parser.has_option("main", key) else ""
+                       for key in _SLOT_KEYS}
+        status = inspect_pb9_runtime(pb9dir, pb9venv, other_slots)
+        if not status["detected"]:
+            raise PB9RuntimePathError(status)
+        if not parser.has_section("main"):
+            parser.add_section("main")
+        for key in ("pb9dir", "pb9venv"):
+            parser.set("main", key, status[key])
+        return status
+
+    return update_ini(mutate)

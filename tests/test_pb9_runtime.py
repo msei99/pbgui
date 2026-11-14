@@ -3,6 +3,7 @@
 import configparser
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -232,3 +233,135 @@ def test_v9_ini_keys_leave_pb8_status_unchanged(layout, tmp_path, monkeypatch):
     parser.set("main", "pb9venv", str(tmp_path / "other_venv" / "bin" / "python"))
     assert pbgui_purefunc.pb8_runtime_status() == before
     assert before["ready"] is True
+
+
+@pytest.fixture
+def settings_path(tmp_path, monkeypatch):
+    """Redirect every writer to isolated INI data and prohibit subprocesses."""
+    import pbgui_purefunc
+
+    path = tmp_path / "settings.ini"
+    path.write_text("[main]\npbname = fixture-host\n\n[custom]\nkeep = original\n", encoding="utf-8")
+    monkeypatch.setattr(pbgui_purefunc, "pbgui_ini_path", lambda: path)
+    monkeypatch.setattr(pbgui_purefunc, "PBGDIR", tmp_path / "gui")
+
+    def forbidden(*args, **kwargs):
+        """Fixture layouts have no Git; saving them must not launch anything."""
+        pytest.fail("saving PB9 paths launched a subprocess")
+
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    return path
+
+
+def test_save_paths_preserves_python_symlink_and_foreign_settings(layout, settings_path):
+    """A valid pair round-trips atomically without following the executable leaf."""
+    import pbgui_purefunc
+
+    layout.python.unlink()
+    layout.python.symlink_to(sys.executable)
+    result = pb9_runtime.save_pb9_runtime_paths(layout.source, layout.python)
+    assert result["detected"] is True
+    assert pb9_runtime.pb9_runtime_status()["detected"] is True
+    snapshot = pbgui_purefunc.load_ini_snapshot()
+    assert snapshot.get("main", "pb9dir") == str(layout.source)
+    assert snapshot.get("main", "pb9venv") == str(layout.python)
+    assert snapshot.get("main", "pb9venv") != str(layout.python.resolve())
+    assert snapshot.get("main", "pbname") == "fixture-host"
+    assert snapshot.get("custom", "keep") == "original"
+    assert not layout.marker.exists()
+
+
+@pytest.mark.parametrize(("failure", "code"), [
+    ("source_overlap", "source_overlap"), ("shared_venv", "venv_shared"),
+    ("wrong_schema", "source_invalid"), ("missing_python", "pb9venv_invalid"),
+    ("missing_source", "pb9dir_invalid"), ("relative_source", "pb9dir_invalid"),
+    ("path_object_empty", "pb9dir_invalid"),
+])
+def test_rejected_save_leaves_entire_ini_byte_identical(layout, settings_path, failure, code):
+    """Validation cannot partially replace prior values or unrelated settings."""
+    import pbgui_purefunc
+
+    source, python = layout.source, layout.python
+    if failure == "source_overlap":
+        pbgui_purefunc.save_ini_section("main", {"pb8dir": str(layout.source)})
+    elif failure == "shared_venv":
+        pbgui_purefunc.save_ini_section("main", {"pb7venv": str(layout.python)})
+    elif failure == "wrong_schema":
+        layout.schema.write_text('CONFIG_SCHEMA_VERSION = "v8.6.0"\n', encoding="utf-8")
+    elif failure == "missing_python":
+        python = ""
+    elif failure == "missing_source":
+        source = ""
+    elif failure == "relative_source":
+        source = "relative"
+    elif failure == "path_object_empty":
+        source = Path("")
+    pbgui_purefunc.save_ini_section("main", {"pb9dir": "/previous/source", "pb9venv": "/previous/env/bin/python"})
+    before = settings_path.read_bytes()
+    with pytest.raises(pb9_runtime.PB9RuntimePathError) as caught:
+        pb9_runtime.save_pb9_runtime_paths(source, python)
+    assert code in caught.value.error_codes
+    assert settings_path.read_bytes() == before
+
+
+@pytest.mark.parametrize("empty", ["", None])
+def test_two_empty_paths_remove_only_v9_settings(settings_path, monkeypatch, empty):
+    """Explicit clearing does not inspect old paths or remove foreign sections."""
+    import pbgui_purefunc
+
+    pbgui_purefunc.save_ini_section("main", {"pb9dir": "/old", "pb9venv": "/old/env/bin/python"})
+
+    def forbidden(*args, **kwargs):
+        """Disabling an uninstalled runtime must not inspect it."""
+        pytest.fail("clearing PB9 paths inspected runtime files")
+
+    monkeypatch.setattr(pb9_runtime, "inspect_pb9_runtime", forbidden)
+    assert pb9_runtime.save_pb9_runtime_paths(empty, empty)["configured"] is False
+    snapshot = pbgui_purefunc.load_ini_snapshot()
+    assert not snapshot.has_option("main", "pb9dir")
+    assert not snapshot.has_option("main", "pb9venv")
+    assert snapshot.get("main", "pbname") == "fixture-host"
+    assert snapshot.get("custom", "keep") == "original"
+
+
+def test_save_checks_other_slots_from_current_transaction(layout, settings_path, monkeypatch):
+    """A slot change just before lock acquisition cannot evade separation checks."""
+    import pbgui_purefunc
+
+    original_update = pbgui_purefunc.update_ini
+
+    def update_after_other_slot_changed(mutator):
+        """Publish a competing slot update before entering the requested transaction."""
+        original_update(lambda parser: parser.set("main", "pb8dir", str(layout.source)))
+        return original_update(mutator)
+
+    monkeypatch.setattr(pbgui_purefunc, "update_ini", update_after_other_slot_changed)
+    with pytest.raises(pb9_runtime.PB9RuntimePathError) as caught:
+        pb9_runtime.save_pb9_runtime_paths(layout.source, layout.python)
+    assert "source_overlap" in caught.value.error_codes
+    snapshot = pbgui_purefunc.load_ini_snapshot()
+    assert snapshot.get("main", "pb8dir") == str(layout.source)
+    assert not snapshot.has_option("main", "pb9dir")
+    assert not snapshot.has_option("main", "pb9venv")
+
+
+def test_saving_pb9_paths_leaves_existing_pb8_status_unchanged(layout, settings_path, tmp_path):
+    """The new writer preserves both PB8 paths and all derived status fields."""
+    import pbgui_purefunc
+
+    pb8_source = tmp_path / "pb8"
+    pb8_venv = tmp_path / "venv_pb8"
+    shutil.copytree(layout.source, pb8_source)
+    shutil.copytree(layout.venv, pb8_venv)
+    (pb8_source / "src" / "config" / "schema.py").write_text(
+        'CONFIG_SCHEMA_VERSION = "v8.6.0"\n', encoding="utf-8")
+    rust = pb8_venv / layout.rust.relative_to(layout.venv)
+    rust.with_name(rust.name + ".rust-src-sha256").write_text("fixture\n", encoding="utf-8")
+    pbgui_purefunc.save_ini_section("main", {
+        "pb8dir": str(pb8_source), "pb8venv": str(pb8_venv / "bin" / "python"),
+    })
+    before = pbgui_purefunc.pb8_runtime_status()
+    assert before["ready"] is True
+    assert pb9_runtime.save_pb9_runtime_paths(layout.source, layout.python)["detected"] is True
+    assert pbgui_purefunc.pb8_runtime_status() == before

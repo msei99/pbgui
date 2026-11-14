@@ -1,7 +1,8 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
 Stand: 14. November 2026. Status: Quellklassifikation und Guard-Schutz committed;
-getrennte PB9-Laufzeiterkennung unabhängig geprüft und zum Commit freigegeben.
+getrennte PB9-Erkennung committed; sichere Pfadspeicherung umgesetzt,
+fokussierte Tests und unabhängiges Review bestanden.
 
 ## Vorgehen
 
@@ -114,7 +115,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    Rückgabewerte und CLI-Marker bleiben gleich; Zielmajor 9 bleibt gesperrt.
    Gemeinsame reine Helfer lesen Literale mit 256-KiB-Limit und UTF-8-BOM und
    ordnen Schema-Majors zu. Der volle Klassifikator wird nicht im Guard benutzt.
-3. **Getrennte PB9-Erkennung, Review bestanden.** `pb9_runtime.py` prüft
+3. **Getrennte PB9-Erkennung, Commit `27dc7d55`.** `pb9_runtime.py` prüft
    Quellschema, Trennung von PB7/PB8-Quellbäumen, eigenes Env-Verzeichnis,
    Interpreter-/CLI-Dateien und Rust-Präsenz. Python 3.12/3.14 wird ausschließlich
    aus `pyvenv.cfg` erkannt. Interpreter-Symlinkziele werden nicht zum Vergleich
@@ -131,6 +132,27 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    fragt in einem Snapshot nur die sechs Pfadschlüssel ab. `pb9dir`/`pb9venv`
    werden noch nicht registriert oder geschrieben. Es gibt keine Aufrufer,
    UI-/Installer-Anbindung oder Änderungen an PB8-Funktionen.
+4. **Sichere Pfadspeicherung, Review bestanden.** `save_pb9_runtime_paths()`
+   prüft die neue Konfiguration gegen die PB7/PB8-Werte desselben gesperrten
+   INI-Parsers. Nur ein erkanntes Layout wird als Paar gespeichert; Fehler
+   brechen vor der atomaren Veröffentlichung mit stabilen Fehlercodes ab.
+   Zwei explizit leere Werte entfernen beide Schlüssel. Fremde Einstellungen
+   bleiben erhalten. Der Interpreter-Symlink wird nicht auf sein Ziel reduziert.
+
+   Die Registry ordnet beide Schlüssel `PB9Runtime` und `next_operation` zu;
+   `welcome_setup`, API-Routen und UI bleiben unverändert. Die Registry wird
+   beim API-Start importiert, daher Serial-Bump von 3698 auf 3699.
+   Die umgekehrte Prüfung bei späteren PB7/PB8-Pfadänderungen ist noch offen.
+   Ein zukünftiger async-Aufrufer muss die synchrone Prüfung auslagern.
+
+   Validierung: `test_pb9_runtime`, `test_ini_apply_metadata`,
+   `test_ini_transactions`, `test_ini_writer_policy`, `test_welcome_pb8` und
+   `test_pb8_installation`: **165 passed in 22.53s**. Der bestehende
+   Restart-Status-Test ist jetzt gegen echte Runtime-/Auth-Abfragen isoliert
+   und verwendet ein Inline-Doppel für den Thread-Offload. Zwei vorherige
+   fokussierte Läufe wurden wegen eines Hängers in diesem Test abgebrochen.
+   Claude Fable 5.2 / medium hat den Stand rein lesend als commit-reif geprüft;
+   keine Tests durch Claude wiederholt. Keine produktive INI geändert.
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
@@ -157,6 +179,11 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
 
 ## Offen für spätere Schritte
 
+- Vor produktiver Anbindung muss auch das Ändern von PB7/PB8-Pfaden auf
+  Konflikte mit gespeicherten PB9-Pfaden geprüft werden.
+- Vor API-/UI-Anbindung: Interpolationsfehler bei Prozentzeichen in Pfaden
+  ebenfalls auf stabile Fehlercodes abbilden; aktuell bleibt die INI unverändert,
+  die ConfigParser-Ausnahme ist aber nicht PB9RuntimePathError.
 - Git-Umgebungsbereinigung im Guard; der bisherige Ablauf bleibt hier erhalten.
 - Bei breiterer Verwendung des Klassifikators: stabile Fehlercodes und klare
   Ablehnungsregel. Generation/Commit allein sind bei Fehlern kein Erfolgsnachweis.
@@ -170,6 +197,11 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
   in getrennten Änderungen. Keine bestehende PB8-Installation wurde umgestellt.
 
 ## Abgeschlossener Claude-Review
+
+Aktueller Review der Pfadspeicherung mit `claude-fable-5-2`, Effort `medium`:
+commit-reif, keine blockierenden Fehler. Hinweise zu INI-Interpolation,
+unnötigem Neuschreiben beim bereits leeren Zustand und der Breite des
+Asyncio-Test-Patches bleiben nichtblockierend dokumentiert.
 
 Direkter CLI-Aufruf mit `claude-fable-5-2`, Effort `medium`, ausschließlich
 Lesewerkzeugen und ohne Testwiederholung. Ergebnis: commit-reif, keine

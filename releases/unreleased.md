@@ -2,6 +2,12 @@
 
 ## Development
 
+- Add a validated PB9 path writer using the existing locked, atomic INI
+  transaction. Save both canonical paths together while preserving interpreter
+  symlinks, reject invalid layouts without publication, and support explicitly
+  clearing both keys. Register next-operation apply metadata without exposing
+  PB9 in Welcome setup or adding an API route.
+
 - Add an unconnected, read-only PB9 layout detector with a lazy INI wrapper for
   pb9dir/pb9venv. Check source and environment separation, static Python version,
   CLI and Rust artifact presence without starting the runtime. Report detection
