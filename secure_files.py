@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import errno
 import stat
 import uuid
 from pathlib import Path
@@ -10,6 +11,78 @@ from pathlib import Path
 
 PRIVATE_DIR_MODE = 0o700
 PRIVATE_FILE_MODE = 0o600
+
+
+class PrivateFilePublishedError(OSError):
+    """A new file was published, but cleanup/durability acknowledgement failed."""
+
+
+def create_private_file_at(directory_fd: int, name: str, content: bytes) -> None:
+    """Atomically create a private file without replacing any existing entry.
+
+    The caller owns the open directory descriptor. It must refer to an existing
+    owner-only directory owned by the effective user. All operations stay bound
+    to that descriptor; neither the working directory nor parent paths are used.
+    Existing targets, including symlinks, are never opened or overwritten.
+    ``PrivateFilePublishedError`` means the target exists: do not roll it back
+    or blindly retry after an acknowledgement error.
+    """
+    if (os.name != "posix" or not hasattr(os, "O_NOFOLLOW")
+            or type(directory_fd) is not int or directory_fd < 0):
+        raise ValueError("Private creation requires a POSIX directory descriptor")
+    if (not isinstance(name, str) or not name or name in {".", ".."}
+            or "/" in name or "\\" in name
+            or any(ord(char) < 32 or ord(char) == 127 for char in name)
+            or not isinstance(content, bytes)):
+        raise ValueError("Private creation requires a basename and bytes")
+    info = os.fstat(directory_fd)
+    if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            or stat.S_IMODE(info.st_mode) != PRIVATE_DIR_MODE):
+        raise ValueError("Private creation requires an owned 0700 directory")
+    temporary = f".pbgui-create-{os.getpid()}-{uuid.uuid4().hex}.tmp"
+    created, published, error = False, False, None
+    try:
+        try:
+            descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 PRIVATE_FILE_MODE, dir_fd=directory_fd)
+        except FileExistsError:
+            # A temporary-name collision is not a conflict with the target.
+            raise OSError(errno.EIO, "Private temporary creation failed") from None
+        created = True
+        try:
+            os.fchmod(descriptor, PRIVATE_FILE_MODE)
+            remaining = memoryview(content)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written <= 0:
+                    raise OSError(errno.EIO, "Private write made no progress")
+                remaining = remaining[written:]
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.link(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd,
+                follow_symlinks=False)
+        published = True
+    except OSError as exc:
+        error = exc
+    finally:
+        if created:
+            try:
+                os.unlink(temporary, dir_fd=directory_fd)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                if error is None:
+                    error = exc
+    if published and error is None:
+        try:
+            os.fsync(directory_fd)
+        except OSError as exc:
+            error = exc
+    if error is not None:
+        if published:
+            raise PrivateFilePublishedError("Private file created with an I/O acknowledgement failure") from None
+        raise error
 
 
 def read_regular_file_nofollow(path: Path, approved_root: Path) -> bytes:

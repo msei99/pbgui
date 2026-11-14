@@ -430,7 +430,7 @@ def load_pb7_config(
     return _restore_raw_backtest_end_date(finalized, raw)
 
 
-def save_pb7_config(cfg: dict, path: str | Path) -> None:
+def save_pb7_config(cfg: dict, path: str | Path, *, pb9_context=None) -> None:
     """Save a config dict to disk (atomic write).
 
     Writes the full dict including ``pbgui`` section.  No ``clean_config``
@@ -438,7 +438,15 @@ def save_pb7_config(cfg: dict, path: str | Path) -> None:
 
     ``_pbgui_param_status`` is always stripped before writing so it never
     leaks into saved config files.
+
+    With explicit ``pb9_context``, create a validated sparse v9 source below
+    its approved root. That branch rejects existing names and never applies
+    PB7 cleanup. Updating an existing v9 file needs a later revision contract.
     """
+    if pb9_context is not None:
+        from pb9_config_storage import save_pb9_config_file
+
+        return save_pb9_config_file(cfg, path, pb9_context)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")

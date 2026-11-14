@@ -2,8 +2,8 @@
 
 Stand: 15. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung,
 Vorlagenadapter, Inline-Validierung und Dokumentgrenze committed; der explizite
-v9-Dateiladepfad ist fokussiert getestet und unabhängig geprüft;
-Commit ist freigegeben.
+v9-Dateiladepfad ist committed; die sichere Neuerstellung von v9-Dateien ist
+fokussiert getestet und unabhängig geprüft. Commit ist freigegeben.
 
 ## Vorgehen
 
@@ -305,7 +305,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    Testlauf; echte native v9-/Rust-Integration bleibt offen.
    Kein API-Startimport geändert, daher kein weiterer Serial-Bump (3701).
 
-9. **Expliziter, nur lesender Dateipfad, zum Commit freigegeben.**
+9. **Expliziter, nur lesender Dateipfad, Commit `f21f1acb`.**
    `load_pb7_config(..., pb9_context=PB9FileContext(...))` wählt ausdrücklich
    den neuen `pb9_config_storage`-Lader, bevor PB7-Code ausgeführt wird.
    Ohne Kontext bleibt der bestehende Ablauf unverändert; PB7-spezifische
@@ -346,6 +346,58 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    vorübergehender Traceback-Zyklus beim internen Close-Fehler bis zum GC und
    die nicht separat geprüfte `__cause__` dieses Fehlerzweigs; öffentliche
    Datei-/Parserfehler enthalten keine rohe Ursachenkette.
+
+10. **Neue Dateien sicher speichern, zum Commit freigegeben.**
+    `save_pb7_config(..., pb9_context=...)` verzweigt vor jedem Legacy-Schritt
+    zum v9-Adapter und behält den Rückgabewert `None`. Ohne Kontext bleibt der
+    bisherige Body unverändert. Native Validierung und ein unabhängiger Snapshot
+    gehen jeder Bibliotheks-Schreiboperation voraus. Gespeichert werden nur
+    authored Sparse-Werte und ursprünglich vorhandene Root-GUI-Metadaten;
+    native Aufbereitung und ermittelte Provenienz werden nicht eingemischt.
+    Die JSON-Ausgabe ist `indent=4`, UTF-8 plus Zeilenumbruch. Ein begrenzter
+    Encoder stoppt bereits beim Formatieren bei 1 MiB, auch für tief verschachtelte
+    Metadaten; es wird kein beliebig großer Pretty-String vorab aufgebaut.
+
+    Die ausdrücklich gewählte Root muss bereits existieren, dem effektiven
+    Benutzer gehören und Modus 0700 besitzen. Es gibt weder `mkdir` noch
+    stilles `chmod`. Lesen und Neuerstellen nutzen dieselbe No-Follow-
+    Root-Deskriptorverwaltung. Der neue additive Helfer
+    `secure_files.create_private_file_at()` schreibt eine 0600-Tempdatei und
+    synchronisiert deren Inhalt. Ein exklusiver Hardlink veröffentlicht die
+    vollständige Datei ohne Ersetzung; anschließend werden Tempname entfernt
+    und das Verzeichnis synchronisiert. Alle Operationen bleiben am Root-FD
+    gebunden, auch wenn der Pfad währenddessen umbenannt wird.
+
+    Vorhandene Dateien, Symlinks, FIFOs und Verzeichnisse ergeben
+    `config_file_exists`; konkurrierende Ersteller haben genau einen Gewinner.
+    Es gibt keine Read/Modify/Write-Transaktion und keinen neuen Lockcache:
+    die atomare No-Replace-Operation selbst entscheidet den Konflikt. Updates
+    bestehender Dateien benötigen vor der UI-Anbindung eine eigene Revision/CAS-
+    Schnittstelle. `config_file_created_io_failed` bedeutet, dass bereits
+    veröffentlicht wurde, aber Bereinigung/Synchronisationsbestätigung scheiterte;
+    dann weder blind erneut schreiben noch die veröffentlichte Datei entfernen.
+    Kein Installer, keine Migration, keine UI-/API-Anbindung oder Remote-Aktion.
+    Der erforderliche Serial-Bump nach Abschluss der API-Startcode-Änderungen
+    ist erfolgt: **3703**.
+    Fokussiert geprüft: private Neuerstellung, v9-Storage/Config/Runtime und
+    Quellklassifikation **325 passed in 12.98s**; PB7-Bridge/PB8-Config/PB7-Pin
+    und bestehende Datei-Locks **239 passed, 2 skipped in 4.67s**. Neue Fälle
+    prüfen zwei konkurrierende Prozesse, No-Follow-Rootbindung bei Umbenennung,
+    Fehler vor/nach Veröffentlichung, unveränderte Legacy-Ausgabe und den
+    Save/Load-Roundtrip mit isoliertem Fake-Native-Helper. Keine echte v9-/Rust-
+    Integration und keine Produktionsdaten wurden gelesen oder geschrieben.
+    Nach dem ersten Claude-Review ist der Logtext nach Veröffentlichung eindeutig
+    als gespeichert mit fehlender I/O-Bestätigung formuliert. Zusätzliche Tests
+    prüfen fehlgeschlagenes Temp-Unlink und Root-Close nach dem Commitpunkt.
+    Der Helfer schreibt direkt auf seinen eigenen FD und behandelt Teil- sowie
+    Nullfortschritt, ohne mehrdeutige `fdopen`-Übernahme bei Konstruktorfehlern.
+    Der Prozess-Barriere-Timeout ist auf 10 Sekunden angehoben (Join: 15 s).
+    Bei SIGKILL/Crash kann eine private `.pbgui-create-*.tmp` zurückbleiben;
+    der Lader lehnt solche Punktnamen ab. Ein automatischer Aufräumer ist nicht
+    Teil dieses Schritts und dürfte aktive Ersteller nicht stören.
+    Claude Fable 5.2 / medium bestätigte im abschließenden Quellabgleich:
+    keine verbleibenden Befunde; Commit nach dem inzwischen erfolgten Serial-
+    Bump empfohlen. Kein eigener Testlauf durch Claude.
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
@@ -405,6 +457,12 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
   in getrennten Änderungen. Keine bestehende PB8-Installation wurde umgestellt.
 
 ## Abgeschlossener Claude-Review
+
+Aktueller Review der sicheren Neuerstellung mit `claude-fable-5-2`, Effort
+`medium`: keine verbleibenden Befunde nach den Korrekturen. FD-Schließung,
+atomarer Commitpunkt, Teil-/Null-Writes, Logzustände und die neuen Fehlerfall-
+Tests sind bestätigt. Serial ist auf 3703 erhöht; echte v9-/Rust-Integration
+bleibt offen. Der Review war rein lesend ohne eigenen Testlauf.
 
 Aktueller Review des Dateiladepfads mit `claude-fable-5-2`, Effort `medium`:
 commitfähig, kein verbleibender P1–P3-Befund. Literal absolute Roots,

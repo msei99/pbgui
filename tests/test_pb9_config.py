@@ -662,3 +662,43 @@ def test_shared_file_loader_reaches_isolated_native_validator(validation_runtime
     native_input = json.loads(validation_runtime.record.read_text())["config"]
     assert native_input == {key: value for key, value in document.items() if key != "pbgui"}
     assert path.read_bytes() == before
+
+
+def test_shared_save_and_load_roundtrip_uses_native_snapshot(validation_runtime, tmp_path):
+    """Create and reload a private sparse source through the shared entry points."""
+    from pb7_config import load_pb7_config, save_pb7_config
+    from pb9_config_storage import PB9FileContext
+
+    root = tmp_path / "private-library"
+    root.mkdir(mode=0o700)
+    root.chmod(0o700)
+    context = PB9FileContext(root, validation_runtime.root, validation_runtime.python)
+    document = {"config_version": "v9.0.0", "bot": {"long": {}, "short": {}},
+                "optimize": {"bounds": {}}, "pbgui": {"name": "Example", "source": {"note": "keep"}}}
+    before = copy.deepcopy(document)
+    assert save_pb7_config(document, "example.json", pb9_context=context) is None
+    saved = json.loads((root / "example.json").read_bytes())
+    assert saved == before
+    assert "_raw" not in saved
+    assert "_pbgui_param_status" not in saved
+    assert "source" not in saved
+    assert saved["bot"]["long"] == {}
+    assert (root / "example.json").stat().st_mode & 0o777 == 0o600
+    native_input = json.loads(validation_runtime.record.read_text())["config"]
+    assert native_input == {key: value for key, value in before.items() if key != "pbgui"}
+    assert load_pb7_config("example.json", pb9_context=context) == before
+    assert document == before
+
+
+def test_shared_save_rejects_internal_metadata_before_creation(validation_runtime, tmp_path):
+    """GUI runtime hints cannot be persisted as native source or trigger publication."""
+    from pb7_config import save_pb7_config
+    from pb9_config_storage import PB9FileContext
+
+    root = tmp_path / "never-created-library"
+    context = PB9FileContext(root, validation_runtime.root, validation_runtime.python)
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        save_pb7_config({"config_version": "v9.0.0", "_pbgui_param_status": {}}, "example.json", pb9_context=context)
+    assert caught.value.error_codes == ("invalid_config",)
+    assert not root.exists()
+    _assert_no_native_import(validation_runtime)

@@ -2,6 +2,14 @@
 
 ## Development
 
+- Add validated, create-only PB9 config saving through the shared save entry
+  point. Publish a complete private file atomically below an owned 0700 root,
+  preserve authored sparse source and GUI metadata, bound formatted output,
+  and reject existing names.
+  Concurrent creators cannot overwrite one another. Existing-file updates and
+  UI binding follow separately; publication acknowledgement failures have a
+  distinct error code so a committed file is never blindly removed or retried.
+
 - Add an explicit, read-only PB9 file context to the shared config loader.
   Read only bounded regular JSON files beneath an approved directory using
   no-follow descriptors, reject duplicate keys/nonfinite numbers, and validate
