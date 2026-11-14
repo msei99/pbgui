@@ -1,8 +1,7 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
-Stand: 14. November 2026. Status: Quellklassifikation und Guard-Schutz committed;
-getrennte PB9-Erkennung und Pfadspeicherung committed; Gegenprüfung im
-Welcome-Speicherweg umgesetzt, fokussiert getestet und unabhängig geprüft.
+Stand: 14. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung
+committed; native v9-Vorlagenanbindung umgesetzt, getestet und unabhängig geprüft.
 
 ## Vorgehen
 
@@ -156,7 +155,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    fokussierte Läufe wurden wegen eines Hängers in diesem Test abgebrochen.
    Claude Fable 5.2 / medium hat den Stand rein lesend als commit-reif geprüft;
    keine Tests durch Claude wiederholt. Keine produktive INI geändert.
-5. **Gegenprüfung im Welcome-Speicherweg, Review bestanden.** Der optionale
+5. **Gegenprüfung im Welcome-Speicherweg, Commit `1855c67e`.** Der optionale
    `save_ini_section`-Hook erhält nur tatsächlich geänderte Schlüssel des
    Kandidaten unter demselben INI-Lock. `check_slot_change()` prüft geänderte
    PB7/PB8-Pfade gegen die gespeicherte PB9-Reservierung, ohne Bot-/Git-/Artefakt-
@@ -176,6 +175,47 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    Zusätzlich: `test_help_coverage`, **3 passed in 0.30s**.
    Claude Fable 5.2 / medium: keine blockierenden Befunde, commit-reif; rein
    lesend am aktuellen Quellstand, ohne eigenen Testlauf und ohne Git-Diff.
+6. **Native Vorlagenanbindung, Review bestanden.** `pb9_config.py` bietet
+   `load_pb9_template()` nach statischer Erkennung der getrennten Runtime.
+   Ein eigener Einmal-Prozess mit `-I` lädt nur `config.schema.get_template_config()`
+   und Paketmetadaten aus dem ausgewählten Checkout. Schema und Modulpfade
+   werden mit der statischen Identität abgeglichen. Sparse Seiten und Bounds
+   bleiben erhalten; native Vorbereitung oder Validierung wird nicht behauptet.
+
+   Der Client besitzt eine eigene Linux-Prozessgruppe und nichtblockierende
+   Pipes unter einer gemeinsamen Deadline. Der Leader bleibt bis zur
+   Gruppenbereinigung unreaped, damit die PGID nicht wiederverwendet werden
+   kann. Auch Gruppenmitglieder mit geerbtem stdout werden beendet; keine Reader-Threads
+   oder Caches bleiben zurück. Ausgabe maximal 2 MiB, Anfrage maximal 16 KiB.
+   Native-Fehlerdaten werden nicht geloggt. Kleine Umgebungs-Allowlist ohne
+   Python-/Provider-/LD-/DYLD-Variablen; PATH besteht aus dem gewählten Env und
+   Systemstandard. Nur JSON-reine Vorlagen werden akzeptiert, ohne stille
+   Umwandlung von Tupeln oder Nicht-String-Schlüsseln.
+
+   Keine API-/UI-Anbindung, tatsächliche v9-Installation oder Ausführung echter
+   Bot-Envs. Ein späterer API-Aufrufer muss die Arbeit auslagern und laufende
+   Aufrufe in die Shutdown-Verantwortung aufnehmen. Die neue Log-Gruppe
+   `PB9Config` in `logging_helpers.py` wird beim Start importiert; deshalb
+   Serial-Bump von 3700 auf 3701 trotz noch unverdrahtetem Adapter.
+
+   Fokussiert geprüft: `test_pb9_config`, `test_pb9_runtime`,
+   `test_passivbot_runtime`, `test_logging_helpers`: **150 passed in 6.26s**,
+   dazu 12 Fork-DeprecationWarnings aus den vorhandenen Logging-Tests.
+   Alle nativen Import-/Timeout-Fälle verwenden minimale Fixture-Module und
+   eine temporäre Python-Umgebung; keine echte v9/Rust-Integration ist damit
+   nachgewiesen. Untersuchte native Schnittstelle: Ref `ad9d6ede`,
+   `src/config/schema.py:get_template_config`.
+
+   Das erste Claude-Review fand eine unbeschränkte Thread-Wartezeit bei
+   geerbtem stdout. Der Transport wurde daraufhin durch die Prozessgruppen-/
+   Selector-Lösung ersetzt. Timeout, endloser Produzent, Pipe-Fehler und ein
+   Enkel mit geerbtem stdout sind jetzt abgedeckt. Der erste Adapter wird
+   explizit nur unter Linux unterstützt; Windows und andere Plattformen
+   erhalten `unsupported_platform` vor einem Prozessstart.
+   Im erneuten Review bestätigt Claude Fable 5.2 / medium die Behebung und
+   bewertet den Stand als commit-reif. Die Prozess-Invariante ist im Code
+   festgehalten: SIGCHLD darf nicht ignoriert werden, und ein fremder Reaper
+   darf den Leader nicht vor der Gruppenbereinigung einsammeln.
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
@@ -220,12 +260,26 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
 - Vollständiger Dirty-Status für Backtest-Provenienz; der Klassifikator belegt
   nur die beiden Metadatendateien. Dynamische Neubindung wird nicht vollständig
   durch die AST-Deklarationsprüfung ausgeschlossen.
+- Für native Config-Vorbereitung und Speichern zunächst `clean_config`,
+  `strip_config_metadata` und `src/config/universe.py` am gewählten v9-Ref
+  prüfen; autorisierte Sparse-Form und Metadaten müssen erhalten bleiben.
+- Vor der API-Anbindung des Template-Adapters: Inflight-/Shutdown-Besitzer und
+  SIGCHLD-Invariante sicherstellen. Entkommene eigene Sessions werden nicht
+  beendet, beenden den Aufruf aber spätestens an der Deadline. Rohes Schreiben
+  auf fd 1 kann das Protokoll verwerfen; echte Rust-Integration bleibt zu prüfen.
+  Striktes NaN/Infinity-Parsing im Parent und Abbildung seltener
+  SubprocessError-Werte sind weitere nichtblockierende Review-Hinweise.
 - Neue asynchrone Aufrufer dürfen synchrone Git-Lesevorgänge nicht direkt im
   Event-Loop ausführen. Der bisherige synchrone Guard-/Installer-Pfad bleibt so.
 - Breite Status-/Archiv-Funktionen, v9-Installation und Laufzeit-Adapter folgen
   in getrennten Änderungen. Keine bestehende PB8-Installation wurde umgestellt.
 
 ## Abgeschlossener Claude-Review
+
+Aktueller Review des Vorlagenadapters mit `claude-fable-5-2`, Effort `medium`:
+Nach Ersatz des Thread-Transports durch die Linux-Prozessgruppen-/Selector-Lösung
+commit-reif, keine verbleibenden Blocker. Geprüft wurde der vollständige konkrete
+Diff einschließlich untracked Dateien, ohne eigenen Testlauf.
 
 Aktueller Review der Gegenprüfung mit `claude-fable-5-2`, Effort `medium`:
 commit-reif, keine blockierenden Befunde. Die Randfälle alter nichtkanonischer

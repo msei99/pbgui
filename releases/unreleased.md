@@ -2,6 +2,14 @@
 
 ## Development
 
+- Add an isolated PB9 authored-template adapter using a one-request helper in
+  the selected environment. Bound execution time and protocol output, strip
+  ambient Python/provider environment settings, verify source-module and schema
+  identity, and retain sparse JSON-native template structure. The initial Linux
+  transport cleans up its process group, including descendants within that group;
+  other platforms fail explicitly before startup. No API/UI binding,
+  config preparation, migration, saving or bot start is introduced.
+
 - Protect existing PB9 path reservations when saving PB7/PB8 paths from Welcome.
   Validate only actual changes under the INI transaction lock, reject conflicts
   with HTTP 409 and stable error-code headers, and retain raw interpreter

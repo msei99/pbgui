@@ -38,6 +38,7 @@ _global_min_level = 0
 LOG_GROUPS: dict[str, str] = {
     "StrategyExplorer": "PBGui",
     "PB8Config": "PBGui",
+    "PB9Config": "PBGui",
     "PB8Loop": "PBGui",
     'PB7Bridge':       'PBGui',
     'TaskQueue':       'PBGui',
