@@ -5,6 +5,7 @@
   var paths = function () { return window.PBGuiEditorShared.configPath; };
   var copy = function(value) { return JSON.parse(JSON.stringify(value)); };
   var basic = {
+    'cfg-ohlcv-dir': ['backtest', 'ohlcv_source_dir'],
     'cfg-start-date': ['backtest', 'start_date'], 'cfg-end-date': ['backtest', 'end_date'],
     'cfg-starting-balance': ['backtest', 'starting_balance'], 'cfg-native-strategy': ['bot', 'portfolio', 'strategy_kind']
   };
@@ -59,7 +60,7 @@
     }
     var sections = groupDefs.map(function(definition) {
       var prefix = definition[2];
-      return {id:definition[0], title:definition[1], expander:true, groups:[{title:'', fields:available.filter(function(field) {
+      return {id:definition[0], title:definition[1], expander:true, open:definition[0] === 'backtest', groups:[{title:'', fields:available.filter(function(field) {
         return prefix.every(function(part, index) { return field.path[index] === part; });
       }).map(function(field) { return {field:field, label:field.path.slice(prefix.length).join('.')}; })}]};
     });
@@ -106,6 +107,7 @@
         '<div class="form-group"><label for="cfg-starting-balance">Starting balance</label><input id="cfg-starting-balance" type="number" min="0" step="any"></div></div>' +
         '<div class="form-row cols-2"><div class="form-group"><label>Exchanges</label><div class="ms-wrap" id="ms-cfg-exchanges"><div class="ms-tags"></div><input class="ms-input" placeholder="Select exchanges..."><div class="ms-dropdown"></div></div></div>' +
         '<div class="form-group"><label for="cfg-native-strategy">strategy_kind</label><select id="cfg-native-strategy"></select></div></div>' +
+        '<div class="form-row cols-8">' + window.fieldOhlcvSource(config.backtest && config.backtest.ohlcv_source_dir) + '</div>' +
         '<div id="bt9-native-fields"></div><div class="form-row cols-2">' +
         '<div class="form-group"><label for="cfg-bot-long">Long overrides (JSON)</label><textarea id="cfg-bot-long" class="json-editor" rows="16"></textarea><div id="cfg-bot-long-status"></div></div>' +
         '<div class="form-group"><label for="cfg-bot-short">Short overrides (JSON)</label><textarea id="cfg-bot-short" class="json-editor" rows="16"></textarea><div id="cfg-bot-short-status"></div></div></div>' +
@@ -147,6 +149,7 @@
       if (input.value !== shown[id]) {
         var value = input.type === 'number' ? Number(input.value) : input.value;
         if (id === 'cfg-end-date') value = input.dataset.semanticValue || value;
+        if (id === 'cfg-ohlcv-dir') value = value.trim() || null;
         paths().set(config, basic[id], value);
       }
     });
@@ -186,6 +189,9 @@
   }
 
   async function save(queue) {
+    var beforeSourceLookup = generation;
+    if (window._pbguiDataPathRequest) await window._pbguiDataPathRequest;
+    if (beforeSourceLookup !== generation) return;
     if (!validate() || !window.ensureRawJsonValidForSave()) return;
     var name = document.getElementById('cfg-name').value.trim();
     if (!name) { window.toast('Config name is required', 'err'); return; }

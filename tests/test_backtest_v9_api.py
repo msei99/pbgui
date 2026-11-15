@@ -21,6 +21,7 @@ def native(tmp_path, monkeypatch):
     source = copy.deepcopy(metadata['template'])
     status = {'detected':True, 'commit':'a'*40, 'config_schema':'v9.0.0', 'package_version':'8.2.0.dev0'}
     monkeypatch.setattr(bt,'PBGDIR',tmp_path)
+    monkeypatch.setattr(bt,'_pbgui_data_path',lambda:str(tmp_path/'data/ohlcv'))
     import logging_helpers
     monkeypatch.setattr(logging_helpers,'LOG_ROOT',tmp_path/'data/logs')
     import backtest_autostart
@@ -90,7 +91,8 @@ def test_draft_is_owned_bounded_and_expires(native,monkeypatch):
     """Another authenticated user cannot retrieve a handoff even with its ID."""
     source,_,_=native
     token=operation('draft_create',{'config':source},owner='alice')['draft_id']
-    assert operation('draft_get',id=token,owner='alice')['config']==source
+    expected=copy.deepcopy(source);expected['backtest']['ohlcv_source_dir']=bt._pbgui_data_path()
+    assert operation('draft_get',id=token,owner='alice')['config']==expected
     with pytest.raises(HTTPException) as error:
         operation('draft_get',id=token,owner='bob')
     assert error.value.status_code==404
@@ -348,3 +350,47 @@ def test_migration_rejects_deep_source_with_diagnostic(native,migration):
         operation('migrate_preview',{'source_type':'config','source':'example'},owner='one')
     assert error.value.status_code==422
     assert '64 levels' in error.value.detail
+
+
+@pytest.mark.parametrize('chosen_source',[None,'/custom/ohlcv'])
+def test_new_backtest_and_run_handoff_default_to_same_pbgui_source(native,monkeypatch,chosen_source):
+    """Only new configs/handoffs acquire the default; saved/imported source choices survive."""
+    import pb9_config
+    source,_,_=native
+    monkeypatch.setattr(pb9_config,'load_pb9_template',lambda *args,**kwargs:{'config':copy.deepcopy(source)})
+    created=operation('new_config')['config']
+    assert created['backtest']['ohlcv_source_dir']==bt._pbgui_data_path()
+    # A deliberate Passivbot-native choice stays null on validation, save and enqueue.
+    source['backtest']['ohlcv_source_dir']=chosen_source
+    prepared=operation('prepare',{'config':source})['config']
+    assert prepared['backtest']['ohlcv_source_dir']==chosen_source
+    operation('save',{'config':source},name='native-data')
+    assert operation('load',name='native-data')['config']['backtest']['ohlcv_source_dir']==chosen_source
+    job=operation('enqueue',{'name':'native-data','config':source})['filename']
+    assert bt._read(bt._job_path(job,'.config.json'))['backtest']['ohlcv_source_dir']==chosen_source
+
+
+def test_missing_offline_metadata_leaves_queue_and_snapshot_unchanged(native,monkeypatch):
+    """Readiness failures return a useful conflict and do not consume a process slot."""
+    source,_,_=native
+    source['backtest'].update(offline=True,exchanges=['bybit'])
+    job=operation('enqueue',{'name':'offline','config':source})['filename']
+    raw=bt._job_path(job,'.config.json').read_bytes()
+    monkeypatch.setattr(bt,'claim_backtest_slot',lambda *args,**kwargs:pytest.fail('metadata must be checked first'))
+    with pytest.raises(HTTPException) as error:operation('start',id=job)
+    assert error.value.status_code==409 and 'Coin Data' in error.value.detail
+    assert operation('queue')['queue'][0]['status']=='queued'
+    assert bt._job_path(job,'.config.json').read_bytes()==raw
+
+
+@pytest.mark.parametrize('value',[None,[]])
+def test_run_handoff_invalid_backtest_reaches_native_validation(native,monkeypatch,value):
+    """Defaults must not dereference a malformed section before native rejection."""
+    source,_,_=native;source['backtest']=value
+    def reject(config,cancel):
+        """Represent the native schema validator, not an attribute access failure."""
+        assert config['backtest']==value
+        raise HTTPException(422,'Invalid native backtest section')
+    monkeypatch.setattr(bt,'_native',reject)
+    with pytest.raises(HTTPException) as error:operation('draft_create',{'config':source},owner='alice')
+    assert error.value.status_code==422

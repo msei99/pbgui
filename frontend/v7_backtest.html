@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
 <script src="/app/js/backtest_editor_adapter.js?v=13"></script>
-<script src="/app/js/backtest_v9_editor.js?v=3"></script>
+<script src="/app/js/backtest_v9_editor.js?v=5"></script>
 <script src="/app/js/backtest_v9_migration.js?v=1" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
@@ -3482,11 +3482,7 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
 
   /* ── Row 4: Data Source (cols-8: 4+1+1+1+1) ── */
   html += '<div class="form-row cols-8" style="align-items:end">';
-  html += '<div class="form-group span-4"><label><span data-tip="Optional path to pre-populated OHLCV directory.">ohlcv_source_dir</span></label>' +
-    '<div style="display:flex;gap:var(--sp-xs)">' +
-      '<input type="text" id="cfg-ohlcv-dir" class="form-input" value="' + esc(bt.ohlcv_source_dir || '') + '" placeholder="Leave empty for default">' +
-      '<button type="button" class="act-btn" style="white-space:nowrap" onclick="fillPbguiDataPath()" title="Use PBGui market data directory">\uD83D\uDCC2 PBGui Data</button>' +
-    '</div></div>';
+  html += fieldOhlcvSource(bt.ohlcv_source_dir);
   html += fieldNumber('cfg-candle-interval', 'candle_interval_minutes', bt.candle_interval_minutes || 1, 1, 'Aggregates 1m OHLCVs into coarser candles.\n1 = native 1m resolution.');
   html += fieldNumber('cfg-gap-tolerance', 'gap_tolerance_ohlcvs_minutes', bt.gap_tolerance_ohlcvs_minutes || 5, 1, 'Maximum tolerated hole size in OHLCV data\nbefore a coin is considered broken.');
   html += '<div class="form-group" style="justify-content:flex-end">' +
@@ -5954,17 +5950,31 @@ function viewConfigResults(name) {
   loadResults(name, { keepVisible: hasCachedResults });
 }
 
+function fieldOhlcvSource(value) {
+  return '<div class="form-group span-4"><label for="cfg-ohlcv-dir"><span tabindex="0" data-tip="Optional path to existing OHLCV files. Leave empty for Passivbot data.">ohlcv_source_dir</span></label>' +
+    '<div style="display:flex;gap:var(--sp-xs)">' +
+      '<input type="text" id="cfg-ohlcv-dir" class="form-input" value="' + esc(value || '') + '" placeholder="Leave empty for default">' +
+      '<button type="button" class="act-btn" style="white-space:nowrap" onclick="fillPbguiDataPath()" title="Use PBGui market data directory">\uD83D\uDCC2 PBGui Data</button>' +
+    '</div></div>';
+}
+
+var _pbguiDataPathRequest = null;
+var _pbguiDataPathGeneration = 0;
 function fillPbguiDataPath() {
-  apiFetch('/pbgui_data_path').then(function(d) {
-    var el = document.getElementById('cfg-ohlcv-dir');
-    if (el) {
-      el.value = d.path || '';
-      scheduleStructuredEditorSync();
-      if (_ohlcvPreflightController && _ohlcvPreflightController.isOpen()) {
-        _ohlcvPreflightController.markStale();
-      }
-    }
-  }).catch(function() { toast('Could not fetch PBGui data path', 'err'); });
+  var input = document.getElementById('cfg-ohlcv-dir');
+  var initial = input ? input.value : '';
+  var mine = ++_pbguiDataPathGeneration;
+  var request = apiFetch('/pbgui_data_path').then(function(d) {
+    // An older response must not replace a newer editor or a user's path edit.
+    if (mine !== _pbguiDataPathGeneration || !input || document.getElementById('cfg-ohlcv-dir') !== input || input.value !== initial) return;
+    input.value = d.path || '';
+    scheduleStructuredEditorSync();
+    if (_ohlcvPreflightController && _ohlcvPreflightController.isOpen()) _ohlcvPreflightController.markStale();
+  }).catch(function() { toast('Could not fetch PBGui data path', 'err'); }).finally(function() {
+    if (_pbguiDataPathRequest === request) _pbguiDataPathRequest = null;
+  });
+  _pbguiDataPathRequest = request;
+  return request;
 }
 
 function clearOhlcvSourceDir() {

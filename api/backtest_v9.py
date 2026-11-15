@@ -32,7 +32,7 @@ from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
 from pb9_config import PB9ConfigError, PB9CancelSignal, get_pb9_editor_metadata, validate_pb9_backtest_config
 from pb9_config_helper import check_inline_config
-from pb9_backtest_runtime import launch_environment, source_identity
+from pb9_backtest_runtime import launch_environment, source_identity, prepare_market_metadata
 from pb9_runtime import inspect_pb9_runtime
 from pb7_config import load_pb7_config, save_pb7_config
 from pb9_config_storage import PB9FileContext
@@ -313,10 +313,16 @@ def _start(job, cancel):
         snapshot = _job_path(job, '.config.json')
         if hashlib.sha256(snapshot.read_bytes()).hexdigest() != item['snapshot_sha256']:
             raise HTTPException(409, "PB9 queue snapshot changed")
-        if not claim_backtest_slot('v9', job, max(1, (os.cpu_count() or 1) // 2)):
-            raise HTTPException(409, "All shared backtest slots are occupied")
         work = _working_dir(job)
         ensure_private_directory(work)
+        try:
+            prepare_market_metadata(work, _read(snapshot), Path(PBGDIR) / 'data/coindata', Path(paths['pb9dir']),
+                                    [paths.get('pb8dir'), paths.get('pb7dir')])
+        except (OSError, ValueError) as exc:
+            _log(SERVICE, 'PB9 offline metadata preflight failed', level='WARNING')
+            raise HTTPException(409, str(exc)) from None
+        if not claim_backtest_slot('v9', job, max(1, (os.cpu_count() or 1) // 2)):
+            raise HTTPException(409, "All shared backtest slots are occupied")
         runner = Path(__file__).resolve().parents[1] / 'pb9_backtest_runner.py'
         state, pid, ready = [_job_path(job, ext) for ext in ('.state.json', '.pid.json', '.ready')]
         log_root = Path(PBGDIR) / 'data/logs/backtests_v9'
@@ -527,12 +533,18 @@ def _operation(operation, cancel, payload=None):
             from pb9_config import load_pb9_template
             result = load_pb9_template(paths['pb9dir'], paths['pb9venv'],
                     {key: value for key, value in paths.items() if not key.startswith('pb9')}, cancel_event=cancel)
+            result['config']['backtest']['ohlcv_source_dir'] = _pbgui_data_path()
             return {'config': result['config'], 'param_status': {}, 'override_configs': {}}
         if operation == 'bt9_prepare':
             source, _ = _native(body.get('config', body), cancel)
             return {'config': source, 'param_status': {}, 'override_configs': {}}
         if operation == 'bt9_draft_create':
-            source, _ = _native(body.get('config'), cancel)
+            candidate = copy.deepcopy(body.get('config'))
+            if isinstance(candidate, dict):
+                backtest = candidate.setdefault('backtest', {})
+                if isinstance(backtest, dict) and not backtest.get('ohlcv_source_dir'):
+                    backtest['ohlcv_source_dir'] = _pbgui_data_path()
+            source, _ = _native(candidate, cancel)
             with _LOCK:
                 for key, value in list(_drafts.items()):
                     if time.monotonic() - value['created'] > 600:
@@ -709,6 +721,18 @@ def settings(session: SessionToken = Depends(require_auth)):
     """Expose capabilities rather than silently forwarding unsupported v8 features."""
     return {'autostart': False, 'cpu': 1, 'exchange_options': [],
             'capabilities': {'local': True, 'native_schema': 'v9', 'optimizer': False, 'archive': False, 'autostart': False}}
+
+
+def _pbgui_data_path():
+    """Use the same shared OHLCV root as PB7/PB8, without a bot-slot dependency."""
+    from market_data import get_market_data_root_dir
+    return str(get_market_data_root_dir())
+
+
+@router.get('/pbgui_data_path')
+def pbgui_data_path(session: SessionToken = Depends(require_auth)):
+    """Expose the existing editor's PBGui Data action for native PB9 too."""
+    return {'path': _pbgui_data_path()}
 
 
 @router.get('/editor/metadata')

@@ -246,3 +246,21 @@ def test_pb8_result_conversion_and_stale_source_error(backtest):
     assert '/backtest-v8/' in page.url and '#results' in page.url
     assert backtest.saved==backtest.queued==[]
     assert backtest.errors==[]
+
+
+def test_native_source_control_reuses_pbgui_path_and_preserves_explicit_opt_out(backtest):
+    """PBGui Data, a custom source and clearing the path round-trip through the real editor."""
+    page=backtest.page
+    page.route('**/api/backtest-v9/pbgui_data_path',lambda route:route.fulfill(json={'path':'/shared/pbgui/ohlcv'}))
+    expect(page.locator('#cfg-ohlcv-dir')).to_be_visible()
+    expect(page.locator('#bt9-field-section-backtest')).to_have_class('expander open')
+    page.locator('button[onclick="fillPbguiDataPath()"]').click()
+    expect(page.locator('#cfg-ohlcv-dir')).to_have_value('/shared/pbgui/ohlcv')
+    page.locator('#sidebar-editor button[onclick="saveEditor()"]').click()
+    page.wait_for_function('editingConfig !== "__new__"')
+    assert backtest.saved[-1]['config']['backtest']['ohlcv_source_dir']=='/shared/pbgui/ohlcv'
+    page.locator('#cfg-ohlcv-dir').fill('')
+    page.locator('#sidebar-editor button[onclick="saveEditor()"]').click()
+    page.wait_for_function('document.getElementById("cfg-raw-json").value.includes(\'"ohlcv_source_dir": null\')')
+    assert backtest.saved[-1]['config']['backtest']['ohlcv_source_dir'] is None
+    assert backtest.errors==[]

@@ -21,3 +21,11 @@ This integration currently offers manual local PB9 jobs. Automatic queue startup
 In **PBv8 → Backtest**, use **V9 — Open as PB9 Backtest** on a saved config or local result. PBGui uses the official converter of your installed PB9 runtime and displays the full best-effort changes and warnings before adoption. Conversion can infer different risk-memory policies and metric formulas; freshly evaluate the result. No PB8 file is rewritten and no job starts automatically.
 
 After **Open PB9 draft**, the native editor retains the migration report, dates, balance and migrated settings. The draft is private to your login and expires after ten minutes; save it before expiry. Reload restores the same draft while available. Supported PB8 schemas are `v8.0.0`, `v8.1.0` and `v8.6.0`. Local JSON overrides are materialized; external references and legacy coin flags must be resolved before conversion.
+
+## OHLCV data source
+
+The editor uses the same **ohlcv_source_dir** field and **PBGui Data** action as PB7/PB8. New PB9 backtests and Run-to-Backtest drafts default to the shared PBGui OHLCV directory. Saved/imported configs retain their chosen source. Clear the field to use Passivbot's own candle management, or enter a custom source directory. The selection is saved in the config and immutable queue snapshot; starting a job never silently replaces it. Backtest Settings opens initially so the separate **offline** setting and other native controls are visible.
+
+PB9 reads existing PBGui candles directly. No candle directory or metadata file is copied. Offline jobs reference existing public CCXT market and versioned listing metadata through file links while keeping their own derived caches and results. PBGui Coin Data and PB9 caches are used first; compatible metadata in other configured bot caches may also be read, without importing their code or requiring those installations. Native PB9 still validates listing-cache versions and market identities. Online jobs receive no shared metadata links, so native cache updates cannot write through them.
+
+If offline market metadata is missing, the job stays queued with an actionable message. Update the exchange in Coin Data, provide the native offline listing metadata where required, or deliberately disable offline. Offline never silently downloads missing inputs. Existing source files remain unchanged.

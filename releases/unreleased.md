@@ -2,6 +2,14 @@
 
 ## Development
 
+- Reuse the PB7/PB8 OHLCV source control in PB9 Backtest. Default new configs
+  and Run handoffs to shared PBGui candles while preserving saved/imported
+  source choices and explicit Passivbot defaults. Wait for the PBGui Data
+  lookup before saving and ignore stale responses; initially open native
+  Backtest Settings. Offline jobs reference existing public market/listing
+  metadata without copying candles or metadata, keep online writers isolated,
+  and report missing market metadata before consuming a process slot.
+
 - Open saved PB8 backtest configs and local results as native PB9 drafts using
   the official installed Passivbot v8-to-v9 converter. Review the complete
   best-effort changes and warnings before adoption; retain the report in the

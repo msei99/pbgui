@@ -81,3 +81,98 @@ def publish_result_source(config_path: Path) -> None:
         atomic_write_private_text(directory / 'pbgui.source.json', raw.decode('utf-8'))
         evidence = {key: record[key] for key in ('runtime', 'schema', 'commit', 'package_version', 'snapshot_sha256', 'filename')}
         atomic_write_private_text(directory / 'pbgui.provenance.json', json.dumps(evidence, indent=4) + '\n')
+
+
+
+def _public_metadata(root: Path, relative: Path, *, version=False):
+    """Validate bounded public metadata through no-follow descriptors."""
+    import stat
+    descriptors = []
+    try:
+        descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        descriptors.append(descriptor)
+        for part in relative.parts[:-1]:
+            descriptor = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            descriptors.append(descriptor)
+        descriptor = os.open(relative.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=descriptor)
+        descriptors.append(descriptor)
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            return None
+        with os.fdopen(os.dup(descriptor), 'rb') as stream:
+            raw = stream.read(32 * 1024 * 1024 + 1)
+        if len(raw) > 32 * 1024 * 1024:
+            return None
+        value = int(raw.strip()) if version else json.loads(raw)
+        return value if (isinstance(value, int) and value > 0 if version else isinstance(value, dict)) else None
+    except (OSError, ValueError, UnicodeError, RecursionError):
+        return None
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def prepare_market_metadata(work: Path, config: dict, coindata: Path, repo: Path, metadata_roots=()) -> None:
+    """Reference existing public offline inputs without copying candles or metadata.
+
+    Native v9 only reads these inputs in offline mode. Derived caches remain in
+    the job directory. Extra configured bot caches are optional data sources;
+    no bot code is imported and no PB7/PB8 installation is required.
+    """
+    import re
+    from secure_files import ensure_private_directory
+
+    backtest = config.get('backtest', {})
+    if backtest.get('offline') is not True:
+        return
+    exchanges = backtest.get('exchanges', [])
+    if not isinstance(exchanges, list) or not exchanges:
+        raise ValueError('Select an exchange before starting an offline PB9 backtest')
+    caches = [repo / 'caches', coindata, *[Path(root) / 'caches' for root in metadata_roots if root]]
+    targets = []
+    for exchange in exchanges:
+        if not isinstance(exchange, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,39}', exchange):
+            raise ValueError('Invalid offline PB9 exchange')
+        target = work / 'caches' / exchange / 'markets.json'
+        for parent in (target.parent, target.parent.parent, work):
+            if parent.is_symlink():
+                raise ValueError('PB9 metadata directories must not be links')
+        shared = (coindata, Path(exchange) / 'ccxt_markets.json')
+        native = [(root, Path(exchange) / 'markets.json') for root in caches if root != coindata]
+        candidates = [shared, *native] if backtest.get('ohlcv_source_dir') else [*native, shared]
+        if target.is_file() and not target.is_symlink():
+            candidates.insert(0, (work, target.relative_to(work)))
+        selected = None
+        for root, relative in candidates:
+            markets = _public_metadata(root, relative)
+            if (markets and all(isinstance(item, dict) and isinstance(item.get('symbol'), str)
+                                and item['symbol'] for item in markets.values())):
+                selected = root / relative
+                break
+        if selected is None:
+            raise ValueError(f'Offline market metadata missing for {exchange}. Update Coin Data for this exchange or disable offline in Backtest Settings.')
+        targets.append((target, selected))
+        for root in caches:
+            relative = Path(exchange) / 'first_timestamps.json'
+            if _public_metadata(root, relative) is not None:
+                targets.append((work / 'caches' / relative, root / relative)); break
+    # Keep the resolver version and its three documents together; native v9
+    # verifies that version and the exact coin/exchange/symbol identities.
+    listing = ['first_ohlcv_timestamps_unified.version', 'first_ohlcv_timestamps_unified.json',
+               'first_ohlcv_timestamps_unified_exchange_specific.json',
+               'first_ohlcv_timestamps_unified_exchange_specific_symbols.json']
+    for root in caches:
+        if all(_public_metadata(root, Path(name), version=name.endswith('.version')) is not None for name in listing):
+            targets.extend((work / 'caches' / name, root / name) for name in listing)
+            break
+    # Validate every destination before exposing any references. Existing local
+    # metadata belongs to this job and is never overwritten.
+    for target, selected in targets:
+        if any(parent.is_symlink() for parent in (target.parent, target.parent.parent)):
+            raise ValueError('PB9 metadata directories must not be links')
+        if target.is_symlink() and target.resolve() != selected.resolve():
+            raise ValueError('PB9 offline metadata reference changed; enqueue a new job')
+    for target, selected in targets:
+        if target == selected or target.exists() or target.is_symlink():
+            continue
+        ensure_private_directory(target.parent)
+        target.symlink_to(selected.absolute())
