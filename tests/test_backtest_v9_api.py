@@ -394,3 +394,32 @@ def test_run_handoff_invalid_backtest_reaches_native_validation(native,monkeypat
     monkeypatch.setattr(bt,'_native',reject)
     with pytest.raises(HTTPException) as error:operation('draft_create',{'config':source},owner='alice')
     assert error.value.status_code==422
+
+
+def test_price_overlay_reuses_shared_reader_with_result_owned_dates(native,monkeypatch):
+    """Native result charts use the same bounded price reader as PB7/PB8, without config imports."""
+    source,_,_=native
+    source['backtest'].update(exchanges=['bybit','hyperliquid'],start_date='2025-07-01',end_date='2025-07-02')
+    directory=bt._root('results')/'sample'/'job'/'combined'/'result';directory.mkdir(parents=True)
+    bt._write(directory/'analysis.json',{});bt._write(directory/'config.json',source)
+    calls=[]
+    def reader(config,**kwargs):
+        """Record the result config boundary without reading production candles."""
+        calls.append((config,kwargs))
+        return {'available':True,'time':['2025-07-01T00:00:00Z'],'close':[42.0]}
+    monkeypatch.setattr(bt,'build_market_price_payload',reader)
+    result=operation('price',path=str(directory),exchange='bybit',coin='HYPE',max_points=6000)
+    assert result['close']==[42.0]
+    assert calls==[(source,{'exchange':'bybit','coin':'HYPE','max_points':6000})]
+    with pytest.raises(HTTPException):operation('price',path='../outside',exchange='bybit',coin='HYPE',max_points=6000)
+    assert len(calls)==1
+
+
+def test_price_overlay_retains_shared_exchange_validation(native,monkeypatch):
+    """A requested venue outside the result cannot cause arbitrary filesystem lookup."""
+    source,_,_=native;source['backtest']['exchanges']=['bybit']
+    directory=bt._root('results')/'sample'/'job'/'combined'/'result';directory.mkdir(parents=True)
+    bt._write(directory/'analysis.json',{});bt._write(directory/'config.json',source)
+    with pytest.raises(HTTPException) as error:
+        operation('price',path=str(directory),exchange='hyperliquid',coin='HYPE',max_points=6000)
+    assert error.value.status_code==400 and 'not part' in error.value.detail

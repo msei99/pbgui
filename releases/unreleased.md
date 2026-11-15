@@ -2,6 +2,14 @@
 
 ## Development
 
+- Restore PB9 result-chart close prices using the shared PB7/PB8 read-only
+  PBGui MarketData price reader. Add the missing authenticated native endpoint
+  and split combined exchange labels into individual venue choices, including
+  already indexed results. Keep full-coverage auto-selection, venue switching
+  and balance/equity traces on the existing chart path. Restore the selected
+  venue on reload, avoid PB8-only HSL reconstruction for native results, and
+  retain basic field edits when a value is changed back after autosync.
+
 - Reuse the PB7/PB8 OHLCV source control in PB9 Backtest. Default new configs
   and Run handoffs to shared PBGui candles while preserving saved/imported
   source choices and explicit Passivbot defaults. Wait for the PBGui Data

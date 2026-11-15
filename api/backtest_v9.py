@@ -20,10 +20,11 @@ import uuid
 
 import numpy as np
 import psutil
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, Response, FileResponse
 
 from api.auth import SessionToken, authenticated_push_websocket, require_auth
+from api.backtest_price import build_market_price_payload
 from api.page_templates import render_page_urls, script_json
 from api.v9_instances import _NoStoreRoute, _run, _paths, _native_http_error
 from backtest_result_index import load_indexed_results, invalidate_result
@@ -645,6 +646,14 @@ def _operation(operation, cancel, payload=None):
                 'has_more': offset + len(selected) < len(paths), 'next_offset': offset + len(selected)}}
         if operation == 'bt9_analysis':
             return _read(_safe(_result(args['path']), 'analysis.json'), 8 * 1024 * 1024)
+        if operation == 'bt9_price':
+            config = _read(_safe(_result(args['path']), 'config.json'))
+            try:
+                return build_market_price_payload(config, exchange=args['exchange'], coin=args['coin'],
+                                                  max_points=args['max_points'])
+            except ValueError as exc:
+                _log(SERVICE, 'PB9 result price request rejected', level='WARNING')
+                raise HTTPException(400, str(exc)) from None
         if operation == 'bt9_result_config':
             directory = _result(args['path'])
             original = _safe(directory, 'pbgui.source.json')
@@ -874,6 +883,13 @@ def image(path: str, filename: str, session: SessionToken = Depends(require_auth
 async def analysis(path: str, request: Request, session: SessionToken = Depends(require_auth)):
     """Return native metrics unchanged."""
     return await _call(request, 'analysis', {'path': path})
+
+
+@router.get('/results/price')
+async def result_price(path: str, request: Request, exchange: str = Query(...), coin: str = Query(...),
+                       max_points: int = Query(6000, ge=2, le=10000), session: SessionToken = Depends(require_auth)):
+    """Reuse PB7/PB8's bounded read-only PBGui candle overlay for native results."""
+    return await _call(request, 'price', {'path': path, 'exchange': exchange, 'coin': coin, 'max_points': max_points})
 
 
 @router.get('/results/config')

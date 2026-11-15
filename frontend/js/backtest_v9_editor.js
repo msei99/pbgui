@@ -146,10 +146,12 @@
     var raw = document.getElementById('cfg-raw-json'), config = JSON.parse(raw.value);
     Object.keys(basic).forEach(function(id) {
       var input = document.getElementById(id);
-      if (input.value !== shown[id]) {
-        var value = input.type === 'number' ? Number(input.value) : input.value;
-        if (id === 'cfg-end-date') value = input.dataset.semanticValue || value;
-        if (id === 'cfg-ohlcv-dir') value = value.trim() || null;
+      var value = input.type === 'number' ? Number(input.value) : input.value;
+      if (id === 'cfg-end-date') value = input.dataset.semanticValue || value;
+      if (id === 'cfg-ohlcv-dir') value = value.trim() || null;
+      // Raw JSON may already contain an earlier edit. Returning a visible field
+      // to its original value must still replace that intermediate value.
+      if (input.value !== shown[id] || paths().has(config, basic[id]) && paths().get(config, basic[id]) !== value) {
         paths().set(config, basic[id], value);
       }
     });
@@ -218,11 +220,21 @@
   function readView() {
     try { return JSON.parse(sessionStorage.getItem(viewKey) || '{}'); } catch(error) { return {}; }
   }
+  function preferredPrice(path) {
+    var prices=readView().prices;
+    var entry=Array.isArray(prices) && prices.find(function(item){return item.path===path;});
+    return entry && typeof entry.value==='string' ? entry.value : '';
+  }
+  function rememberPrice(path, value) {
+    var state=readView(), prices=Array.isArray(state.prices)?state.prices:[];
+    state.prices=prices.filter(function(item){return item.path!==path;}).concat([{path:path,value:value}]).slice(-100);
+    try {sessionStorage.setItem(viewKey,JSON.stringify(state));} catch(error) { /* Optional navigation state. */ }
+  }
   function rememberResults() {
     if (window.currentPanel !== 'results') return;
     var rows=Array.from(document.querySelectorAll('#results-list tr[data-path]'));
     if (!rows.length) return;
-    var state={search:document.getElementById('results-filter').value, actions:[], selected:[]};
+    var state={search:document.getElementById('results-filter').value, actions:[], selected:[], prices:readView().prices || []};
     rows.forEach(function(row) {
       if (row.classList.contains('selected')) state.selected.push(row.dataset.path);
       row.querySelectorAll('button[data-action].active').forEach(function(button) {
@@ -249,5 +261,5 @@
     var state=readView(), input=document.getElementById('results-filter');
     if(input&&typeof state.search==='string')input.value=state.search.slice(0,500);
   }
-  window.PBGuiBacktestV9 = {rememberResults:rememberResults, restoreResults:restoreResults, restoreSearch:restoreSearch, active:function(){return !!(window.backtestEditorAdapter && window.backtestEditorAdapter.metadataDriven);}, render:render, collect:collect, populate:populate, validate:validate, save:save, close:function(){generation++;var url=new URL(window.location.href);['config','draft_id','opt_draft_id'].forEach(function(key){url.searchParams.delete(key);});history.replaceState(null,'',url);}};
+  window.PBGuiBacktestV9 = {preferredPrice:preferredPrice, rememberPrice:rememberPrice, rememberResults:rememberResults, restoreResults:restoreResults, restoreSearch:restoreSearch, active:function(){return !!(window.backtestEditorAdapter && window.backtestEditorAdapter.metadataDriven);}, render:render, collect:collect, populate:populate, validate:validate, save:save, close:function(){generation++;var url=new URL(window.location.href);['config','draft_id','opt_draft_id'].forEach(function(key){url.searchParams.delete(key);});history.replaceState(null,'',url);}};
 }());

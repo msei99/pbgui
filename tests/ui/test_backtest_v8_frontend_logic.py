@@ -2499,3 +2499,18 @@ def test_backtest_v8_configs_render_sortable_strategy_without_changing_v7_rows()
     assert "configs: ['name', 'exchanges', 'strategy', 'coins'" in source
     assert "(backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven) ? thSort('Strategy', 'strategy') : ''" in source
     assert "(backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven) ? '<td>' + esc(c.strategy || '-') + '</td>' : ''" in source
+
+
+def test_native_combined_summary_never_uses_joined_exchange_label_for_price():
+    """Old indexed PB9 summaries must work immediately without rebuilding result data."""
+    source=(ROOT/'frontend/v7_backtest.html').read_text()
+    function=_extract_function(source,'resultPriceMarkets')
+    script=function+'''
+    browserAssert.deepEqual(resultPriceMarkets({exchange_dir:'bybit, hyperliquid',exchanges:['bybit','hyperliquid'],coins:['HYPE']}),
+      [{exchange:'bybit',coin:'HYPE'},{exchange:'hyperliquid',coin:'HYPE'}]);
+    browserAssert.deepEqual(resultPriceMarkets({exchange_dir:'bybit',exchanges:['bybit','hyperliquid'],coins:['HYPE']}),
+      [{exchange:'bybit',coin:'HYPE'}]);
+    browserAssert.deepEqual(resultPriceMarkets({exchange_dir:'bybit, hyperliquid',coins:['HYPE']}),
+      [{exchange:'bybit',coin:'HYPE'},{exchange:'hyperliquid',coin:'HYPE'}]);
+    '''
+    run_javascript(['-e',script],cwd=ROOT,check=True,capture_output=True,text=True)

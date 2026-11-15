@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
 <script src="/app/js/backtest_editor_adapter.js?v=13"></script>
-<script src="/app/js/backtest_v9_editor.js?v=5"></script>
+<script src="/app/js/backtest_v9_editor.js?v=6"></script>
 <script src="/app/js/backtest_v9_migration.js?v=1" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
@@ -7808,11 +7808,14 @@ function resultPriceMarkets(result) {
   });
   var exchangeDir = String(result && result.exchange_dir || '').trim();
   var exchangeDirLower = exchangeDir.toLowerCase();
-  var exchanges = exchangeDir && exchangeDirLower !== 'combined' && exchangeDirLower !== 'suite_runs'
+  // Cached native PB9 summaries may contain the display label here. Use the
+  // configured venue list for those combined results, never the joined label.
+  var configured = Array.isArray(result && result.exchanges) ? result.exchanges.slice() : [];
+  var exchanges = exchangeDir && exchangeDir.indexOf(',') < 0 && exchangeDirLower !== 'combined' && exchangeDirLower !== 'suite_runs'
     ? [exchangeDir]
-    : (Array.isArray(result && result.exchanges) ? result.exchanges.slice() : []);
+    : (configured.length ? configured : exchangeDir.split(','));
   exchanges = exchanges.map(function(value) { return String(value || '').trim(); }).filter(function(value, index, values) {
-    return value && value.toLowerCase() !== 'combined' && values.indexOf(value) === index;
+    return value && value.toLowerCase() !== 'combined' && value.toLowerCase() !== 'suite_runs' && values.indexOf(value) === index;
   });
   var markets = [];
   exchanges.forEach(function(exchange) {
@@ -7890,13 +7893,14 @@ function onResultActionsChanged() {
       /* 1. Balance & Equity chart */
       var beId = 'be-chart-' + idx;
       var priceMarkets = resultPriceMarkets(r);
+      var preferredPrice = backtestEditorAdapter.metadataDriven ? window.PBGuiBacktestV9.preferredPrice(r.path) : '';
       html += '\x3Cdiv style="margin-bottom:var(--sp-xs);display:flex;align-items:center;gap:var(--sp-md);flex-wrap:wrap">';
       html += '\x3Clabel class="sb-toggle">\x3Cinput type="checkbox" id="log-toggle-' + idx + '" onchange="toggleLogScale(\'' + beId + '\', this.checked)">\x3Cspan style="font-size:var(--fs-sm)">logarithmic\x3C/span>\x3C/label>';
       if (priceMarkets.length) {
         html += '\x3Clabel style="font-size:var(--fs-sm);color:var(--text-dim)">Price (PBGui MarketData) ';
         html += '\x3Cselect class="sb-input" style="max-width:220px" id="price-market-' + idx + '" onchange="rerenderBEChartPrice(' + idx + ')">';
         priceMarkets.forEach(function(market) {
-          html += '\x3Coption value="' + esc(priceMarketOptionValue(market)) + '">' + esc(market.exchange + ' / ' + market.coin) + '\x3C/option>';
+          html += '\x3Coption value="' + esc(priceMarketOptionValue(market)) + '"' + (preferredPrice === priceMarketOptionValue(market) ? ' selected' : '') + '>' + esc(market.exchange + ' / ' + market.coin) + '\x3C/option>';
         });
         html += '\x3C/select>\x3C/label>';
         html += '\x3Cspan id="price-status-' + idx + '" style="font-size:var(--fs-xs);color:var(--text-dim)">\x3C/span>';
@@ -7917,9 +7921,11 @@ function onResultActionsChanged() {
       chartDivs.push({ id: ddId, type: 'drawdown', path: r.path, result: r, idx: idx });
 
       /* 4. Equity hard-stop drawdown chart */
-      var hardStopId = 'hard-stop-chart-' + idx;
-      html += chartWrap(hardStopId, vsClose);
-      chartDivs.push({ id: hardStopId, type: 'hard_stop_drawdown', path: r.path, result: r, idx: idx });
+      if (String(r.backtest_version || backtestEditorAdapter.version).toLowerCase() !== 'v9') {
+        var hardStopId = 'hard-stop-chart-' + idx;
+        html += chartWrap(hardStopId, vsClose);
+        chartDivs.push({ id: hardStopId, type: 'hard_stop_drawdown', path: r.path, result: r, idx: idx });
+      }
 
       /* 5. TWE chart — resolution dropdown + show coins toggle */
       var tweId = 'twe-chart-' + idx;
@@ -8099,6 +8105,7 @@ function renderBEWithSelectedPrice(cd, be, autoSelectCoverage) {
     renderBEChart(cd, be, null);
     return;
   }
+  if (window.PBGuiBacktestV9 && window.PBGuiBacktestV9.active() && window.PBGuiBacktestV9.preferredPrice(cd.path) === priceMarketOptionValue(market)) autoSelectCoverage = false;
   var markets = [market];
   if (autoSelectCoverage) {
     resultPriceMarkets(cd.result).forEach(function(candidate) {
@@ -8151,6 +8158,10 @@ function renderBEWithSelectedPrice(cd, be, autoSelectCoverage) {
 function rerenderBEChartPrice(idx) {
   var result = (_activeResultsCtx.data || [])[idx];
   if (!result || !_beCache[result.path]) return;
+  if (backtestEditorAdapter.metadataDriven) {
+    var select = document.getElementById('price-market-' + idx);
+    if (select) window.PBGuiBacktestV9.rememberPrice(result.path, select.value);
+  }
   renderBEWithSelectedPrice({ id: 'be-chart-' + idx, type: 'be', path: result.path, result: result, idx: idx }, _beCache[result.path], false);
 }
 

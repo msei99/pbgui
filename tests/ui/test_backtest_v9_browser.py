@@ -260,7 +260,46 @@ def test_native_source_control_reuses_pbgui_path_and_preserves_explicit_opt_out(
     page.wait_for_function('editingConfig !== "__new__"')
     assert backtest.saved[-1]['config']['backtest']['ohlcv_source_dir']=='/shared/pbgui/ohlcv'
     page.locator('#cfg-ohlcv-dir').fill('')
-    page.locator('#sidebar-editor button[onclick="saveEditor()"]').click()
-    page.wait_for_function('document.getElementById("cfg-raw-json").value.includes(\'"ohlcv_source_dir": null\')')
+    with page.expect_response(lambda response: '/configs/fixture' in response.url and response.request.method == 'PUT'):
+        page.locator('#sidebar-editor button[onclick="saveEditor()"]').click()
     assert backtest.saved[-1]['config']['backtest']['ohlcv_source_dir'] is None
     assert backtest.errors==[]
+
+
+def test_combined_native_result_shows_individual_venues_and_close_price(backtest):
+    """The actual chart uses native price routes and keeps the overlay when switching venue."""
+    page=backtest.page;requested=[]
+    def respond(route):
+        """Return synthetic result data; real production code renders Plotly and selector."""
+        url=urlparse(route.request.url);path=url.path
+        if path.endswith('/results'):
+            route.fulfill(json={'results':[{'path':'native/combined/result','config_name':'native',
+                'result_name':'result','backtest_version':'v9','exchange_dir':'bybit, hyperliquid',
+                'exchanges':['bybit','hyperliquid'],'coins':['HYPE'],'strategy':'ema_anchor',
+                'start_date':'2025-07-01','end_date':'2025-07-02'}],
+                'pagination':{'has_more':False,'total':1}})
+        elif path.endswith('/equity'):
+            route.fulfill(content_type='text/csv',body='timestamp,usd_total_balance,usd_total_equity\n2025-07-01T00:00:00Z,1000,1000\n2025-07-02T00:00:00Z,1001,1002\n')
+        elif path.endswith('/price'):
+            query=parse_qs(url.query);exchange=query['exchange'][0];requested.append(exchange)
+            assert exchange in ['bybit','hyperliquid']
+            route.fulfill(json={'available':True,'exchange':exchange,'coin':'HYPE',
+                'time':['2025-07-01T00:00:00Z','2025-07-02T00:00:00Z'],'close':[40,42],
+                'coverage_start':'2025-07-01T00:00:00Z','coverage_end':'2025-07-02T00:00:00Z','coverage_complete':True})
+        elif path.endswith('/fills'):
+            route.fulfill(content_type='text/csv',body='timestamp,symbol,pnl,fee_paid,balance\n')
+        else:route.fulfill(json={})
+    page.route('**/api/backtest-v9/results**',respond)
+    page.locator('#sidebar-editor button[onclick="closeEditor()"]').click()
+    page.locator('#sidebar [data-panel="results"]').click()
+    page.locator('.icon-btn[data-action="view"]').click()
+    expect(page.locator('#price-market-0 option')).to_have_count(2)
+    expect(page.locator('#price-status-0')).to_contain_text('full chart coverage')
+    page.wait_for_function('document.getElementById("be-chart-0").data.some(trace=>trace.name==="bybit / HYPE close")')
+    page.locator('#price-market-0').select_option('hyperliquid|HYPE')
+    page.wait_for_function('document.getElementById("be-chart-0").data.some(trace=>trace.name==="hyperliquid / HYPE close")')
+    page.reload()
+    expect(page.locator('#price-market-0')).to_have_value('hyperliquid|HYPE')
+    expect(page.locator('#price-status-0')).to_contain_text('full chart coverage')
+    assert set(requested)=={'bybit','hyperliquid'}
+    assert backtest.unexpected==[] and backtest.errors==[]
