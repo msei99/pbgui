@@ -842,3 +842,76 @@ def test_cancelled_template_never_launches_a_late_helper(runtime, monkeypatch, d
     with pytest.raises(pb9_config.PB9ConfigError) as caught:
         pb9_config.load_pb9_template(runtime.root, runtime.python, cancel_event=cancel)
     assert caught.value.error_codes == ("helper_cancelled",)
+
+
+def test_api_validation_retains_authored_config_and_excludes_gui_metadata(validation_runtime, monkeypatch):
+    """The real fixture helper checks canonical native input; no expanded values return."""
+    import asyncio
+    import configparser
+    import httpx
+    from fastapi import FastAPI
+    from api import auth, pb9
+
+    runtime = validation_runtime
+    document = {"config_version": "v9.0.0", "bot": {"long": {}, "short": {}},
+                "pbgui": {"name": "Test", "source": {"commit": "authored-note"}}}
+    parser = configparser.ConfigParser()
+    parser.read_dict({"main": {"pb9dir": str(runtime.root), "pb9venv": str(runtime.python)}})
+    monkeypatch.setattr(pb9, "load_ini_snapshot", lambda: parser)
+    monkeypatch.setattr(auth, "validate_token", lambda token: SimpleNamespace(user_id="fixture")
+                        if token == "fixture-auth" else None)
+
+    async def exercise():
+        app = FastAPI()
+        app.add_middleware(auth.BrowserOriginMiddleware)
+        app.include_router(pb9.router, prefix="/api/pb9")
+        pb9.startup(app)
+        try:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
+                response = await client.post("/api/pb9/validate", json={"config": document},
+                                             headers={"Authorization": "Bearer fixture-auth"})
+            assert response.status_code == 200
+            result = response.json()
+            assert result["valid"] is True
+            expected = {key: value for key, value in document.items() if key != "pbgui"}
+            assert result["config"] == expected
+            assert result["pbgui"] == document["pbgui"]
+            assert result["source"]["repo_dir"] == str(runtime.root)
+            assert result["source"]["commit"] != "authored-note"
+            recorded = json.loads(runtime.record.read_text())
+            assert recorded["config"] == expected
+            assert recorded["kwargs"] == {"base_config_path": "", "verbose": False,
+                                           "target": "canonical", "runtime": None}
+            assert app.state.pb9_requests.active == 0
+        finally:
+            await pb9.shutdown(app)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("during_preflight", [False, True])
+def test_cancelled_document_validation_never_launches_late_helper(validation_runtime, monkeypatch, during_preflight):
+    """Document and native-validation wrappers both forward the owner's stop flag."""
+    cancel = pb9_config.PB9CancelSignal()
+    status = pb9_config.inspect_pb9_runtime(validation_runtime.root, validation_runtime.python)
+
+    def inspect(*args, **kwargs):
+        """Request stop before static evidence is returned to the native caller."""
+        assert kwargs["cancel_event"] is cancel
+        cancel.set()
+        return status
+
+    def forbidden(*args, **kwargs):
+        """No subprocess may be created after a stop request."""
+        pytest.fail("cancelled validation started a native helper")
+
+    if during_preflight:
+        monkeypatch.setattr(pb9_config, "inspect_pb9_runtime", inspect)
+    else:
+        cancel.set()
+        monkeypatch.setattr(pb9_config, "inspect_pb9_runtime", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.validate_pb9_document({"config_version": "v9.0.0"}, validation_runtime.root,
+                                         validation_runtime.python, cancel_event=cancel)
+    assert caught.value.error_codes == ("helper_cancelled",)

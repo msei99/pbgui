@@ -3,7 +3,8 @@
 Stand: 15. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung,
 Vorlagenadapter, Inline-Validierung und Dokumentgrenze committed; der explizite
 v9-Dateiladepfad, sichere Neuerstellung und Revisionsschutz sind committed;
-die ersten authentifizierten Read-only-API-Routen sind umgesetzt und werden geprüft.
+die authentifizierten Status-/Vorlagenrouten sind committed; die Inline-
+Validierungs-API ist umgesetzt und wird geprüft.
 
 ## Vorgehen
 
@@ -18,8 +19,10 @@ Jede Aufgabe erhält vorab einen begrenzten Umfang und ein Abnahmekriterium.
 Unfertige v9-Funktionen bleiben ausgeblendet oder gesperrt.
 Commits und Pushes benötigen weiterhin die ausdrückliche Zustimmung des Nutzers.
 Nach einem freigegebenen Commit geht Codex direkt zum nächsten geplanten Schritt
-über, ohne eine weitere Aufforderung abzuwarten. Weitere Commits brauchen erneut
-die ausdrückliche Freigabe; Remote-Aktionen bleiben separat freigabepflichtig.
+über, ohne eine weitere Aufforderung abzuwarten. Am 15. November 2026 hat der Nutzer die weiteren lokalen Schritte einschließlich
+Claude-Reviews und Commits bis zu einem testbaren v9-Editor ausdrücklich freigegeben.
+Danach brauchen weitere Commits erneut Freigabe; Pushes, Installationen und
+Remote-Aktionen bleiben separat freigabepflichtig.
 
 ## Verbindliche Grenzen
 
@@ -448,7 +451,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
     Das gemeinsame Temp-Präfix heißt auch im Replace-Pfad `.pbgui-create-`.
     Der Review war rein lesend ohne eigenen Testlauf.
 
-12. **Read-only-API, commitfähig nach unabhängigem Review.** Das neue `api/pb9.py` registriert
+12. **Read-only-API, Commit `aa532517`.** Das neue `api/pb9.py` registriert
     authentifizierte `GET /api/pb9/runtime` und `POST /api/pb9/template` im Server.
     Ein Request liest genau einen INI-Snapshot und daraus ausschließlich die
     sechs erlaubten Runtime-Pfadschlüssel. Status und Vorlagen werden anhand
@@ -519,6 +522,33 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
     Claude Fable 5.2 / medium bestätigt den Stand als commitfähig ohne P1/P2.
     Sein P3-Hinweis auf `math.isfinite` bei extrem großen Integer-Zeitlimits
     ist durch vorgezogene Bereichsprüfung korrigiert und parametrisiert getestet.
+
+13. **Inline-Validierungs-API, unabhängig geprüft und commitfähig.** `POST /api/pb9/validate`
+    akzeptiert ausschließlich `{"config": <Dokument>}`. Query-Overrides werden
+    abgelehnt; der gestreamte Body ist auf 1 MiB begrenzt. Striktes UTF-8/JSON
+    verwirft doppelte Schlüssel auf jeder Ebene, NaN/Infinity, Exponentenüberlauf
+    und Nicht-Objekte sowie einzelne Unicode-Surrogate. Die Verschachtelung
+    ist auf 64 Ebenen begrenzt; auch Antwort-Renderfehler ergeben feste Fehler.
+    Dekodierung läuft im registrierten Worker vor dem einzigen
+    INI-Snapshot. Native Validierung erhält authored Sparse-Werte ohne Root-GUI-
+    Metadaten; die API liefert `valid`, `config`, `pbgui` und unabhängige `source`.
+    Ungültige Konfigurationen ergeben feste 422-Fehler, Runtime-/Transportfehler
+    feste 503-Fehler. Auth, Origin-Schutz, No-Store, Kapazität und Restart-Gate
+    werden unverändert geteilt. Es wird weder gespeichert noch migriert.
+
+    Optionale Stop-Flags werden durch beide öffentlichen Validierungshelfer
+    bis zu Git-Vorlauf und Native-Prozessgruppe weitergereicht. Alte Datei-
+    Aufrufer ohne Flag behalten ihre vorherige Aufrufform. Der echte lokale
+    Uvicorn-Stoptest prüft nun Template und Validierung mit Kindprozess bei
+    blockiertem Event-Loop. Fokussiert: API/Auth/Restart/Signale, Native-Bridge,
+    Datei-Laden/Speichern und Revisionen **361 passed in 31.98s**. Ausschließlich
+    temporäre Daten und Fixture-Module; echte v9-/Rust-Abnahme bleibt offen.
+    Claudes P2-Hinweis auf Unicode-Surrogate ist korrigiert; erweiterte
+    Regressionen sind grün. Der abschließende lesende Recheck bestätigt:
+    P2 behoben, keine verbleibenden Blocker, commitfähig.
+    Der separate Dokument-/Transport-Check zählt weiterhin
+    ASCII-escaped JSON und kann unterhalb des rohen Body-Limits 422 ablehnen.
+    Serial nach den finalen API-Änderungen: **3707**.
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte

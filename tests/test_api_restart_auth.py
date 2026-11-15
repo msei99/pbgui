@@ -33,7 +33,7 @@ def test_pb9_routes_are_mounted_with_shared_auth() -> None:
     """The actual server exposes only the authenticated PB9 read-only entry points."""
     import httpx
 
-    expected = {("/api/pb9/runtime", "GET"), ("/api/pb9/template", "POST")}
+    expected = {("/api/pb9/runtime", "GET"), ("/api/pb9/template", "POST"), ("/api/pb9/validate", "POST")}
     found = set()
     # FastAPI can defer included-router expansion in app.routes. Check auth at
     # the owning router, then exercise actual prefixed dispatch without startup.

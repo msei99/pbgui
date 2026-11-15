@@ -12,7 +12,7 @@ import time
 import httpx
 import pytest
 
-from tests.test_pb9_config import runtime
+from tests.test_pb9_config import runtime, validation_runtime
 
 
 def _identity(pid):
@@ -24,12 +24,16 @@ def _identity(pid):
         return None
 
 
-def test_sigterm_aborts_helper_group_before_uvicorn_request_drain(runtime, tmp_path):
+@pytest.mark.parametrize("operation", ["template", "validate"])
+def test_sigterm_aborts_helper_group_before_uvicorn_request_drain(validation_runtime, tmp_path, operation):
     """An early signal cancels helpers even while the ASGI loop is temporarily blocked."""
+    runtime = validation_runtime
     record_path = tmp_path / "helper-processes.json"
-    with runtime.schema.open("a", encoding="utf-8") as stream:
-        stream.write('import json, subprocess, sys, time\nfrom pathlib import Path\n'
-                     'def get_template_config():\n'
+    target = runtime.schema if operation == "template" else runtime.loader
+    declaration = "def get_template_config():" if operation == "template" else "def prepare_config(config, **kwargs):"
+    with target.open("a", encoding="utf-8") as stream:
+        stream.write('import os, json, subprocess, sys, time\nfrom pathlib import Path\n'
+                     + declaration + '\n'
                      '    child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"])\n'
                      '    def identity(pid):\n'
                      '        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]\n'
@@ -108,8 +112,8 @@ uvicorn.run(app, uds=settings["socket"], log_config=None, access_log=False, time
                 pass
             assert time.monotonic() < deadline, "fixture server did not start"
             time.sleep(0.02)
-        workers.append(threading.Thread(target=request, args=("template", "POST", "/api/pb9/template"),
-                                       kwargs={"json": {}, "headers": {"Authorization": "Bearer fixture-auth"}}))
+        workers.append(threading.Thread(target=request, args=("template", "POST", "/api/pb9/" + operation),
+                                       kwargs={"json": {} if operation == "template" else {"config": {"config_version": "v9.0.0"}}, "headers": {"Authorization": "Bearer fixture-auth"}}))
         workers[-1].start()
         deadline = time.monotonic() + 5
         while not record_path.exists():

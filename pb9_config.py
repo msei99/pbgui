@@ -217,7 +217,8 @@ def load_pb9_template(pb9dir: str | Path | None, pb9venv: str | Path | None,
 
 
 def validate_pb9_config(config: dict, pb9dir: str | Path | None, pb9venv: str | Path | None,
-                        other_slots: dict | None = None, *, timeout: float = 60) -> dict:
+                        other_slots: dict | None = None, *, timeout: float = 60,
+                        cancel_event: threading.Event | PB9CancelSignal | None = None) -> dict:
     """Validate supported inline native source, retaining the caller's original dict.
 
     GUI/internal metadata, file-backed coins/overrides and symbolmap-dependent
@@ -225,11 +226,13 @@ def validate_pb9_config(config: dict, pb9dir: str | Path | None, pb9venv: str | 
     to check acceptance; its expanded result is discarded. No file load/save,
     version migration or runtime compilation is requested.
     """
-    return _config_operation("validate", pb9dir, pb9venv, other_slots, timeout=timeout, config=config)
+    return _config_operation("validate", pb9dir, pb9venv, other_slots, timeout=timeout, config=config,
+                             cancel_event=cancel_event)
 
 
 def validate_pb9_document(document: dict, pb9dir: str | Path | None, pb9venv: str | Path | None,
-                          other_slots: dict | None = None, *, timeout: float = 60) -> dict:
+                          other_slots: dict | None = None, *, timeout: float = 60,
+                          cancel_event: threading.Event | PB9CancelSignal | None = None) -> dict:
     """Validate an authored snapshot, keeping root GUI metadata out of native code.
 
     Return separate ``config``, ``pbgui`` and inspected ``source`` fields. Missing
@@ -260,7 +263,8 @@ def validate_pb9_document(document: dict, pb9dir: str | Path | None, pb9venv: st
             raise
         raise error from exc
     metadata = snapshot.pop("pbgui", None)
-    validation = validate_pb9_config(snapshot, pb9dir, pb9venv, other_slots, timeout=timeout)
+    options = {"cancel_event": cancel_event} if cancel_event is not None else {}
+    validation = validate_pb9_config(snapshot, pb9dir, pb9venv, other_slots, timeout=timeout, **options)
     return {"config": snapshot, "pbgui": metadata, "source": validation["source"]}
 
 
@@ -287,7 +291,8 @@ def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: 
             raise PB9ConfigError("runtime_not_detected")
         if operation == "validate":
             check_inline_config(config, status["config_schema"])
-            raw = _run_helper(status, timeout, operation=operation, config=config)
+            options = {"cancel_event": cancel_event} if cancel_event is not None else {}
+            raw = _run_helper(status, timeout, operation=operation, config=config, **options)
         elif cancel_event is not None:
             raw = _run_helper(status, timeout, cancel_event=cancel_event)
         else:

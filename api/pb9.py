@@ -5,6 +5,7 @@ import configparser
 from concurrent.futures import Future
 from dataclasses import dataclass
 import json
+import math
 import signal
 import threading
 
@@ -14,13 +15,19 @@ from fastapi.routing import APIRoute
 
 from api.auth import SessionToken, require_auth
 from logging_helpers import human_log as _log
-from pb9_config import PB9CancelSignal, PB9ConfigError, load_pb9_template
+from pb9_config import (MAX_DOCUMENT_BYTES, PB9CancelSignal, PB9ConfigError,
+                        load_pb9_template, validate_pb9_document)
 from pb9_runtime import inspect_pb9_runtime
 from pbgui_purefunc import load_ini_snapshot
 
 
 SERVICE = "PB9Config"
 MAX_ACTIVE_REQUESTS = 2
+MAX_VALIDATION_BODY_BYTES = MAX_DOCUMENT_BYTES
+MAX_JSON_DEPTH = 64
+_VALIDATION_ERRORS = frozenset({"invalid_request", "invalid_document", "invalid_config",
+                                "config_version_mismatch", "external_reference_rejected",
+                                "native_config_rejected"})
 _PATH_KEYS = ("pb9dir", "pb9venv", "pb7dir", "pb7venv", "pb8dir", "pb8venv")
 
 
@@ -66,8 +73,56 @@ def _read_paths() -> dict:
     raise PB9ConfigError("runtime_settings_unavailable") from None
 
 
-def _operation(operation: str, cancel_event: PB9CancelSignal) -> dict:
-    """Inspect or load a template using only settings selected on the server."""
+def _validation_document(payload: bytes) -> dict:
+    """Decode one explicit config envelope without coercion or duplicate members."""
+    def unique_object(pairs):
+        """Reject duplicate fields at every depth rather than choosing a value."""
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("Duplicate member")
+            result[key] = value
+        return result
+
+    def reject_constant(value):
+        """Exclude nonstandard NaN/Infinity literals."""
+        raise ValueError("Nonfinite constant")
+
+    def finite_float(value):
+        """Exponent overflow is invalid even when JSON syntax itself is valid."""
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("Nonfinite number")
+        return number
+
+    try:
+        envelope = json.loads(payload.decode("utf-8"), object_pairs_hook=unique_object,
+                              parse_constant=reject_constant, parse_float=finite_float)
+        if isinstance(envelope, dict) and set(envelope) == {"config"} and isinstance(envelope["config"], dict):
+            pending = [(envelope, 0)]
+            while pending:
+                value, depth = pending.pop()
+                if depth > MAX_JSON_DEPTH:
+                    raise ValueError("JSON nesting limit exceeded")
+                if isinstance(value, dict):
+                    pending.extend((item, depth + 1) for item in value.values())
+                elif isinstance(value, list):
+                    pending.extend((item, depth + 1) for item in value)
+            # Reject lone surrogate escapes before a successful JSONResponse
+            # would attempt strict UTF-8 encoding on the event loop.
+            json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode("utf-8")
+            return envelope["config"]
+    except (ValueError, RecursionError):
+        pass
+    # JSONDecodeError retains the submitted document: keep it out of error chains.
+    raise PB9ConfigError("invalid_document") from None
+
+
+def _operation(operation: str, cancel_event: PB9CancelSignal, payload: bytes | None = None) -> dict:
+    """Inspect, load or validate using only settings selected on the server."""
+    if cancel_event.is_set():
+        raise PB9ConfigError("helper_cancelled")
+    document = _validation_document(payload) if operation == "validate" else None
     paths = _read_paths()
     if cancel_event.is_set():
         raise PB9ConfigError("helper_cancelled")
@@ -79,6 +134,10 @@ def _operation(operation: str, cancel_event: PB9CancelSignal) -> dict:
         return result
     if operation == "template":
         return load_pb9_template(paths["pb9dir"], paths["pb9venv"], other_slots, cancel_event=cancel_event)
+    if operation == "validate":
+        result = validate_pb9_document(document, paths["pb9dir"], paths["pb9venv"], other_slots,
+                                       cancel_event=cancel_event)
+        return {"valid": True, **result}
     raise PB9ConfigError("invalid_request")
 
 
@@ -91,13 +150,15 @@ class _Job:
     thread: threading.Thread | None = None
 
 
-def _worker(operation: str, future: Future, cancel_event: PB9CancelSignal) -> None:
+def _worker(operation: str, future: Future, cancel_event: PB9CancelSignal, payload: bytes | None = None) -> None:
     """Publish completion only after synchronous/native work has cleaned up."""
     try:
-        result = _operation(operation, cancel_event)
+        result = (_operation(operation, cancel_event, payload) if payload is not None
+                  else _operation(operation, cancel_event))
     except BaseException as exc:
         code = exc.error_codes[0] if isinstance(exc, PB9ConfigError) else "api_operation_failed"
-        _log(SERVICE, "PB9 API operation failed", level="ERROR",
+        level = "WARNING" if operation == "validate" and code in _VALIDATION_ERRORS else "ERROR"
+        _log(SERVICE, "PB9 API operation failed", level=level,
              meta={"operation": operation, "error_codes": [code]})
         future.set_exception(PB9ConfigError(code))
     else:
@@ -151,7 +212,7 @@ class PB9RequestOwner:
         with self._lock:
             return len(self._jobs)
 
-    async def run(self, operation: str) -> dict:
+    async def run(self, operation: str, payload: bytes | None = None) -> dict:
         """Admit at most two operations and drain each worker before releasing ownership."""
         start_failure = None
         with self._lock:
@@ -162,7 +223,10 @@ class PB9RequestOwner:
             if len(self._jobs) >= MAX_ACTIVE_REQUESTS:
                 raise _error(503, "pb9_busy", "PB9 inspection capacity is busy", busy=True)
             job = _Job(Future(), self.cancel_signal)
-            job.thread = threading.Thread(target=_worker, args=(operation, job.future, job.cancel_event),
+            arguments = (operation, job.future, job.cancel_event)
+            if payload is not None:
+                arguments += (payload,)
+            job.thread = threading.Thread(target=_worker, args=arguments,
                                           name=f"pb9-api-{operation}")
             self._jobs[id(job)] = job
             try:
@@ -279,18 +343,24 @@ def restart_block_reason(app) -> str:
     return ""
 
 
-async def _execute(request: Request, operation: str) -> JSONResponse:
+async def _execute(request: Request, operation: str, payload: bytes | None = None) -> JSONResponse:
     """Map only sanitized operation failures while preserving expected HTTP statuses."""
     owner = getattr(request.app.state, "pb9_requests", None)
     if owner is None:
         raise _error(503, "pb9_unavailable", "PB9 inspection is not initialized")
     try:
-        result = await owner.run(operation)
+        result = await owner.run(operation, payload)
+        return JSONResponse(result)
     except HTTPException:
         raise
     except PB9ConfigError as exc:
+        if operation == "validate" and exc.error_codes[0] in _VALIDATION_ERRORS:
+            raise _error(422, exc.error_codes[0], "PB9 config was rejected") from None
         raise _error(503, exc.error_codes[0], "PB9 inspection failed") from None
-    return JSONResponse(result)
+    except Exception:
+        _log(SERVICE, "PB9 API response failed", level="ERROR",
+             meta={"operation": operation, "error_codes": ["api_response_failed"]})
+        raise _error(503, "api_response_failed", "PB9 response could not be produced") from None
 
 
 def _no_query(request: Request) -> None:
@@ -323,3 +393,15 @@ async def template(request: Request, session: SessionToken = Depends(require_aut
         if not empty:
             raise _error(422, "invalid_request", "PB9 template accepts no parameters")
     return await _execute(request, "template")
+
+
+@router.post("/validate")
+async def validate(request: Request, session: SessionToken = Depends(require_auth)):
+    """Validate an inline document without saving, migration or path overrides."""
+    _no_query(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > MAX_VALIDATION_BODY_BYTES:
+            raise _error(413, "invalid_document", "PB9 validation request is too large")
+        body.extend(chunk)
+    return await _execute(request, "validate", bytes(body))

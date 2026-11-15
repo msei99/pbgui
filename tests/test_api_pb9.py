@@ -2,6 +2,7 @@
 
 import asyncio
 import configparser
+import copy
 from contextlib import asynccontextmanager
 import signal
 import threading
@@ -47,6 +48,13 @@ def endpoint(tmp_path, monkeypatch):
         return {"config": {"config_version": "v9.0.0", "bot": {"long": {}, "short": {}}},
                 "source": {"repo_dir": source}}
 
+    def validate(document, source, python, other_slots, *, cancel_event=None):
+        """Model the authored-document boundary with a detached snapshot."""
+        record("validate", source, python, other_slots)
+        config = copy.deepcopy(document)
+        return {"config": config, "pbgui": config.pop("pbgui", None), "source": {"repo_dir": source}}
+
+    monkeypatch.setattr(pb9, "validate_pb9_document", validate)
     monkeypatch.setattr(pb9, "load_ini_snapshot", snapshot)
     monkeypatch.setattr(pb9, "inspect_pb9_runtime", inspect)
     monkeypatch.setattr(pb9, "load_pb9_template", template)
@@ -70,7 +78,7 @@ def endpoint(tmp_path, monkeypatch):
                               calls=calls, snapshots=snapshots, gate=gate)
 
 
-@pytest.mark.parametrize("method,path", [("get", "/runtime"), ("post", "/template")])
+@pytest.mark.parametrize("method,path", [("get", "/runtime"), ("post", "/template"), ("post", "/validate")])
 def test_routes_require_shared_auth_and_never_accept_query_tokens(endpoint, method, path):
     """Missing, invalid or query credentials cannot start a worker."""
     request = getattr(endpoint.client, method)
@@ -454,3 +462,113 @@ def test_signal_hooks_chain_restore_and_clean_partial_startup(monkeypatch, parti
         assert handlers == {signal.SIGTERM: prior, signal.SIGINT: prior}
 
     asyncio.run(exercise())
+
+
+def test_validate_uses_owned_worker_server_paths_and_detached_document(endpoint):
+    """Only authored input and GUI metadata are echoed; source is server-derived."""
+    document = {"config_version": "v9.0.0", "bot": {"long": {}},
+                "pbgui": {"name": "Example", "source": "authored-note"}}
+    response = endpoint.client.post("/api/pb9/validate", json={"config": document},
+                                    headers={"Authorization": "Bearer fixture-auth"})
+    assert response.status_code == 200
+    result = response.json()
+    assert result["valid"] is True
+    assert result["config"] == {key: value for key, value in document.items() if key != "pbgui"}
+    assert result["pbgui"] == document["pbgui"]
+    assert result["source"] == {"repo_dir": endpoint.values["pb9dir"]}
+    assert response.headers["cache-control"] == "no-store"
+    assert len(endpoint.snapshots) == 1
+    assert endpoint.calls == [("validate", endpoint.values["pb9dir"], endpoint.values["pb9venv"],
+                               {key: endpoint.values[key] for key in pb9._PATH_KEYS[2:]})]
+    assert endpoint.app.state.pb9_requests.active == 0
+
+
+@pytest.mark.parametrize("body", [
+    b"", b"null", b"[]", b"{}", b'{"config":null}', b'{"config":[]}',
+    b'{"config":{},"pb9dir":"/private/override"}', b'{"config":{},"config":{}}',
+    b'{"config":{"bot":{"x":1,"x":2}}}', b'{"config":{"x":NaN}}',
+    b'{"config":{"x":Infinity}}', b'{"config":{"x":1e400}}',
+    b'{"config":{"x":"\xff"}}', b'{"config":{"pbgui":{"note":"\\ud800"}}}',
+    b'{"config":{"\\udfff":0}}', b'{"config":' + b'[' * 1200 + b'0' + b']' * 1200 + b'}',
+])
+def test_validate_rejects_ambiguous_json_and_path_overrides_before_settings(endpoint, body):
+    """Strict UTF-8 JSON rejects duplicates and nonfinite values without echoing inputs."""
+    response = endpoint.client.post("/api/pb9/validate", content=body,
+                                    headers={"Authorization": "Bearer fixture-auth"})
+    assert response.status_code == 422
+    assert response.headers["x-pbgui-error-codes"] == "invalid_document"
+    assert response.headers["cache-control"] == "no-store"
+    assert "/private/override" not in response.text
+    assert not endpoint.snapshots
+    assert not endpoint.calls
+    assert endpoint.app.state.pb9_requests.active == 0
+
+
+def test_validate_bounds_streamed_body_and_rejects_query_parameters(endpoint):
+    """Streaming cannot bypass the byte budget or select another runtime."""
+    def chunks():
+        """Deliver a body without depending on Content-Length."""
+        yield b" " * pb9.MAX_VALIDATION_BODY_BYTES
+        yield b"x"
+
+    headers = {"Authorization": "Bearer fixture-auth"}
+    response = endpoint.client.post("/api/pb9/validate", content=chunks(), headers=headers)
+    assert response.status_code == 413
+    assert response.headers["cache-control"] == "no-store"
+    response = endpoint.client.post("/api/pb9/validate?pb9dir=/private/override", json={"config": {}}, headers=headers)
+    assert response.status_code == 422
+    assert not endpoint.snapshots
+    assert not endpoint.calls
+
+
+@pytest.mark.parametrize("origin", [None, "https://other.example", "http://testserver"])
+def test_validate_cookie_auth_requires_origin(endpoint, origin):
+    """Validation consumes native resources and uses the shared POST origin guard."""
+    endpoint.client.cookies.set(auth.SESSION_COOKIE_NAME, "fixture-auth")
+    response = endpoint.client.post("/api/pb9/validate", json={"config": {"config_version": "v9.0.0"}},
+                                    headers={"Origin": origin} if origin else {})
+    assert response.status_code == (200 if origin == "http://testserver" else 403)
+    assert response.headers["cache-control"] == "no-store"
+    assert len(endpoint.calls) == (1 if response.status_code == 200 else 0)
+
+
+@pytest.mark.parametrize("code,status", [("invalid_document", 422), ("invalid_config", 422),
+    ("config_version_mismatch", 422), ("external_reference_rejected", 422),
+    ("native_config_rejected", 422), ("invalid_request", 422), ("runtime_not_detected", 503),
+    ("helper_cancelled", 503), ("helper_timeout", 503), ("native_validation_failed", 503)])
+def test_validation_error_mapping_separates_input_and_runtime_failures(endpoint, monkeypatch, code, status):
+    """Known input rejections are 422, operational failures stay fixed 503 errors."""
+    def reject(*args, **kwargs):
+        """Return one sanitized native-domain result without private diagnostics."""
+        raise PB9ConfigError(code)
+
+    monkeypatch.setattr(pb9, "validate_pb9_document", reject)
+    response = endpoint.client.post("/api/pb9/validate", json={"config": {"config_version": "v9.0.0"}},
+                                    headers={"Authorization": "Bearer fixture-auth"})
+    assert response.status_code == status
+    assert response.headers["x-pbgui-error-codes"] == code
+    assert response.headers["cache-control"] == "no-store"
+    assert "config_version" not in response.text
+    assert endpoint.app.state.pb9_requests.active == 0
+
+
+def test_validate_rejects_excessive_but_parseable_nesting(endpoint):
+    """A bounded depth remains safe to re-encode on the deeper ASGI call stack."""
+    body = b'{"config":{"pbgui":{"nested":' + b'[' * 65 + b'0' + b']' * 65 + b'}}}'
+    response = endpoint.client.post("/api/pb9/validate", content=body,
+                                    headers={"Authorization": "Bearer fixture-auth"})
+    assert response.status_code == 422
+    assert response.headers["x-pbgui-error-codes"] == "invalid_document"
+    assert not endpoint.snapshots
+
+
+def test_response_render_failure_is_fixed_uncached_error(endpoint, monkeypatch):
+    """Unexpected adapter output cannot escape as an unguarded render traceback."""
+    monkeypatch.setattr(pb9, "load_pb9_template", lambda *args, **kwargs: {"private": object()})
+    response = endpoint.client.post("/api/pb9/template", json={},
+                                    headers={"Authorization": "Bearer fixture-auth"})
+    assert response.status_code == 503
+    assert response.headers["x-pbgui-error-codes"] == "api_response_failed"
+    assert response.headers["cache-control"] == "no-store"
+    assert "private" not in response.text
+    assert endpoint.app.state.pb9_requests.active == 0

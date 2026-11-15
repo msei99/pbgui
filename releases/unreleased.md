@@ -2,6 +2,15 @@
 
 ## Development
 
+- Add authenticated PB9 inline-document validation with strict, bounded JSON
+  requests, a 64-level nesting limit, server-selected runtime paths and separate
+  authored GUI metadata. Reject lone Unicode surrogates and sanitize response
+  encoding failures as well as native exceptions.
+  Reject semantic input errors with fixed 422 responses; retain operational
+  failure codes, shared origin protection and bounded worker ownership. Explicit
+  shutdown also cancels native validation groups, including their descendants.
+  This endpoint does not save files, migrate configs or start bot jobs.
+
 - Expose authenticated, read-only PB9 runtime inspection and authored-template
   retrieval through the API. Use one allowlisted settings snapshot per request,
   retain at most two explicitly owned workers, and drain them on cancellation
