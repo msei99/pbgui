@@ -371,6 +371,7 @@ def load_pb7_config(
     verbose: bool = False,
     neutralize_added: bool = False,
     pb9_context=None,
+    pb9_with_revision: bool = False,
 ) -> dict:
     """Load a config through passivbot's full pipeline.
 
@@ -384,12 +385,14 @@ def load_pb7_config(
     An explicit ``pb9_context`` selects the isolated v9 file loader. In that
     mode ``path`` is a JSON basename below its approved root, and PB7-only
     options must retain their defaults. The returned source stays sparse.
+    ``pb9_with_revision=True`` returns a v9-only ``config``/``revision`` envelope.
     """
-    if pb9_context is not None:
+    if pb9_context is not None or pb9_with_revision is not False:
         from pb9_config_storage import load_pb9_config_file
 
         return load_pb9_config_file(
             path, pb9_context, verbose=verbose, neutralize_added=neutralize_added,
+            with_revision=pb9_with_revision,
         )
     path = str(path)
 
@@ -430,7 +433,7 @@ def load_pb7_config(
     return _restore_raw_backtest_end_date(finalized, raw)
 
 
-def save_pb7_config(cfg: dict, path: str | Path, *, pb9_context=None) -> None:
+def save_pb7_config(cfg: dict, path: str | Path, *, pb9_context=None, pb9_expected_revision=None) -> None:
     """Save a config dict to disk (atomic write).
 
     Writes the full dict including ``pbgui`` section.  No ``clean_config``
@@ -441,12 +444,13 @@ def save_pb7_config(cfg: dict, path: str | Path, *, pb9_context=None) -> None:
 
     With explicit ``pb9_context``, create a validated sparse v9 source below
     its approved root. That branch rejects existing names and never applies
-    PB7 cleanup. Updating an existing v9 file needs a later revision contract.
+    PB7 cleanup. An explicit ``pb9_expected_revision`` instead selects a guarded
+    update of that exact loaded revision; it never implicitly creates a file.
     """
-    if pb9_context is not None:
+    if pb9_context is not None or pb9_expected_revision is not None:
         from pb9_config_storage import save_pb9_config_file
 
-        return save_pb9_config_file(cfg, path, pb9_context)
+        return save_pb9_config_file(cfg, path, pb9_context, expected_revision=pb9_expected_revision)
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".json.tmp")

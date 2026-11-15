@@ -702,3 +702,31 @@ def test_shared_save_rejects_internal_metadata_before_creation(validation_runtim
     assert caught.value.error_codes == ("invalid_config",)
     assert not root.exists()
     _assert_no_native_import(validation_runtime)
+
+
+def test_revision_update_roundtrip_uses_isolated_native_validation(validation_runtime, tmp_path):
+    """Read, edit and replace one native-validated source with a stale-write guard."""
+    from pb7_config import load_pb7_config, save_pb7_config
+    from pb9_config_storage import PB9FileContext
+
+    root = tmp_path / "revision-library"
+    root.mkdir(mode=0o700)
+    root.chmod(0o700)
+    context = PB9FileContext(root, validation_runtime.root, validation_runtime.python)
+    document = {"config_version": "v9.0.0", "bot": {"long": {}, "short": {}},
+                "optimize": {"bounds": {}}, "pbgui": {"name": "Original"}}
+    save_pb7_config(document, "example.json", pb9_context=context)
+    loaded = load_pb7_config("example.json", pb9_context=context, pb9_with_revision=True)
+    edited = copy.deepcopy(loaded["config"])
+    edited["pbgui"]["name"] = "Edited"
+    save_pb7_config(edited, "example.json", pb9_context=context, pb9_expected_revision=loaded["revision"])
+    assert json.loads(validation_runtime.record.read_text())["config"] == {
+        key: value for key, value in edited.items() if key != "pbgui"}
+    current = load_pb7_config("example.json", pb9_context=context, pb9_with_revision=True)
+    assert current["config"] == edited
+    assert current["config"]["bot"]["long"] == {}
+    assert current["revision"] != loaded["revision"]
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        save_pb7_config(document, "example.json", pb9_context=context, pb9_expected_revision=loaded["revision"])
+    assert caught.value.error_codes == ("config_revision_conflict",)
+    assert load_pb7_config("example.json", pb9_context=context) == edited

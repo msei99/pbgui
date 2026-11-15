@@ -1,13 +1,95 @@
 """Isolated regressions for advisory lock directory setup and ownership."""
 
 from pathlib import Path
+import multiprocessing
+import os
 import stat
 import threading
 from unittest.mock import patch
 
 import pytest
 
-from file_lock import advisory_file_lock
+from file_lock import advisory_directory_lock, advisory_file_lock
+
+
+def _directory_lock_competitor(root, sender):
+    """Signal a real cross-process attempt without accessing any runtime data."""
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        sender.send("attempted")
+        with advisory_directory_lock(descriptor):
+            sender.send("acquired")
+    finally:
+        os.close(descriptor)
+        sender.close()
+
+
+@pytest.mark.parametrize("raise_inside", [False, True])
+def test_directory_lock_serializes_shared_fd_and_nested_alias(tmp_path, raise_inside):
+    """Shared caller FDs serialize threads; nested aliases do not release the outer lock."""
+    first = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    alias = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    attempted, acquired = threading.Event(), threading.Event()
+    errors = []
+
+    def compete():
+        """Reuse the exact caller FD from another thread to exercise OFD isolation."""
+        try:
+            attempted.set()
+            with advisory_directory_lock(first):
+                acquired.set()
+        except BaseException as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=compete, daemon=True)
+    try:
+        try:
+            with advisory_directory_lock(first):
+                with advisory_directory_lock(alias):
+                    worker.start()
+                    assert attempted.wait(3)
+                    assert not acquired.wait(0.05)
+                assert not acquired.wait(0.05), "inner release unlocked the outer owner"
+                if raise_inside:
+                    raise ValueError("fixture transaction aborted")
+        except ValueError:
+            assert raise_inside
+        assert acquired.wait(3)
+    finally:
+        if worker.ident is not None:
+            worker.join(5)
+        os.close(first)
+        os.close(alias)
+    assert not worker.is_alive()
+    assert not errors
+    assert not list(tmp_path.iterdir()), "directory locks must not create lock files"
+
+
+def test_directory_lock_blocks_an_independent_process(tmp_path):
+    """The inode lock spans processes and is released with its owner transaction."""
+    descriptor = os.open(tmp_path, os.O_RDONLY | os.O_DIRECTORY)
+    context = multiprocessing.get_context("spawn")
+    receiver, sender = context.Pipe(duplex=False)
+    process = context.Process(target=_directory_lock_competitor, args=(tmp_path, sender))
+    try:
+        with advisory_directory_lock(descriptor):
+            process.start()
+            sender.close()
+            assert receiver.poll(10)
+            assert receiver.recv() == "attempted"
+            assert not receiver.poll(0.1)
+        assert receiver.poll(5)
+        assert receiver.recv() == "acquired"
+        process.join(5)
+        assert process.exitcode == 0
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(5)
+        process.close()
+        receiver.close()
+        sender.close()
+        os.close(descriptor)
 
 
 def test_existing_parent_skips_mkdir_for_repeated_and_nested_locks(tmp_path):

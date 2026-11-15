@@ -2,12 +2,20 @@
 
 ## Development
 
+- Add opt-in SHA-256 revisions to PB9 config reads and guarded updates to the
+  shared save entry point. Recheck exact source bytes under a reentrant,
+  descriptor-bound directory lock before private atomic replacement, reject
+  stale/deleted targets, and keep native validation outside the transaction.
+  Default saves remain create-only; no revision is stored in config metadata.
+  The lock coordinates PBGui writers; noncooperating same-UID file editors
+  remain outside that guarantee. UI/API binding is still pending.
+
 - Add validated, create-only PB9 config saving through the shared save entry
   point. Publish a complete private file atomically below an owned 0700 root,
   preserve authored sparse source and GUI metadata, bound formatted output,
   and reject existing names.
-  Concurrent creators cannot overwrite one another. Existing-file updates and
-  UI binding follow separately; publication acknowledgement failures have a
+  Concurrent creators cannot overwrite one another. Default saves stay
+  create-only; UI binding follows separately. Publication acknowledgement failures have a
   distinct error code so a committed file is never blindly removed or retried.
 
 - Add an explicit, read-only PB9 file context to the shared config loader.

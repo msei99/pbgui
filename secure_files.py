@@ -14,7 +14,11 @@ PRIVATE_FILE_MODE = 0o600
 
 
 class PrivateFilePublishedError(OSError):
-    """A new file was published, but cleanup/durability acknowledgement failed."""
+    """A file was published, but cleanup/durability acknowledgement failed."""
+
+
+class PrivateFileChangedError(OSError):
+    """An existing replacement target no longer has the expected inode identity."""
 
 
 def create_private_file_at(directory_fd: int, name: str, content: bytes) -> None:
@@ -27,18 +31,49 @@ def create_private_file_at(directory_fd: int, name: str, content: bytes) -> None
     ``PrivateFilePublishedError`` means the target exists: do not roll it back
     or blindly retry after an acknowledgement error.
     """
+    return _publish_private_file_at(directory_fd, name, content)
+
+
+def replace_private_file_at(directory_fd: int, name: str, content: bytes, *,
+                             expected_identity: tuple[int, int]) -> None:
+    """Replace a regular inode atomically, inside the caller's locked transaction.
+
+    The caller must keep the compared file descriptor open and hold the root
+    directory lock. Identity checks narrow, but cannot eliminate, races against
+    noncooperating same-UID writers. This never follows a destination symlink.
+    """
+    if (not isinstance(expected_identity, tuple) or len(expected_identity) != 2
+            or any(type(value) is not int or value < 0 for value in expected_identity)):
+        raise ValueError("Replacement requires an explicit inode identity")
+    return _publish_private_file_at(directory_fd, name, content, expected_identity=expected_identity)
+
+
+def _publish_private_file_at(directory_fd: int, name: str, content: bytes, *,
+                              expected_identity: tuple[int, int] | None = None) -> None:
+    """Own temporary bytes and their create-or-replace publication commit point."""
     if (os.name != "posix" or not hasattr(os, "O_NOFOLLOW")
             or type(directory_fd) is not int or directory_fd < 0):
-        raise ValueError("Private creation requires a POSIX directory descriptor")
+        raise ValueError("Private publication requires a POSIX directory descriptor")
     if (not isinstance(name, str) or not name or name in {".", ".."}
             or "/" in name or "\\" in name
             or any(ord(char) < 32 or ord(char) == 127 for char in name)
             or not isinstance(content, bytes)):
-        raise ValueError("Private creation requires a basename and bytes")
+        raise ValueError("Private publication requires a basename and bytes")
     info = os.fstat(directory_fd)
     if (not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
             or stat.S_IMODE(info.st_mode) != PRIVATE_DIR_MODE):
-        raise ValueError("Private creation requires an owned 0700 directory")
+        raise ValueError("Private publication requires an owned 0700 directory")
+
+    def verify_target():
+        """Reject changed/nonregular destinations before preparation and commit."""
+        current = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        if not stat.S_ISREG(current.st_mode):
+            raise ValueError("Private replacement requires a regular target")
+        if (current.st_dev, current.st_ino) != expected_identity:
+            raise PrivateFileChangedError("Private replacement target changed")
+
+    if expected_identity is not None:
+        verify_target()
     temporary = f".pbgui-create-{os.getpid()}-{uuid.uuid4().hex}.tmp"
     created, published, error = False, False, None
     try:
@@ -60,8 +95,13 @@ def create_private_file_at(directory_fd: int, name: str, content: bytes) -> None
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
-        os.link(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd,
-                follow_symlinks=False)
+        if expected_identity is None:
+            os.link(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd,
+                    follow_symlinks=False)
+        else:
+            verify_target()
+            os.replace(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
+            created = False  # The rename consumed the temporary directory entry.
         published = True
     except OSError as exc:
         error = exc
@@ -81,7 +121,7 @@ def create_private_file_at(directory_fd: int, name: str, content: bytes) -> None
             error = exc
     if error is not None:
         if published:
-            raise PrivateFilePublishedError("Private file created with an I/O acknowledgement failure") from None
+            raise PrivateFilePublishedError("Private file published with an I/O acknowledgement failure") from None
         raise error
 
 

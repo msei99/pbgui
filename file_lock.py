@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import os
+import stat
 import threading
 from typing import Iterator
 
@@ -17,6 +18,44 @@ except ImportError:  # pragma: no cover - PBGui production targets Linux
 _LOCKS_GUARD = threading.Lock()
 _THREAD_LOCKS: dict[str, threading.RLock] = {}
 _HELD_LOCKS = threading.local()
+_HELD_DIRECTORY_LOCKS = threading.local()
+
+
+@contextmanager
+def advisory_directory_lock(directory_fd: int) -> Iterator[None]:
+    """Lock a directory inode without a pathname, reentrantly within one thread.
+
+    Open a separate file description even when threads share the input FD, so
+    flock serializes them too. Only active ownership is retained; forked children
+    cannot inherit the parent's reentrancy marker. The caller keeps its own FD.
+    All cooperating writers must use this lock; same-UID external editors need
+    not honor it and are outside that guarantee.
+    """
+    if fcntl is None or type(directory_fd) is not int or directory_fd < 0:
+        raise RuntimeError("Directory locking requires a POSIX directory descriptor")
+    owned_fd = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+    try:
+        info = os.fstat(owned_fd)
+        if not stat.S_ISDIR(info.st_mode):
+            raise ValueError("Directory locking requires a directory")
+        pid = os.getpid()
+        if getattr(_HELD_DIRECTORY_LOCKS, "pid", None) != pid:
+            _HELD_DIRECTORY_LOCKS.pid = pid
+            _HELD_DIRECTORY_LOCKS.entries = set()
+        held = _HELD_DIRECTORY_LOCKS.entries
+        key = (info.st_dev, info.st_ino)
+        if key in held:
+            yield
+            return
+        fcntl.flock(owned_fd, fcntl.LOCK_EX)
+        try:
+            held.add(key)
+            yield
+        finally:
+            held.discard(key)
+            fcntl.flock(owned_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(owned_fd)
 
 
 def _thread_lock(key: str) -> threading.RLock:

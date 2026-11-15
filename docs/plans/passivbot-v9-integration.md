@@ -2,8 +2,8 @@
 
 Stand: 15. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung,
 Vorlagenadapter, Inline-Validierung und Dokumentgrenze committed; der explizite
-v9-Dateiladepfad ist committed; die sichere Neuerstellung von v9-Dateien ist
-fokussiert getestet und unabhängig geprüft. Commit ist freigegeben.
+v9-Dateiladepfad und sichere Neuerstellung sind committed; der Revisionsschutz
+für Updates ist fokussiert getestet und unabhängig geprüft. Commit ist freigegeben.
 
 ## Vorgehen
 
@@ -347,7 +347,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
    die nicht separat geprüfte `__cause__` dieses Fehlerzweigs; öffentliche
    Datei-/Parserfehler enthalten keine rohe Ursachenkette.
 
-10. **Neue Dateien sicher speichern, zum Commit freigegeben.**
+10. **Neue Dateien sicher speichern, Commit `663a3ed1`.**
     `save_pb7_config(..., pb9_context=...)` verzweigt vor jedem Legacy-Schritt
     zum v9-Adapter und behält den Rückgabewert `None`. Ohne Kontext bleibt der
     bisherige Body unverändert. Native Validierung und ein unabhängiger Snapshot
@@ -371,9 +371,9 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
     Vorhandene Dateien, Symlinks, FIFOs und Verzeichnisse ergeben
     `config_file_exists`; konkurrierende Ersteller haben genau einen Gewinner.
     Es gibt keine Read/Modify/Write-Transaktion und keinen neuen Lockcache:
-    die atomare No-Replace-Operation selbst entscheidet den Konflikt. Updates
-    bestehender Dateien benötigen vor der UI-Anbindung eine eigene Revision/CAS-
-    Schnittstelle. `config_file_created_io_failed` bedeutet, dass bereits
+    die atomare No-Replace-Operation selbst entscheidet den Konflikt. Die Update-
+    Schnittstelle mit Revision wird in Schritt 11 ergänzt.
+    `config_file_created_io_failed` bedeutet, dass bereits
     veröffentlicht wurde, aber Bereinigung/Synchronisationsbestätigung scheiterte;
     dann weder blind erneut schreiben noch die veröffentlichte Datei entfernen.
     Kein Installer, keine Migration, keine UI-/API-Anbindung oder Remote-Aktion.
@@ -398,6 +398,55 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
     Claude Fable 5.2 / medium bestätigte im abschließenden Quellabgleich:
     keine verbleibenden Befunde; Commit nach dem inzwischen erfolgten Serial-
     Bump empfohlen. Kein eigener Testlauf durch Claude.
+
+11. **Revisionsgeschützte Updates, zum Commit freigegeben.**
+    `load_pb7_config(..., pb9_with_revision=True, pb9_context=...)` liefert
+    `{config, revision}`; die SHA-256-Revision gehört exakt zu den einmal für
+    die Validierung gelesenen Dateibytes, nicht zur reserialisierten Rückgabe.
+    Der Default bleibt ein Config-Dict. Mit `pb9_expected_revision=<64 lowerhex>`
+    kann `save_pb7_config()` diesen Stand aktualisieren. Ohne Revision bleibt
+    das bisherige Create-only-Verhalten erhalten. Revisionsflags ohne expliziten
+    Kontext fallen nie in PB7 zurück. Revisionen/Provenienz werden nicht in
+    native Konfigurationen oder GUI-Metadaten eingemischt.
+
+    Updates prüfen die Revision vor nativer Arbeit und erneut unter einer
+    Verzeichnis-Inode-Sperre. Native Validierung und Formatierung liegen außerhalb
+    der Transaktion. Ein Source-FD bleibt beim geschützten Lesen/Ersetzen offen,
+    und die finale Datei-Inode wird vor und nach Temp-Vorbereitung abgeglichen.
+    Fehlende/veraltete Ziele ergeben `config_revision_conflict`, nie implizite
+    Neuerstellung. `config_file_updated_io_failed` unterscheidet Fehler nach
+    bereits erfolgtem Replace; das Log benennt den aktualisierten Zustand.
+
+    Der additive `advisory_directory_lock()` öffnet eine eigene Dateibeschreibung
+    relativ zum Root-FD. Dadurch blockieren sich auch Threads mit demselben
+    Eingabe-FD. Nur aktive Inode-Besitzer bleiben threadlokal für Reentranz/PID-
+    Trennung erhalten; kein Lockfile und kein persistenter Lockcache. Existierende
+    pfadbasierte Locks bleiben unverändert. Ein gemeinsamer privater Publikations-
+    Helfer trägt Create und Replace; die vorhandene No-Replace-Semantik bleibt.
+    Die Sperre schützt kooperierende PBGui-Updates. Nichtkooperierende same-UID-
+    Editoren können zwischen Prüfen und Replace weiterhin schreiben; Inode-
+    Checks verengen das Fenster, bieten aber kein Betriebssystem-Byte-CAS.
+
+    Fokussiert geprüft: Revisionen/private Dateihelfer/v9-Storage/Config/Runtime/
+    Quellklassifikation und Locks **373 passed in 15.95s**; PB7-Bridge/PB8-Config/
+    PB7-Pin **233 passed, 2 skipped in 5.28s**. Alle Daten liegen in temporären
+    Testbäumen; nativer Roundtrip verwendet den isolierten Fake-Helper. Echte
+    v9-/Rust-Integration und UI-/API-Anbindung bleiben offen. Der Serial-Bump
+    nach Abschluss der API-Startcode-Änderungen ist erfolgt: **3704**.
+    Nach dem ersten Claude-Review werden nur fehlende Zieldateien als
+    Revisionskonflikt behandelt; fehlende Root-/Ancestor-Verzeichnisse ergeben
+    `config_file_unavailable`. Storage-Tests decken Symlink/FIFO-Ziele, nichtprivate
+    Roots und fehlende Bibliotheken ab. Der Save-Vertrag weist ausdrücklich auf
+    potenziell blockierendes flock/fsync und künftiges API-Offloading mit klarer
+    Inflight-/Shutdown-Ownership hin. Allgemeine Publikationsfehlertexte gelten
+    gleichermaßen für Create und Replace.
+    Claude Fable 5.2 / medium bestätigte beim abschließenden Quellabgleich:
+    keine P1/P2-Restfehler, Commit nach dem inzwischen erfolgten Serial-Bump
+    empfohlen. Optional bleibt die Fehlerklassifikation bei einer extern
+    entfernten Tempdatei (`ENOENT` des Replace kann als Revisionskonflikt
+    erscheinen); dies verändert oder überschreibt keine Nutzerdaten.
+    Das gemeinsame Temp-Präfix heißt auch im Replace-Pfad `.pbgui-create-`.
+    Der Review war rein lesend ohne eigenen Testlauf.
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
@@ -457,6 +506,12 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
   in getrennten Änderungen. Keine bestehende PB8-Installation wurde umgestellt.
 
 ## Abgeschlossener Claude-Review
+
+Aktueller Review des Revisionsschutzes mit `claude-fable-5-2`, Effort `medium`:
+keine P1/P2-Restfehler; Commit empfohlen nach Serial-Bump auf 3704, der erfolgt
+ist. Root-/Zieldatei-Fehler sind differenziert, Locked-Compare/Replace und
+Legacy-Dispatch bestätigt. Die verbleibenden optionalen Hinweise stehen bei
+Schritt 11. Kein eigener Testlauf durch Claude; echte v9-/Rust-Integration offen.
 
 Aktueller Review der sicheren Neuerstellung mit `claude-fable-5-2`, Effort
 `medium`: keine verbleibenden Befunde nach den Korrekturen. FD-Schließung,
