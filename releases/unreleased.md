@@ -2,6 +2,14 @@
 
 ## Development
 
+- Bring PB9 Add/Edit closer to the shared PB8 form: keep native basic live
+  fields visible, group remaining settings under Advanced Settings, remove
+  redundant side-activation checkboxes, and restore shared long/short JSON
+  editors with inherited and sparse-override views. Only edited inherited
+  values become overrides; invalid side JSON stays visible and blocks Save.
+  Preserve the JSON view on reload and cover the native field mappings and
+  inheritance round trips with isolated browser tests.
+
 - Complete PB9 Run browser workflows against real native validation: retain the
   saved instance URL after applying a backup, count TWE only for explicitly
   enabled sides, and allow bounded parallel selector/status reads while keeping

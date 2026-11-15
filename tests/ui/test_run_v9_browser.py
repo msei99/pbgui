@@ -51,6 +51,12 @@ def editor():
                 asset = ROOT / 'frontend' / path.removeprefix('/app/')
                 route.fulfill(body=asset.read_bytes() if asset.is_file() else b'',
                               content_type=mimetypes.guess_type(asset)[0] or 'text/plain')
+            elif path == '/api/help/index':
+                route.fulfill(json=[{'file': '53_pbv9_run', 'title': 'PBv9 Run'}])
+            elif path == '/api/help/content':
+                language = parse_qs(url.query).get('lang', ['en'])[0].lower()
+                directory = 'help_de' if language == 'de' else 'help'
+                route.fulfill(json={'content': (ROOT / 'docs' / directory / '53_pbv9_run.md').read_text()})
             elif path == '/api/v9/editor/metadata':
                 route.fulfill(json={**metadata, 'runtime': {'detected': True}})
             elif path == '/api/v9/instances/new-config':
@@ -196,4 +202,165 @@ def test_backup_draft_save_clears_draft_navigation_before_reload(editor):
     page.reload()
     expect(page.locator('#f-version')).to_have_value('2')
     expect(page.locator('#f-note')).to_have_value('backup draft')
+    assert editor.errors == []
+
+
+def test_primary_fields_and_side_json_are_visible_without_expanding(editor):
+    """Add PB9 exposes familiar basics while advanced fields remain grouped."""
+    page = editor.page
+    expect(page.locator('#f-leverage')).to_have_value('10')
+    for field in ('f-leverage', 'f-margin-mode', 'f-logging-level', 'f-min-coin-age',
+                  'f-v9-risk-lookback', 'f-warmup-ratio', 'f-max-loss-pct',
+                  'f-price-dist', 'f-exec-delay', 'f-market-order-threshold',
+                  'f-filter-min-cost', 'f-market-orders', 'f-hedge-mode', 'f-auto-gs',
+                  'f-long-json', 'f-short-json'):
+        assert page.locator('#' + field).is_visible(), field
+    assert not page.locator('#f-pnls-lookback').is_visible()
+    assert page.locator('#exp-v9-advanced').get_attribute('class') == 'expander'
+    for side in ('long', 'short'):
+        control = page.locator('[data-config-path="bot.' + side + '.enabled"]')
+        assert control.is_visible()
+        assert control.evaluate('(el) => el.closest(".form-group").querySelectorAll("input[type=checkbox]").length') == 1
+    page.locator('#f-leverage').fill('7')
+    page.locator('#f-auto-gs').uncheck()
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('1')
+    config = editor.saved[-1]['config']
+    assert config['live']['account']['leverage'] == 7
+    assert config['live']['modes']['disapproved_position'] == 'manual'
+    assert 'leverage' not in config['live']
+    assert config['bot']['long'] == editor.metadata['template']['bot']['long']
+    assert editor.errors == []
+
+
+def test_inherited_side_json_authors_only_changed_values(editor):
+    """Editing one resolved leaf keeps other defaults sparse and existing pins intact."""
+    page = editor.page
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    projection = json.loads(page.locator('#f-long-json').input_value())
+    assert len(projection) > 2
+    projection['risk']['max_positions'] = 4
+    page.locator('#f-long-json').fill(json.dumps(projection))
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('1')
+    assert editor.saved[-1]['config']['bot']['long'] == {**editor.metadata['template']['bot']['long'], 'risk': {'max_positions': 4}}
+    expect(page.locator('#f-long-npos')).to_have_value('4')
+    projection = json.loads(page.locator('#f-long-json').input_value())
+    projection['enabled'] = False
+    page.locator('#f-long-json').fill(json.dumps(projection))
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('2')
+    assert editor.saved[-1]['config']['bot']['long'] == {'risk': {'max_positions': 4}, 'enabled': False}
+    assert editor.errors == []
+
+
+def test_overrides_json_can_remove_a_pin_and_restore_inheritance(editor):
+    """The sparse JSON view provides the same override-removal semantics as fields."""
+    page = editor.page
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    page.locator('#f-long-json-view').select_option('overrides')
+    assert json.loads(page.locator('#f-long-json').input_value()) == editor.metadata['template']['bot']['long']
+    page.locator('#f-long-json').fill('{"risk":{"max_positions":3}}')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('1')
+    assert editor.saved[-1]['config']['bot']['long'] == {'risk': {'max_positions': 3}}
+    page.locator('#f-long-json').fill('{}')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('2')
+    assert editor.saved[-1]['config']['bot']['long'] == {}
+    page.reload()
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    expect(page.locator('#f-long-json-view')).to_have_value('overrides')
+    expect(page.locator('#f-long-json')).to_have_value('{}')
+    assert editor.errors == []
+
+
+@pytest.mark.parametrize('raw', ['{', '{"constructor":{"polluted":true}}'])
+def test_invalid_side_json_survives_blur_and_blocks_save(editor, raw):
+    """Incomplete or unsafe JSON is never overwritten by automatic synchronization."""
+    page = editor.page
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    page.locator('#f-long-json').fill(raw)
+    page.locator('#f-note').fill('preserve invalid JSON')
+    page.wait_for_timeout(250)
+    expect(page.locator('#f-long-json')).to_have_value(raw)
+    page.locator('#btn-save').click()
+    page.wait_for_timeout(250)
+    assert editor.saved == []
+    expect(page.locator('#f-long-json')).to_have_value(raw)
+    assert editor.errors == []
+
+
+def test_global_edit_updates_side_projection_without_authored_overrides(editor):
+    """Structured global changes update both JSON projections and keep sides sparse."""
+    page = editor.page
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    field = page.locator('[data-config-path="bot.global.risk.max_positions"]')
+    field.evaluate('(el) => el.closest(".expander").classList.add("open")')
+    field.fill('6')
+    page.locator('#f-note').fill('inherit six')
+    page.wait_for_function('JSON.parse(document.getElementById("f-long-json").value).risk.max_positions === 6')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('1')
+    config = editor.saved[-1]['config']
+    assert config['bot']['global']['risk']['max_positions'] == 6
+    assert config['bot']['long'] == editor.metadata['template']['bot']['long']
+    assert config['bot']['short'] == editor.metadata['template']['bot']['short']
+    assert editor.errors == []
+
+
+def test_side_json_view_is_navigation_and_invalid_view_change_is_rejected(editor):
+    """Changing views keeps a clean document clean and cannot hide invalid edits."""
+    page = editor.page
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    assert page.evaluate('dirty') is False
+    page.locator('#f-long-json-view').select_option('overrides')
+    assert page.evaluate('dirty') is False
+    page.locator('#f-long-json').fill('{')
+    page.locator('#f-long-json-view').select_option('inherited')
+    expect(page.locator('#f-long-json-view')).to_have_value('overrides')
+    expect(page.locator('#f-long-json')).to_have_value('{')
+    assert editor.errors == []
+
+
+def test_side_json_and_fixed_controls_remain_consistent_across_strategy_change(editor):
+    """The shared strategy selector updates both JSON views without stale side writes."""
+    page = editor.page
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    page.locator('#f-strategy-kind').select_option('ema_anchor')
+    page.wait_for_function('!!JSON.parse(document.getElementById("f-long-json").value).strategy.ema_anchor')
+    projection = json.loads(page.locator('#f-long-json').input_value())
+    assert 'trailing_martingale' not in projection['strategy']
+    page.locator('#f-long-npos').fill('2')
+    page.locator('#f-note').fill('two positions')
+    page.wait_for_function('JSON.parse(document.getElementById("f-long-json").value).risk.max_positions === 2')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('1')
+    assert editor.saved[-1]['config']['bot']['long']['risk']['max_positions'] == 2
+    assert editor.saved[-1]['config']['bot']['portfolio']['strategy_kind'] == 'ema_anchor'
+    assert editor.errors == []
+
+
+def test_pb9_editor_guide_sidebar_and_responsive_layout(editor):
+    """Real navigation, Guide and shared sidebar work with the expanded native form."""
+    page = editor.page
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    destination = page.url
+    page.locator('#pbgui-guide-btn').click()
+    expect(page.locator('#pbgui-shared-help-box')).to_be_visible()
+    expect(page.locator('#pbgui-shared-help-box')).to_contain_text('PB9 Run')
+    assert page.url == destination
+    page.locator('#pbgui-shared-help-close').click()
+    for key, width in [('Home', 160), ('End', 420)]:
+        page.locator('#sidebar-resize').focus()
+        page.keyboard.press(key)
+        assert round(page.locator('#sidebar').bounding_box()['width']) == width
+        page.reload()
+        expect(page.locator('#f-user')).to_have_value('fixture')
+        assert round(page.locator('#sidebar').bounding_box()['width']) == width
+    for viewport in [700, 800, 1440]:
+        page.set_viewport_size({'width': viewport, 'height': 1000})
+        assert page.locator('#sidebar-toolbar').evaluate('(el) => el.scrollWidth <= el.clientWidth')
+        assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+        assert page.locator('#main-content').evaluate('(el) => el.scrollWidth <= el.clientWidth')
     assert editor.errors == []

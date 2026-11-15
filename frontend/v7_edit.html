@@ -620,11 +620,11 @@ textarea.json-invalid:focus {
     <label><span data-tip="The Version number of the configuration. Required for synchronisation to VPS.">Config version</span></label>
     <input type="number" id="f-version" min="0" step="1">
   </div>
-  <div class="form-group" data-v7-only>
+  <div class="form-group" data-v7-only data-v9-also>
     <label><span data-tip="Leverage set on exchange">Leverage</span></label>
     <input type="number" id="f-leverage" min="0" max="100" step="1" value="10">
   </div>
-  <div class="form-group" data-v7-only>
+  <div class="form-group" data-v7-only data-v9-also>
     <label><span data-tip="Preferred margin mode when symbol supports both cross and isolated.
 auto/auto_cross: prefer cross
 auto_isolated: prefer isolated
@@ -638,7 +638,7 @@ isolated: require isolated (cross-only skipped)">margin_mode_preference</span></
       <option value="auto_isolated">auto_isolated</option>
     </select>
   </div>
-  <div class="form-group" data-v7-only>
+  <div class="form-group" data-v7-only data-v9-also>
     <label><span data-tip="0=warning, 1=info, 2=debug, 3=trace">Logging level</span></label>
     <select id="f-logging-level">
       <option value="0">warning</option>
@@ -648,7 +648,7 @@ isolated: require isolated (cross-only skipped)">margin_mode_preference</span></
     </select>
   </div>
   <!-- Row 2: Timing & Risk  1+1+1+1+4 = 8 -->
-  <div class="form-group" data-v7-only>
+  <div class="form-group" data-v7-only data-v9-also>
     <label><span data-tip="Disallows coins younger than given days">minimum_coin_age_days</span></label>
     <input type="number" id="f-min-coin-age" min="0" step="1" value="0">
   </div>
@@ -656,11 +656,15 @@ isolated: require isolated (cross-only skipped)">margin_mode_preference</span></
     <label><span data-tip="How far into the past to fetch PnL history">pnls_max_lookback_days</span></label>
     <input type="number" id="f-pnls-lookback" min="0" max="365" step="1" value="30">
   </div>
-  <div class="form-group" data-v7-only>
+  <div class="form-group run-version-hidden" data-v9-only>
+    <label><span data-tip="Maximum historical lookback for the v9 risk bootstrap, in minutes.">risk_bootstrap_max_lookback_minutes</span></label>
+    <input type="number" id="f-v9-risk-lookback" step="any">
+  </div>
+  <div class="form-group" data-v7-only data-v9-also>
     <label><span data-tip="Multiplier for EMA span warmup window. 0.0–1.0">warmup_ratio</span></label>
     <input type="number" id="f-warmup-ratio" min="0" max="1" step="0.1" value="0">
   </div>
-  <div class="form-group" data-v7-only>
+  <div class="form-group" data-v7-only data-v9-also>
     <label><span data-tip="Global realized-loss gate for close orders anchored to peak realized balance.
 1.0 = disabled (default). &lt;=0.0 = block all lossy closes.
 Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_realized_loss_pct</span></label>
@@ -671,20 +675,20 @@ Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_real
     <input type="text" id="f-note" placeholder="">
   </div>
   <!-- Row 3: Execution & Flags  1+1+1+1+2+2 = 8 -->
-  <div class="form-group" data-v7-only>
+  <div class="form-group" data-v7-only data-v9-also>
     <label><span data-tip="Executor-side market-distance gate for initial entry posting. Initial entry limit orders are only posted when they are close enough to market. Default 0.005 (0.5%).">initial_entry_exec_max_market_dist_pct</span></label>
     <input type="number" id="f-price-dist" min="0" max="1" step="0.001" value="0.005">
   </div>
-  <div class="form-group" data-v7-only>
+  <div class="form-group" data-v7-only data-v9-also>
     <label><span data-tip="Wait x seconds after executing to exchange">execution_delay_seconds</span></label>
     <input type="number" id="f-exec-delay" min="1" max="60" step="1" value="2">
   </div>
-  <div class="form-group" data-v7-only>
+  <div class="form-group" data-v7-only data-v9-also>
     <label><span data-tip="Fractional distance from market price at which a limit order is promoted to market order (requires market_orders_allowed). Default 0.001.">market_order_near_touch_threshold</span></label>
     <input type="number" id="f-market-order-threshold" min="0" max="0.1" step="0.0001" value="0.001">
   </div>
   <div class="form-group"></div>
-  <div class="form-group" data-v7-only style="grid-column:span 2; justify-content:flex-end">
+  <div class="form-group" data-v7-only data-v9-also style="grid-column:span 2; justify-content:flex-end">
     <div class="chk-row">
       <input type="checkbox" id="f-filter-min-cost">
       <label for="f-filter-min-cost"><span data-tip="Skip coins where balance × WE_limit × entry_initial_qty_pct is below the exchange minimum effective cost.">filter_by_min_effective_cost</span></label>
@@ -694,7 +698,7 @@ Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_real
       <label for="f-market-orders"><span data-tip="Allow market orders when price is very close to market price. If false, only limit orders are placed.">market_orders_allowed</span></label>
     </div>
   </div>
-  <div class="form-group" data-v7-only style="grid-column:span 2; justify-content:flex-end">
+  <div class="form-group" data-v7-only data-v9-also style="grid-column:span 2; justify-content:flex-end">
     <div class="chk-row">
       <input type="checkbox" id="f-hedge-mode">
       <label for="f-hedge-mode"><span data-tip="Requests simultaneous long and short positions on the same coin when the exchange supports it.">hedge_mode</span></label>
@@ -707,7 +711,10 @@ Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_real
 </div>
 
 <!-- Metadata-driven live/logging/monitor sections (rendered by the run editor adapter) -->
-<div id="run-meta-settings" class="run-version-hidden" data-v9-only></div>
+<div class="expander run-version-hidden" id="exp-v9-advanced" data-v9-only>
+  <div class="expander-header" onclick="toggleExpander('exp-v9-advanced')"><span class="arrow">▶</span> Advanced Settings</div>
+  <div class="expander-body" id="run-meta-settings"></div>
+</div>
 
 <!-- Advanced Settings -->
 <div class="expander" id="exp-advanced" data-v7-only>
@@ -1153,14 +1160,20 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 </div>
 <!-- Metadata-driven side activation, portfolio, global and side sections -->
 <div id="run-meta-bot" class="run-version-hidden" data-v9-only></div>
-<div class="form-row cols-2" data-not-v9>
+<div class="form-row cols-2">
   <div class="form-group">
     <label id="lbl-long-json">Long config (JSON)</label>
+    <select id="f-long-json-view" class="run-version-hidden" data-v9-only data-json-navigation="1" aria-label="Long JSON view">
+      <option value="inherited">With global defaults</option><option value="overrides">Overrides only</option>
+    </select>
     <textarea class="json-editor" id="f-long-json" rows="24"></textarea>
     <div id="f-long-json-status" class="field-status field-status-inline" aria-live="polite"></div>
   </div>
   <div class="form-group">
     <label id="lbl-short-json">Short config (JSON)</label>
+    <select id="f-short-json-view" class="run-version-hidden" data-v9-only data-json-navigation="1" aria-label="Short JSON view">
+      <option value="inherited">With global defaults</option><option value="overrides">Overrides only</option>
+    </select>
     <textarea class="json-editor" id="f-short-json" rows="24"></textarea>
     <div id="f-short-json-status" class="field-status field-status-inline" aria-live="polite"></div>
   </div>
@@ -1259,9 +1272,9 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=18"></script>
+<script src="/app/js/editor_shared.js?v=19"></script>
 <script src="/app/js/pbgui_dialogs.js?v=12"></script>
-<script src="/app/js/run_editor_adapter.js?v=12"></script>
+<script src="/app/js/run_editor_adapter.js?v=13"></script>
 <script src="/app/js/log_viewer_panel.js?v=50"></script>
 <script src="/app/js/coin_overrides_editor.js?v=28"></script>
 <script>
@@ -2572,6 +2585,7 @@ function nativeRunEditorPage() {
     },
     hasMultiselect: function(wrapId) { return !!msState[wrapId]; },
     getMultiselectValues: getMultiselectValues,
+    setMultiselectValues: setMultiselectValues,
     coinOvLoad: coinOvLoad,
     coinOvCollect: coinOvCollect
   };
@@ -2613,6 +2627,7 @@ function ensureNativeRunFieldsValidForSave() {
 }
 
 function changeNativeRunStrategyKind() {
+  if (!ensureNativeRunFieldsValidForSave()) return;
   // Collect first so edits to the previous strategy are kept before its fields are replaced.
   cfg = collectConfig();
   populateForm();
@@ -2993,10 +3008,10 @@ async function applyRawJsonEditorSync() {
 
 function shouldIgnoreStructuredSyncTarget(target, phase) {
   if (!target) return true;
-  if (target.id === 'cfg-raw-json') return true;
+  if (target.id === 'cfg-raw-json' || target.dataset.jsonNavigation) return true;
   if (target.classList && target.classList.contains('ms-input')) return true;
   if (phase === 'input' && target.tagName === 'TEXTAREA') {
-    if (target.id === 'f-long-json' || target.id === 'f-short-json') return true;
+    if (target.id === 'f-long-json' || target.id === 'f-short-json') return !runEditorAdapter.metadataDriven;
     if (target.id === 'cov-cfg-long' || target.id === 'cov-cfg-short') return true;
     if (target.dataset && target.dataset.extraLiveType === 'json') return true;
     if (target.dataset && target.dataset.metaControl === 'json') return true;
@@ -3357,8 +3372,8 @@ async function saveConfig() {
     var syncFail = (data.sync && data.sync.failed) || 0;
     var syncMsg = '';
     if (data.sync && data.sync.pending) syncMsg = ' | Activation pending';
-    else if (syncOk > 0) syncMsg = ' | SSH sync: ' + syncOk + ' host(s) OK';
-    else if (syncFail > 0) syncMsg = ' | SSH sync: ' + syncFail + ' failed';
+    else if (!runEditorAdapter.metadataDriven && syncOk > 0) syncMsg = ' | SSH sync: ' + syncOk + ' host(s) OK';
+    else if (!runEditorAdapter.metadataDriven && syncFail > 0) syncMsg = ' | SSH sync: ' + syncFail + ' failed';
 
     toast('Saved ' + runEditorAdapter.label + ' v' + data.version + syncMsg, 'ok');
     dirty = false;
@@ -3482,8 +3497,8 @@ async function doCopyToUser() {
     var syncOk = (data.sync && data.sync.ok) || 0;
     var syncFail = (data.sync && data.sync.failed) || 0;
     var suffix = '';
-    if (syncOk > 0) suffix = ' | SSH sync: ' + syncOk + ' host(s) OK';
-    else if (syncFail > 0) suffix = ' | SSH sync: ' + syncFail + ' failed';
+    if (!runEditorAdapter.metadataDriven && syncOk > 0) suffix = ' | SSH sync: ' + syncOk + ' host(s) OK';
+    else if (!runEditorAdapter.metadataDriven && syncFail > 0) suffix = ' | SSH sync: ' + syncFail + ' failed';
     var copiedOverrides = (data.override_copy && data.override_copy.copied || []).length;
     var missingOverrides = (data.override_copy && data.override_copy.missing || []).length;
     if (copiedOverrides > 0) suffix += ' | overrides: ' + copiedOverrides;
@@ -3976,6 +3991,7 @@ function syncBotInputToJson(side) {
     } catch (error) { /* validation displays incomplete JSON while typing */ }
   });
   document.getElementById(id).addEventListener('blur', function() {
+    if (runEditorAdapter.metadataDriven) { scheduleStructuredEditorSync(); return; }
     var side = id.indexOf('long') >= 0 ? 'long' : 'short';
     try {
       var obj = JSON.parse(this.value);
@@ -4392,7 +4408,10 @@ _editorInitPromise = init();
 (function () {
   if (!runEditorAdapter.metadataDriven) return;
   var alive = true, timer = null, controller = null, viewTimer = null;
-  function edited() { dirty = true; _runEditGeneration += 1; }
+  function edited(event) {
+    if (event && event.target.dataset.jsonNavigation) return;
+    dirty = true; _runEditGeneration += 1;
+  }
   var content = document.getElementById('main-content');
   content.addEventListener('input', edited, true);
   content.addEventListener('change', edited, true);
@@ -4407,6 +4426,7 @@ _editorInitPromise = init();
     var main = document.getElementById('main-content');
     try {
       sessionStorage.setItem(key(), JSON.stringify({
+        jsonViews: ['long', 'short'].map(function(side) { return document.getElementById('f-' + side + '-json-view').value; }),
         scroll: main ? main.scrollTop : 0,
         open: Array.from(document.querySelectorAll('.expander.open[id]')).map(function (el) { return el.id; })
       }));
@@ -4419,6 +4439,12 @@ _editorInitPromise = init();
     document.querySelectorAll('.expander[id]').forEach(function (el) {
       el.classList.toggle('open', state.open.indexOf(el.id) >= 0);
     });
+    if (Array.isArray(state.jsonViews)) {
+      ['long', 'short'].forEach(function(side, index) {
+        document.getElementById('f-' + side + '-json-view').value = state.jsonViews[index] === 'overrides' ? 'overrides' : 'inherited';
+      });
+      runEditorAdapter.changeJsonView(cfg);
+    }
     var main = document.getElementById('main-content');
     if (main && Number.isFinite(state.scroll)) main.scrollTop = state.scroll;
   }
@@ -4448,6 +4474,14 @@ _editorInitPromise = init();
     } catch (error) { /* Transient failures retry on the next automatic update. */ }
     finally { if (controller === mine) controller = null; }
   }
+  ['long', 'short'].forEach(function(side) {
+    document.getElementById('f-' + side + '-json-view').addEventListener('change', function() {
+      if (!ensureNativeRunFieldsValidForSave()) { this.value = this.dataset.appliedView || 'inherited'; return; }
+      cfg = collectConfig();
+      runEditorAdapter.changeJsonView(cfg);
+      saveView();
+    });
+  });
   document.addEventListener('click', function (event) {
     if (event.target.closest('.expander-header')) saveView();
   });

@@ -4,6 +4,10 @@ Open **PBv9 → Run** to manage PB9 live instances. The list and editor share th
 
 ## Configure an instance
 
+The basic live controls stay visible, as in PB8; Advanced Settings groups the remaining live, logging and monitoring fields. PB9 shows its native field names and units. In particular, risk_bootstrap_max_lookback_minutes is a separate startup setting, not the removed PB8 PnL lookback.
+
+Long and short JSON reuse the shared editor. **With global defaults** displays inherited side settings; only changed values become explicit overrides. **Overrides only** shows the sparse authored side. Delete a property there to inherit it again. Unchanged defaults stay absent from the saved side, and existing explicit values remain pinned. Side activation is always explicit. The view selector is preserved on browser reload.
+
 Choose **Add PB9 Instance**, select an exchange account and edit the strategy, portfolio, global defaults and long/short overrides. The form reads the installed PB9 field registry and strategy metadata. An inherited side value remains inherited until you explicitly override it. Enable each intended side explicitly.
 
 Coin selections use published local Coin Data mappings. Exact venue-qualified market identifiers preserve distinctions between independently traded markets with the same coin name. Coin overrides are inline PB9 patches. File-backed overrides and external config references are rejected.

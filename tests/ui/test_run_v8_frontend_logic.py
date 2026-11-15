@@ -200,6 +200,10 @@ def test_every_runtime_control_has_forward_and_reverse_mapping() -> None:
     assert "_extraLiveKeys = Object.keys(liveCfg)" in populate
     form_controls = set(re.findall(r'\bid="(f-[^"]+)"', page))
     value_controls = {field_id for field_id in form_controls if not field_id.endswith("-status")}
+    # Native-only settings are mapped by the PB9 adapter; view selectors are navigation.
+    assert "'f-v9-risk-lookback': ['live', 'startup', 'risk_bootstrap_max_lookback_minutes']" in adapter
+    assert 'Object.keys(V9_PRIMARY_FIELDS).forEach' in adapter
+    value_controls -= {'f-v9-risk-lookback', 'f-long-json-view', 'f-short-json-view'}
     for field_id in value_controls:
         assert f"'{field_id}'" in collect or f"'{field_id}'" in populate, f"{field_id} has no config mapping"
 
@@ -260,7 +264,7 @@ def test_pb8_run_editor_exposes_cookie_authenticated_strategy_handoff() -> None:
 
     assert "supportsStrategyExplorer: true" in adapter
     assert 'data-v7-only onclick="goStrategyExplorer()"' not in page
-    assert '/app/js/run_editor_adapter.js?v=12' in page
+    assert '/app/js/run_editor_adapter.js?v=13' in page
     assert "'/api/strategy-explorer-v8'" in page
     assert "coinOvSnapshotAllFiles()" in handoff
     assert "override_configs: overrideConfigs || {}" in handoff

@@ -3063,10 +3063,10 @@
         row.className = 'chk-row';
         row.appendChild(control);
         row.appendChild(label);
-        row.appendChild(toggle);
+        if (item.showExplicit !== false) row.appendChild(toggle);
         group.appendChild(row);
       } else {
-        label.appendChild(toggle);
+        if (item.showExplicit !== false) label.appendChild(toggle);
         group.appendChild(label);
         group.appendChild(control);
       }
@@ -3227,6 +3227,7 @@
   global.PBGuiEditorShared = {
     configPath: { has: hasConfigPath, get: getConfigPath, set: setConfigPath, remove: removeConfigPath },
     createMetadataFieldRenderer: createMetadataFieldRenderer,
+    checkMetadataValue: checkMetadataValue,
     applyConfigMigrationMarkers: applyConfigMigrationMarkers,
     renderHslMigrationRemovals: renderHslMigrationRemovals,
     escapeHtml: escapeHtml,

@@ -4,6 +4,10 @@ Unter **PBv9 → Run** verwaltest du PB9-Live-Instanzen. Liste und Editor verwen
 
 ## Instanz konfigurieren
 
+Die grundlegenden Live-Felder bleiben wie bei PB8 sichtbar. Advanced Settings bündelt die übrigen Live-, Logging- und Monitoring-Felder. PB9 zeigt seine eigenen Feldnamen und Einheiten. Insbesondere ist risk_bootstrap_max_lookback_minutes eine eigenständige Startup-Einstellung und kein Ersatz mit gleicher Bedeutung für den entfernten PB8-PnL-Rückblick.
+
+Long- und Short-JSON verwenden den gemeinsamen Editor. **With global defaults** zeigt die geerbten Seiteneinstellungen; nur geänderte Werte werden zu expliziten Overrides. **Overrides only** zeigt die tatsächlich gespeicherte, sparsame Seitenkonfiguration. Lösche dort eine Eigenschaft, um wieder zu erben. Unveränderte Standardwerte bleiben beim Speichern ausgelassen; vorhandene explizite Werte bleiben erhalten. Die Seitenaktivierung ist immer explizit. Die Ansichtsauswahl bleibt beim Neuladen erhalten.
+
 Wähle **Add PB9 Instance**, ein Börsenkonto und bearbeite Strategie, Portfolio, globale Vorgaben sowie Long-/Short-Overrides. Das Formular liest Felddefinitionen und Strategiemetadaten der installierten PB9-Version. Geerbte Seitenwerte bleiben geerbt, bis du ausdrücklich einen Override setzt. Aktiviere die gewünschten Seiten ausdrücklich.
 
 Die Coin-Auswahl verwendet veröffentlichte lokale Coin-Data-Mappings. Exakte, börsenqualifizierte Marktkennungen unterscheiden unabhängig gehandelte Märkte mit gleichem Coin-Namen. Coin-Overrides sind eingebettete PB9-Patches. Dateibasierte Overrides und externe Konfigurationsverweise werden abgelehnt.

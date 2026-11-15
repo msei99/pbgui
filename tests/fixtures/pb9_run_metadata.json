@@ -2488,6 +2488,233 @@
       "order": 439,
       "default": [],
       "coin_override": "forbidden"
+    },
+    {
+      "path": [
+        "logging",
+        "level"
+      ],
+      "types": [
+        "integer"
+      ],
+      "nullable": false,
+      "description": "",
+      "unit": null,
+      "scope": null,
+      "order": 13,
+      "default": 1
+    },
+    {
+      "path": [
+        "live",
+        "execution",
+        "execution_delay_seconds"
+      ],
+      "types": [
+        "float"
+      ],
+      "nullable": false,
+      "description": "",
+      "unit": null,
+      "scope": null,
+      "order": 32,
+      "default": 2,
+      "coin_override": "forbidden"
+    },
+    {
+      "path": [
+        "live",
+        "execution",
+        "limit_order_create_max_market_distance_fraction"
+      ],
+      "types": [
+        "float"
+      ],
+      "nullable": false,
+      "description": "",
+      "unit": "fraction",
+      "scope": null,
+      "order": 40,
+      "default": 0.8,
+      "coin_override": "forbidden"
+    },
+    {
+      "path": [
+        "live",
+        "startup",
+        "risk_bootstrap_max_lookback_minutes"
+      ],
+      "types": [
+        "float"
+      ],
+      "nullable": false,
+      "description": "",
+      "unit": null,
+      "scope": null,
+      "order": 47,
+      "default": 129600.0,
+      "coin_override": "forbidden"
+    },
+    {
+      "path": [
+        "bot",
+        "portfolio",
+        "loss_gate",
+        "max_drawdown_fraction"
+      ],
+      "types": [
+        "float"
+      ],
+      "nullable": false,
+      "description": "Values at least 1 disable the gate; zero blocks lossy non-panic closes.",
+      "unit": "fraction",
+      "scope": "portfolio",
+      "order": 66,
+      "default": 1.0,
+      "domain": {
+        "minimum": 0.0,
+        "maximum": null,
+        "exclusive_minimum": false,
+        "exclusive_maximum": false,
+        "finite": true,
+        "string_pattern": null,
+        "choices": []
+      },
+      "coin_override": "forbidden"
+    },
+    {
+      "path": [
+        "bot",
+        "portfolio",
+        "execution",
+        "market_order_near_touch_fraction"
+      ],
+      "types": [
+        "float"
+      ],
+      "nullable": false,
+      "description": "",
+      "unit": "fraction",
+      "scope": "portfolio",
+      "order": 69,
+      "default": 0.001,
+      "domain": {
+        "minimum": 0.0,
+        "maximum": null,
+        "exclusive_minimum": false,
+        "exclusive_maximum": false,
+        "finite": true,
+        "string_pattern": null,
+        "choices": []
+      },
+      "coin_override": "forbidden"
+    },
+    {
+      "path": [
+        "bot",
+        "portfolio",
+        "warmup",
+        "activation_span_fraction"
+      ],
+      "types": [
+        "float"
+      ],
+      "nullable": false,
+      "description": "Activation and backtest span term is span times this fraction; live acquisition uses span times (1 + fraction), subject to the existing cap and independent history requirements.",
+      "unit": "fraction",
+      "scope": "portfolio",
+      "order": 71,
+      "default": 0.3,
+      "domain": {
+        "minimum": 0.0,
+        "maximum": null,
+        "exclusive_minimum": false,
+        "exclusive_maximum": false,
+        "finite": true,
+        "string_pattern": null,
+        "choices": []
+      },
+      "coin_override": "forbidden"
+    },
+    {
+      "path": [
+        "bot",
+        "portfolio",
+        "execution",
+        "market_orders_allowed"
+      ],
+      "types": [
+        "boolean"
+      ],
+      "nullable": false,
+      "description": "",
+      "unit": null,
+      "scope": "portfolio",
+      "order": 96,
+      "default": false,
+      "coin_override": "forbidden"
+    },
+    {
+      "path": [
+        "live",
+        "modes",
+        "disapproved_position"
+      ],
+      "types": [
+        "string"
+      ],
+      "nullable": false,
+      "description": "",
+      "unit": null,
+      "scope": null,
+      "order": 102,
+      "default": "graceful_stop",
+      "coin_override": "forbidden"
+    },
+    {
+      "path": [
+        "bot",
+        "global",
+        "universe",
+        "minimum_coin_age_days"
+      ],
+      "types": [
+        "float"
+      ],
+      "nullable": false,
+      "description": "Initial-entry minimum age in every selection mode; zero bypasses the gate, unknown inception fails a positive gate, and held positions remain manageable.",
+      "unit": "days",
+      "scope": "global",
+      "order": 367,
+      "default": 60.0,
+      "domain": {
+        "minimum": 0.0,
+        "maximum": null,
+        "exclusive_minimum": false,
+        "exclusive_maximum": false,
+        "finite": true,
+        "string_pattern": null,
+        "choices": []
+      },
+      "coin_override": "forbidden"
+    },
+    {
+      "path": [
+        "bot",
+        "global",
+        "universe",
+        "filter_by_min_effective_cost"
+      ],
+      "types": [
+        "boolean"
+      ],
+      "nullable": false,
+      "description": "Side-specific flat initial-entry eligibility; simulation null inherits this flag, while exchange minima and held-position management remain authoritative.",
+      "unit": null,
+      "scope": "global",
+      "order": 397,
+      "default": true,
+      "coin_override": "forbidden"
     }
   ],
   "strategies": [

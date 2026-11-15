@@ -39,6 +39,22 @@
     ignored_coins: { long: 'ms-ignored-long', short: 'ms-ignored-short' }
   };
   var V9_ACTIVATION_KEYS = ['bot.long.enabled', 'bot.short.enabled'];
+  var V9_PRIMARY_FIELDS = {
+    'f-leverage': ['live', 'account', 'leverage'],
+    'f-margin-mode': ['live', 'account', 'margin_mode_preference'],
+    'f-logging-level': ['logging', 'level'],
+    'f-min-coin-age': ['bot', 'global', 'universe', 'minimum_coin_age_days'],
+    'f-v9-risk-lookback': ['live', 'startup', 'risk_bootstrap_max_lookback_minutes'],
+    'f-warmup-ratio': ['bot', 'portfolio', 'warmup', 'activation_span_fraction'],
+    'f-max-loss-pct': ['bot', 'portfolio', 'loss_gate', 'max_drawdown_fraction'],
+    'f-price-dist': ['live', 'execution', 'limit_order_create_max_market_distance_fraction'],
+    'f-exec-delay': ['live', 'execution', 'execution_delay_seconds'],
+    'f-market-order-threshold': ['bot', 'portfolio', 'execution', 'market_order_near_touch_fraction'],
+    'f-filter-min-cost': ['bot', 'global', 'universe', 'filter_by_min_effective_cost'],
+    'f-market-orders': ['bot', 'portfolio', 'execution', 'market_orders_allowed'],
+    'f-hedge-mode': ['bot', 'portfolio', 'hedge_mode'],
+    'f-auto-gs': ['live', 'modes', 'disapproved_position']
+  };
   var V9_SECTIONS = [
     { id: 'live', host: 'settings', title: 'Live Settings', prefix: ['live'] },
     { id: 'logging', host: 'settings', title: 'Logging', prefix: ['logging'] },
@@ -65,6 +81,7 @@
     var strategyCache = { global: {}, long: {}, short: {} };
     var fixedInputs = {};
     var coinInputs = {};
+    var jsonInputs = {};
 
     function paths() {
       return window.PBGuiEditorShared.configPath;
@@ -224,6 +241,7 @@
       var keys = {};
       keys[V9_USER_PATH.join('.')] = true;
       keys[V9_STRATEGY_PATH.join('.')] = true;
+      Object.keys(V9_PRIMARY_FIELDS).forEach(function(id) { keys[V9_PRIMARY_FIELDS[id].join('.')] = true; });
       V9_SIDES.forEach(function (side) {
         Object.keys(V9_RISK_PATHS).forEach(function (name) {
           keys[['bot', side].concat(V9_RISK_PATHS[name]).join('.')] = true;
@@ -268,7 +286,7 @@
             if (item.group) groups.push(byTitle[item.group]);
             else groups.unshift(byTitle[item.group]);
           }
-          byTitle[item.group].fields.push({ field: field, label: item.label });
+          byTitle[item.group].fields.push({ field: field, label: item.label, showExplicit: !definition.keys });
         });
         return { id: definition.id, host: definition.host, title: definition.title, expander: !definition.keys, groups: groups };
       }).filter(function (section) { return section.groups.length > 0; });
@@ -298,20 +316,45 @@
 
     function trackFixedInput(page, id, path, source) {
       var resolved = resolve(source, path);
-      page.setVal(id, resolved.value == null ? '' : String(resolved.value));
-      fixedInputs[id] = { path: path, explicit: resolved.explicit, shown: page.getVal(id), numeric: id !== 'f-strategy-kind' };
+      var input = document.getElementById(id);
+      if (!input) return;
+      var field = fieldIndex[path.join('.')];
+      var checkbox = input.type === 'checkbox';
+      if (checkbox) page.setChk(id, id === 'f-auto-gs' ? resolved.value === 'graceful_stop' : resolved.value === true);
+      else {
+        if (input.tagName === 'SELECT') page.ensureSelectOption(id, resolved.value);
+        page.setVal(id, resolved.value == null ? '' : String(resolved.value));
+      }
+      fixedInputs[id] = { path: path, explicit: resolved.explicit, raw: resolved.value,
+        shown: checkbox ? page.getChk(id) : page.getVal(id), checkbox: checkbox,
+        numeric: !checkbox && (field ? field.types.indexOf('integer') >= 0 || field.types.indexOf('float') >= 0 : typeof resolved.value === 'number'),
+        field: field };
+      if (field && input.type === 'number') {
+        var domain = field.domain || {};
+        ['min', 'max'].forEach(function(key) {
+          var value = domain[key === 'min' ? 'minimum' : 'maximum'];
+          if (value == null) input.removeAttribute(key); else input.setAttribute(key, String(value));
+        });
+        input.step = field.types.indexOf('integer') >= 0 && field.types.indexOf('float') < 0 ? '1' : 'any';
+      }
+      var label = input.closest('.form-group').querySelector('label[for="' + id + '"] span')
+        || input.closest('.form-group').querySelector('label span');
+      if (label && field && field.description) label.dataset.tip = field.description + (field.unit ? ' [' + field.unit + ']' : '');
+      input.dataset.configPath = path.join('.');
       markInput(id, resolved.explicit);
     }
 
     function collectFixedInputs(page, target) {
       Object.keys(fixedInputs).forEach(function (id) {
         var state = fixedInputs[id];
-        var current = page.getVal(id);
+        var current = state.checkbox ? page.getChk(id) : page.getVal(id);
         if (!state.explicit && current !== state.shown) state.explicit = true;
         if (!state.explicit || current === '') return;
-        var value = state.numeric ? Number(current) : current;
+        var value = current === state.shown ? state.raw : state.numeric ? Number(current) : current;
+        if (id === 'f-auto-gs' && current !== state.shown) value = current ? 'graceful_stop' : 'manual';
         if (state.numeric && !Number.isFinite(value)) return;
         paths().set(target, state.path, value);
+        state.raw = value;
         state.shown = current;
         markInput(id, true);
       });
@@ -322,8 +365,105 @@
         var state = fixedInputs[id];
         if (state.explicit || document.activeElement === document.getElementById(id)) return;
         var value = resolve(source, state.path).value;
-        page.setVal(id, value == null ? '' : String(value));
-        state.shown = page.getVal(id);
+        if (state.checkbox) page.setChk(id, id === 'f-auto-gs' ? value === 'graceful_stop' : value === true);
+        else page.setVal(id, value == null ? '' : String(value));
+        state.raw = value;
+        state.shown = state.checkbox ? page.getChk(id) : page.getVal(id);
+      });
+    }
+
+    function plain(value) {
+      return value !== null && typeof value === 'object' && !Array.isArray(value);
+    }
+
+    function safeJson(value) {
+      return !value || typeof value !== 'object' || Object.keys(value).every(function(key) {
+        return V9_UNSAFE_SEGMENTS.indexOf(key) < 0 && safeJson(value[key]);
+      });
+    }
+
+    function mergeJson(target, patch) {
+      Object.keys(object(patch)).forEach(function(key) {
+        if (V9_UNSAFE_SEGMENTS.indexOf(key) >= 0) return;
+        if (plain(patch[key])) target[key] = mergeJson(plain(target[key]) ? target[key] : {}, patch[key]);
+        else target[key] = clone(patch[key]);
+      });
+      return target;
+    }
+
+    function sideProjection(source, side) {
+      var cp = paths();
+      var result = mergeJson({}, cp.get(metadata.prototype, ['bot', side]));
+      mergeJson(result, cp.get(metadata.prototype, ['bot', 'global']));
+      mergeJson(result, cp.get(source, ['bot', 'global']));
+      mergeJson(result, cp.get(source, ['bot', side]));
+      // Activation is never inherited. Null coin lists retain the shared list.
+      result.enabled = cp.get(source, ['bot', side, 'enabled']) === true;
+      Object.keys(V9_COIN_INPUTS).forEach(function(key) {
+        if (cp.get(result, ['universe', key]) === null) {
+          cp.set(result, ['universe', key], clone(inheritedValue(source, ['bot', side, 'universe', key])));
+        }
+      });
+      if (plain(result.strategy)) Object.keys(result.strategy).forEach(function(kind) {
+        if (kind !== activeKind) delete result.strategy[kind];
+      });
+      return result;
+    }
+
+    function applyJsonDelta(target, before, after, prefix) {
+      var cp = paths();
+      Object.keys(before).forEach(function(key) {
+        if (!Object.prototype.hasOwnProperty.call(after, key)) cp.remove(target, prefix.concat(key), 2);
+      });
+      Object.keys(after).forEach(function(key) {
+        if (JSON.stringify(before[key]) === JSON.stringify(after[key])) return;
+        var path = prefix.concat(key);
+        if (plain(before[key]) && plain(after[key])) applyJsonDelta(target, before[key], after[key], path);
+        else cp.set(target, path, clone(after[key]));
+      });
+    }
+
+    function renderSideJson(source, reset) {
+      V9_SIDES.forEach(function(side) {
+        var input = document.getElementById('f-' + side + '-json');
+        var select = document.getElementById('f-' + side + '-json-view');
+        if (!input || !select) return;
+        var previous = jsonInputs[side];
+        if (!reset && (document.activeElement === input || previous && input.value !== previous.shown)) return;
+        var mode = select.value;
+        select.dataset.appliedView = mode;
+        var value = mode === 'overrides' ? clone(object(paths().get(source, ['bot', side]))) : sideProjection(source, side);
+        input.value = JSON.stringify(value, null, 2);
+        jsonInputs[side] = {mode: mode, shown: input.value, baseline: value};
+        select.title = 'Only changed values become side overrides. Delete an override in Overrides only to inherit again.';
+        if (typeof window.autoResizeTa === 'function') window.autoResizeTa(input);
+        if (typeof window._applyBotJsonHighlight === 'function') window._applyBotJsonHighlight(input, {});
+      });
+    }
+
+    function collectSideJson(source, page) {
+      var changed = false;
+      V9_SIDES.forEach(function(side) {
+        var state = jsonInputs[side];
+        var input = document.getElementById('f-' + side + '-json');
+        if (!input || !state || state.shown === input.value) return;
+        var parsed = window.PBGuiEditorShared.validateJsonText(input.value, {expectObject: true});
+        if (parsed.error || !safeJson(parsed.parsed)) return;
+        if (state.mode === 'overrides') paths().set(source, ['bot', side], clone(parsed.parsed));
+        else applyJsonDelta(source, state.baseline, parsed.parsed, ['bot', side]);
+        state.shown = input.value;
+        state.baseline = clone(parsed.parsed);
+        changed = true;
+      });
+      if (!changed) return;
+      // Rebase the shared controls so their next collection cannot resurrect old overrides.
+      Object.keys(fixedInputs).forEach(function(id) {
+        trackFixedInput(page, id, fixedInputs[id].path, source);
+      });
+      renderer.populate(source);
+      trackCoinInputs(source);
+      Object.keys(coinInputs).forEach(function(id) {
+        if (page.hasMultiselect(id)) page.setMultiselectValues(id, coinInputs[id].shown);
       });
     }
 
@@ -462,6 +602,18 @@
         document.title = 'PBv9 Edit';
         var versionInput = document.getElementById('f-version');
         if (versionInput) versionInput.readOnly = true;
+        Object.keys(V9_PRIMARY_FIELDS).forEach(function(id) {
+          var input = document.getElementById(id);
+          if (!input) return;
+          var label = input.closest('.form-group').querySelector('label[for="' + id + '"] span')
+            || input.closest('.form-group').querySelector('label span');
+          var path = V9_PRIMARY_FIELDS[id];
+          if (label) {
+            if (id === 'f-auto-gs') label.textContent = 'auto_graceful_stop';
+            else if (id !== 'f-leverage' && id !== 'f-logging-level') label.textContent = path[path.length - 1];
+            label.dataset.tip = path.join('.') + (id === 'f-auto-gs' ? ': graceful_stop when enabled, manual otherwise.' : '');
+          }
+        });
       },
       configureRuntimeMetadata: function (raw) {
         loadMetadata(raw);
@@ -488,6 +640,7 @@
         page.ensureSelectOption('f-strategy-kind', activeKind);
         fixedInputs = {};
         trackFixedInput(page, 'f-strategy-kind', V9_STRATEGY_PATH, config);
+        Object.keys(V9_PRIMARY_FIELDS).forEach(function(id) { trackFixedInput(page, id, V9_PRIMARY_FIELDS[id], config); });
         V9_SIDES.forEach(function (side) {
           Object.keys(V9_BOT_INPUTS).forEach(function (suffix) {
             trackFixedInput(page, 'f-' + side + '-' + suffix, ['bot', side].concat(V9_RISK_PATHS[V9_BOT_INPUTS[suffix]]), config);
@@ -505,6 +658,7 @@
         trackCoinInputs(config);
         render(activeKind);
         renderer.populate(config);
+        renderSideJson(config, true);
       },
       collectConfig: function (base, current, page) {
         var cp = paths();
@@ -517,6 +671,8 @@
         if (kind && kind !== activeKind) switchStrategy(result, kind);
         refreshInheritedInputs(page, result);
         collectCoinInputs(page, result);
+        collectSideJson(result, page);
+        renderSideJson(result, false);
         var overrides = object(page.coinOvCollect().coin_overrides);
         if (Object.keys(overrides).length || cp.has(result, ['coin_overrides'])) result.coin_overrides = overrides;
         result.pbgui = Object.assign({}, basePbgui, {
@@ -534,8 +690,25 @@
         return result;
       },
       firstInvalidField: function () {
+        for (var i = 0; i < V9_SIDES.length; i++) {
+          var side = V9_SIDES[i];
+          var input = document.getElementById('f-' + side + '-json');
+          if (!input) continue;
+          var result = window.PBGuiEditorShared.validateJsonText(input.value, {expectObject: true});
+          var message = result.error ? result.error.message : !safeJson(result.parsed) ? 'contains an unsupported property name' : '';
+          if (message) return {control: input, key: side + ' JSON', message: message};
+        }
+        var ids = Object.keys(fixedInputs);
+        for (var j = 0; j < ids.length; j++) {
+          var id = ids[j], state = fixedInputs[id], control = document.getElementById(id);
+          if (!control || !state.numeric) continue;
+          var value = control.value.trim() === '' ? NaN : Number(control.value);
+          var error = !Number.isFinite(value) ? 'must be a finite number' : state.field ? window.PBGuiEditorShared.checkMetadataValue(state.field, value) : '';
+          if (error) return {control: control, key: state.path.join('.'), message: error};
+        }
         return renderer ? renderer.firstInvalid() : null;
       },
+      changeJsonView: function(source) { renderSideJson(source, true); },
       // Coin status lookups may rewrite identifiers; an untouched list must stay inherited.
       pristineCoinSelections: function (getValues) {
         return Object.keys(coinInputs).filter(function (id) {
