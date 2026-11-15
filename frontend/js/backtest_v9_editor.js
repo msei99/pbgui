@@ -9,7 +9,7 @@
     'cfg-start-date': ['backtest', 'start_date'], 'cfg-end-date': ['backtest', 'end_date'],
     'cfg-starting-balance': ['backtest', 'starting_balance'], 'cfg-native-strategy': ['bot', 'portfolio', 'strategy_kind']
   };
-  var shown = {}, configRevision = null, configName = null;
+  var shown = {}, configRevision = null, configName = null, selectionRestored = false;
 
   function loadMetadata() {
     if (!metadataPromise) metadataPromise = window.apiFetch('/editor/metadata').then(function(value) {
@@ -234,9 +234,8 @@
     if (window.currentPanel !== 'results') return;
     var rows=Array.from(document.querySelectorAll('#results-list tr[data-path]'));
     if (!rows.length) return;
-    var state={search:document.getElementById('results-filter').value, actions:[], selected:[], prices:readView().prices || []};
+    var state={search:document.getElementById('results-filter').value, actions:[], selected:Array.from(window._selectedResultPaths).slice(0,100), prices:readView().prices || [], version:window.selectedResultsVersion(), compare:readView().compare===true};
     rows.forEach(function(row) {
-      if (row.classList.contains('selected')) state.selected.push(row.dataset.path);
       row.querySelectorAll('button[data-action].active').forEach(function(button) {
         state.actions.push({path:row.dataset.path, action:button.dataset.action});
       });
@@ -244,10 +243,26 @@
     state.actions=state.actions.slice(0,100);state.selected=state.selected.slice(0,100);
     try {sessionStorage.setItem(viewKey,JSON.stringify(state));} catch(error) { /* Storage is optional. */ }
   }
+  function rememberComparison(selected, visible, version) {
+    var state=readView();state.selected=selected.slice(0,100);state.compare=visible===true;
+    state.search=document.getElementById('results-filter').value.slice(0,500);
+    state.version=version || window.selectedResultsVersion();
+    try {sessionStorage.setItem(viewKey,JSON.stringify(state));} catch(error) { /* Optional navigation state. */ }
+  }
+  function restoreComparison() {
+    var state=readView(), area=document.getElementById('compare-chart-area');
+    if (!state.compare || !area || document.getElementById('compare-chart-div')) return;
+    var selected=window.getSelectedResults();
+    if(selected.length>=2)window._compareResultPaths(selected,window.results,area,'compare-chart-div');
+  }
   function restoreResults() {
     var state=readView(), changed=false;
+    if(!selectionRestored) {
+      (Array.isArray(state.selected)?state.selected:[]).forEach(function(path){window._selectedResultPaths.add(path);});
+      selectionRestored=true;
+    }
     document.querySelectorAll('#results-list tr[data-path]').forEach(function(row) {
-      var selected=Array.isArray(state.selected)&&state.selected.indexOf(row.dataset.path)>=0;
+      var selected=window._selectedResultPaths.has(row.dataset.path);
       row.classList.toggle('selected',selected);
       if (selected) window._selectedResultPaths.add(row.dataset.path);
       row.querySelectorAll('button[data-action]').forEach(function(button) {
@@ -260,6 +275,8 @@
   function restoreSearch() {
     var state=readView(), input=document.getElementById('results-filter');
     if(input&&typeof state.search==='string')input.value=state.search.slice(0,500);
+    var version=document.getElementById('results-version-filter');
+    if(version && ['v7','v8','v9','both'].indexOf(state.version)>=0)version.value=state.version;
   }
-  window.PBGuiBacktestV9 = {preferredPrice:preferredPrice, rememberPrice:rememberPrice, rememberResults:rememberResults, restoreResults:restoreResults, restoreSearch:restoreSearch, active:function(){return !!(window.backtestEditorAdapter && window.backtestEditorAdapter.metadataDriven);}, render:render, collect:collect, populate:populate, validate:validate, save:save, close:function(){generation++;var url=new URL(window.location.href);['config','draft_id','opt_draft_id'].forEach(function(key){url.searchParams.delete(key);});history.replaceState(null,'',url);}};
+  window.PBGuiBacktestV9 = {rememberComparison:rememberComparison, restoreComparison:restoreComparison, preferredPrice:preferredPrice, rememberPrice:rememberPrice, rememberResults:rememberResults, restoreResults:restoreResults, restoreSearch:restoreSearch, active:function(){return !!(window.backtestEditorAdapter && window.backtestEditorAdapter.metadataDriven);}, render:render, collect:collect, populate:populate, validate:validate, save:save, close:function(){generation++;var url=new URL(window.location.href);['config','draft_id','opt_draft_id'].forEach(function(key){url.searchParams.delete(key);});history.replaceState(null,'',url);}};
 }());

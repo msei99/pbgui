@@ -33,3 +33,11 @@ Fehlen Offline-Marktmetadaten, bleibt der Job mit einer konkreten Meldung in der
 ## Kursüberlagerung
 
 Öffne das Balance-/Equity-Diagramm über das Auge. **Price (PBGui MarketData)** liest vorhandene PBGui-Candles mit demselben Leser wie PB7/PB8 und zeigt den Schlusskurs auf der rechten Achse. Kombinierte Ergebnisse bieten jede konfigurierte Börse einzeln zur Auswahl. Die anfängliche Auswahl bevorzugt eine Börse, die den gesamten Diagrammzeitraum abdeckt. Fehlende oder teilweise Daten werden ausdrücklich angezeigt. Beim Neuladen werden das geöffnete Diagramm und deine Börsenauswahl wiederhergestellt. Native HSL-Diagramme sind über die Plot-Bilder verfügbar; die PB8-spezifische HSL-Rekonstruktion wird nicht auf native PB9-Ergebnisse angewendet. Diese Ansicht lädt oder kopiert keine Candle-Daten.
+
+## PB7, PB8 und PB9 vergleichen
+
+PB9 erweitert die bestehende Ansicht **Compare**. Wähle unter **Results** PB7, PB8, PB9 oder **All**, markiere mindestens zwei Zeilen und drücke **Compare**. Jedes Ergebnis lädt seine eigene versionsgerechte Equity-CSV; das bestehende Diagramm überlagert Equity und Balance auf einer gemeinsamen UTC-Achse. Unterschiedlich definierte Metriken werden nicht in vermeintlich gleiche Scores umgerechnet. Versionsfilter, Auswahl und geöffneter Vergleich bleiben beim Neuladen erhalten.
+
+Neue Konvertierungen aus einem lokalen PB8-**Ergebnis** behalten eine PBGui-Vergleichsreferenz über Entwurf, gespeicherte Konfiguration und Queue bis zum fertigen Ergebnis. **Compare with PB8 source** in der Ergebniszeile wählt dieses konkrete Paar und öffnet dasselbe Diagramm direkt. Die Referenz bleibt nach Entfernen des Queue-Eintrags erhalten. Sie bezeichnet das Vergleichsziel und bestätigt keine Gleichwertigkeit nachträglich geänderter PB9-Parameter. Wurde das Original entfernt oder seine Konfiguration/Analyse geändert, meldet der direkte Vergleich dies, statt ein anderes Ergebnis zu erraten. Diese GUI-Metadaten bleiben von den nativen Bot-Parametern getrennt.
+
+Ältere PB9-Läufe und Konvertierungen aus gespeicherten Konfigurationen ohne konkretes Ergebnis lassen sich über die normale manuelle Compare-Auswahl vergleichen. Dafür ist kein neuer Backtest nötig; Ergebnis- und Candle-Daten werden nicht verändert.

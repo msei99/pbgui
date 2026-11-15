@@ -423,3 +423,91 @@ def test_price_overlay_retains_shared_exchange_validation(native,monkeypatch):
     with pytest.raises(HTTPException) as error:
         operation('price',path=str(directory),exchange='hyperliquid',coin='HYPE',max_points=6000)
     assert error.value.status_code==400 and 'not part' in error.value.detail
+
+
+def test_migrated_result_reference_survives_save_queue_and_result_publication(native,migration,monkeypatch):
+    """Reviewed PB8 provenance reaches results without entering native bot parameters."""
+    from api import backtest_v8 as pb8
+    from pb9_backtest_runtime import publish_result_source
+    service,_,config,_=migration
+    source8=native[2]/'results8/example/binance/original';source8.mkdir(parents=True)
+    (source8/'analysis.json').write_text('{}');(source8/'config.original.json').write_text(json.dumps(config))
+    original=(source8/'config.original.json').read_bytes()
+    preview=operation('migrate_preview',{'source_type':'result','source':str(source8)},owner='one')
+    draft=operation('migrate_accept',{'review_id':preview['review_id']},owner='one')
+    config9=operation('draft_get',id=draft['draft_id'],owner='one')['config']
+    reference=config9['pbgui']['comparison_reference']
+    assert reference['path']==str(source8) and reference['version']=='v8'
+    assert operation('prepare',{'config':config9})['config']['pbgui']['comparison_reference']==reference
+    operation('save',{'config':config9},name='converted')
+    assert operation('load',name='converted')['config']['pbgui']['comparison_reference']==reference
+    job=operation('enqueue',{'name':'converted'})['filename']
+    record=bt._read(bt._job_path(job));snapshot=bt._read(bt._job_path(job,'.config.json'))
+    assert record['comparison_reference']==reference
+    assert 'pbgui' not in snapshot
+    result9=Path(snapshot['backtest']['base_dir'])/'combined'/'native';result9.mkdir(parents=True)
+    bt._write(result9/'config.json',snapshot);bt._write(result9/'analysis.json',{})
+    publish_result_source(bt._job_path(job,'.config.json'))
+    assert bt._read(result9/'pbgui.provenance.json')['comparison_reference']==reference
+    operation('delete_job',id=job)
+    assert not bt._job_path(job).exists()
+    indexed=operation('results',offset=0,limit=100)['results']
+    assert indexed[0]['comparison_reference']==reference
+    assert operation('result_config',path=str(result9))['pbgui']['comparison_reference']==reference
+    monkeypatch.setattr(pb8,'_list_results',lambda paths:[{'path':str(source8),'backtest_version':'v8'}])
+    pair=operation('compare_source',path=str(result9))['results']
+    assert [item['backtest_version'] for item in pair]==['v8','v9']
+    assert (source8/'config.original.json').read_bytes()==original
+    (source8/'analysis.json').write_text('{"changed":true}')
+    with pytest.raises(HTTPException) as changed:operation('compare_source',path=str(result9))
+    assert changed.value.status_code==409
+
+
+def test_comparison_reference_is_not_inferred_from_names(native):
+    """Older and config-only conversions require manual Compare, never fuzzy matching."""
+    source,_,_=native
+    result=bt._root('results')/'same_name_v9'/'job'/'combined'/'native';result.mkdir(parents=True)
+    bt._write(result/'analysis.json',{});bt._write(result/'config.json',source)
+    with pytest.raises(HTTPException) as missing:operation('compare_source',path=str(result))
+    assert missing.value.status_code==404 and 'no PB8 source' in missing.value.detail
+
+
+@pytest.mark.parametrize('patch',[{'version':'v7'},{'path':'../outside'},{'path':'/tmp/bad\npath'},
+                                  {'config_fingerprint':'not-a-hash'},{'extra':'unexpected'}])
+def test_invalid_persisted_reference_is_rejected_before_save(native,patch):
+    """Reference JSON is a validated navigation boundary, not an arbitrary file-read argument."""
+    source,_,_=native
+    source['pbgui']={'comparison_reference':{'version':'v8','path':'/approved/result',
+                      'config_fingerprint':'a'*64,'analysis_sha256':'b'*64,**patch}}
+    with pytest.raises(HTTPException) as error:operation('save',{'config':source},name='invalid')
+    assert error.value.status_code==422
+    assert not bt._root('configs').exists()
+
+
+@pytest.mark.parametrize('size',[2*1024*1024,9*1024*1024])
+def test_large_analysis_does_not_prevent_config_migration(native,migration,size):
+    """Optional comparison metadata cannot turn an otherwise valid conversion into an error."""
+    service,_,config,_=migration
+    directory=native[2]/'results8/example/binance/result';directory.mkdir(parents=True)
+    (directory/'config.json').write_text(json.dumps(config))
+    (directory/'analysis.json').write_bytes(b'{"padding":"'+b'x'*size+b'"}')
+    preview=operation('migrate_preview',{'source_type':'result','source':str(directory)},owner='one')
+    assert preview['status']=='ready'
+    record=service._reviews[preview['review_id']]
+    if size<8*1024*1024:assert record['comparison_reference']
+    else:
+        assert record['comparison_reference'] is None
+        assert any('manual Compare' in warning for warning in preview['report']['warnings'])
+
+
+def test_invalid_optional_reference_does_not_hide_native_results(native):
+    """A damaged GUI sidecar leaves the result list and manual comparison available."""
+    source,_,_=native
+    directory=bt._root('results')/'sample'/'job'/'combined'/'native';directory.mkdir(parents=True)
+    bt._write(directory/'analysis.json',{});bt._write(directory/'config.json',source)
+    bt._write(directory/'pbgui.provenance.json',{'comparison_reference':{'version':'v7'}})
+    data=operation('results',offset=0,limit=100)['results']
+    assert len(data)==1 and data[0]['comparison_reference_error']
+    assert 'comparison_reference' not in data[0]
+    with pytest.raises(HTTPException) as rejected:operation('compare_source',path=str(directory))
+    assert rejected.value.status_code==422

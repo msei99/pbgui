@@ -12,9 +12,9 @@
       navItems:function() { return [{panel:'configs',icon:'📋',label:'Configs'}, {panel:'queue',icon:'⏳',label:'Queue',badge:true}, {panel:'results',icon:'📊',label:'Results'}]; },
       initialPanels:['configs','queue','results'],
       configureUi:function() {
-        window.PBGuiBacktestV9.restoreSearch();
         var versions=document.getElementById('results-version-filter');
-        versions.replaceChildren();var option=document.createElement('option');option.value='v9';option.textContent='PB9';versions.appendChild(option);
+        versions.replaceChildren();[['v9','PB9'],['v8','PB8'],['v7','PB7'],['both','All']].forEach(function(item){var option=document.createElement('option');option.value=item[0];option.textContent=item[1];versions.appendChild(option);});
+        window.PBGuiBacktestV9.restoreSearch();
         document.querySelectorAll('button[onclick]').forEach(function(button) {
           var action=button.getAttribute('onclick') || '';
           if (/^(?:openSettingsModal|optimizeFromResult|optimizePresetFromResult|strategyExplorerFromResult|goBalanceCalculatorFromResult|calcBalanceFromResult|addResultToArchive|pushArchive|convertConfigToV8|goBalanceCalculator|calcBalance|showOhlcvPreflight)/.test(action)) button.hidden=true;

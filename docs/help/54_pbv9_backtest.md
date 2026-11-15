@@ -33,3 +33,11 @@ If offline market metadata is missing, the job stays queued with an actionable m
 ## Market price overlay
 
 Open the balance/equity chart with its eye action. **Price (PBGui MarketData)** reads existing PBGui candles using the same reader as PB7/PB8 and plots the close price on the right axis. Combined results list each configured exchange separately; change the selector to compare venues. The initial selection prefers a venue covering the full chart period. Missing or partial data is shown explicitly. Result refresh/reload restores the open chart and your selected venue. Native HSL plots remain available through the plot-images action; PB8-specific HSL reconstruction is not applied to native PB9 results. No candle data is downloaded or copied by this view.
+
+## Compare PB7, PB8 and PB9
+
+PB9 extends the existing **Compare** view. Under **Results**, choose PB7, PB8, PB9 or **All**, select at least two rows and press **Compare**. Each result loads its own version's equity CSV; the existing chart overlays equity and balance on a shared UTC axis. Different metric formulas are not converted into matching scores. The version filter, selected rows and open comparison are restored on reload.
+
+New conversions from a local PB8 **result** retain a PBGui comparison reference through the draft, saved config, queue and final result. Use the result-row **Compare with PB8 source** action to select that exact pair and open the same chart directly. The reference remains available after queue cleanup. It identifies a comparison target; it does not assert that edited PB9 parameters are equivalent to PB8. If the original is removed or its config/analysis changes, the direct comparison reports that instead of guessing another result. Native bot parameters remain separate from this GUI metadata.
+
+Older PB9 runs and conversions from a saved config without a specific result can use the normal manual Compare selection. No new backtest is required and comparison does not modify result or candle data.

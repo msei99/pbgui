@@ -25,6 +25,8 @@ from fastapi.responses import HTMLResponse, Response, FileResponse
 
 from api.auth import SessionToken, authenticated_push_websocket, require_auth
 from api.backtest_price import build_market_price_payload
+from api.pb9_migration import (carry_comparison_reference, config_comparison_reference,
+                               validate_comparison_reference, resolve_comparison_reference)
 from api.page_templates import render_page_urls, script_json
 from api.v9_instances import _NoStoreRoute, _run, _paths, _native_http_error
 from backtest_result_index import load_indexed_results, invalidate_result
@@ -244,12 +246,15 @@ def _enqueue(body, cancel):
         if config is None:
             config = _load_source(_cfg_path(name), cancel)
         source, status = _native(config, cancel)
+        reference = config_comparison_reference(config)
         job = str(uuid.uuid4())
         source['backtest']['base_dir'] = str(_safe(_root('results'), name, job))
         payload = {'name': name, 'filename': job, 'created_at': time.time(),
                    'exchange': source['backtest'].get('exchanges', []), 'config_snapshot': source,
                    'operation_id': operation, 'runtime': 'pb9', 'schema': source['config_version'],
                    'commit': status['commit'], 'package_version': status.get('package_version')}
+        if reference:
+            payload['comparison_reference'] = reference
         if cancel.is_set():
             raise PB9ConfigError('helper_cancelled')
         _save_source(_job_path(job, '.config.json'), source, cancel)
@@ -489,6 +494,15 @@ def _summaries(paths):
     return items
 
 
+
+def _result_reference(directory):
+    """Read result-owned reference metadata independently of the summary index cache."""
+    path=_safe(directory,'pbgui.provenance.json')
+    if not path.exists():
+        return None
+    return validate_comparison_reference(_read(path).get('comparison_reference'))
+
+
 def _side_risk(config, side):
     """Resolve only the enabled side risk for compact shared table summaries."""
     bot = config.get('bot', {})
@@ -515,6 +529,8 @@ def _operation(operation, cancel, payload=None):
             status, _ = _runtime(cancel)
             review = reviewed(body, args['owner'], status)
             source, _ = _native(review['config'], cancel)
+            if review.get('comparison_reference'):
+                source['pbgui'] = {'comparison_reference': review['comparison_reference']}
             with _LOCK:
                 for key, value in list(_drafts.items()):
                     if time.monotonic() - value['created'] > 600:
@@ -537,7 +553,9 @@ def _operation(operation, cancel, payload=None):
             result['config']['backtest']['ohlcv_source_dir'] = _pbgui_data_path()
             return {'config': result['config'], 'param_status': {}, 'override_configs': {}}
         if operation == 'bt9_prepare':
-            source, _ = _native(body.get('config', body), cancel)
+            document = body.get('config', body)
+            source, _ = _native(document, cancel)
+            carry_comparison_reference(source, document)
             return {'config': source, 'param_status': {}, 'override_configs': {}}
         if operation == 'bt9_draft_create':
             candidate = copy.deepcopy(body.get('config'))
@@ -546,6 +564,7 @@ def _operation(operation, cancel, payload=None):
                 if isinstance(backtest, dict) and not backtest.get('ohlcv_source_dir'):
                     backtest['ohlcv_source_dir'] = _pbgui_data_path()
             source, _ = _native(candidate, cancel)
+            carry_comparison_reference(source, candidate)
             with _LOCK:
                 for key, value in list(_drafts.items()):
                     if time.monotonic() - value['created'] > 600:
@@ -578,7 +597,9 @@ def _operation(operation, cancel, payload=None):
             loaded = _load_source(_cfg_path(args['name']), cancel, revision=True)
             return {'name': args['name'], **loaded, 'param_status': {}, 'override_configs': {}}
         if operation == 'bt9_save':
-            source, _ = _native(body.get('config', body), cancel)
+            document = body.get('config', body)
+            source, _ = _native(document, cancel)
+            carry_comparison_reference(source, document)
             # base_dir is server-owned; persisted names never control arbitrary writes.
             source['backtest']['base_dir'] = str(_safe(_root('results'), _name(args['name'])))
             with _LOCK, _storage_lock():
@@ -641,9 +662,29 @@ def _operation(operation, cancel, payload=None):
             if offset < 0 or not 0 <= limit <= 100:
                 raise HTTPException(422, 'Invalid result page')
             selected = paths[offset:offset + (limit or 100)]
-            return {'results': load_indexed_results('v9', selected, _summaries), 'pagination': {
+            items = load_indexed_results('v9', selected, _summaries)
+            for item in items:
+                try:
+                    reference = _result_reference(_result(item['path']))
+                except HTTPException:
+                    _log(SERVICE, 'PB9 comparison metadata is invalid; manual comparison remains available', level='WARNING')
+                    reference = None
+                    item['comparison_reference_error'] = 'Invalid PB8 comparison reference'
+                if reference:
+                    item['comparison_reference'] = reference
+            return {'results': items, 'pagination': {
                 'total': len(paths), 'offset': offset, 'limit': limit, 'returned': len(selected),
                 'has_more': offset + len(selected) < len(paths), 'next_offset': offset + len(selected)}}
+        if operation == 'bt9_compare_source':
+            directory = _result(args['path'])
+            reference = _result_reference(directory)
+            original = resolve_comparison_reference(reference)
+            from api import backtest_v8 as pb8
+            older = pb8._list_results([original / 'analysis.json'])
+            current = _summaries([directory / 'analysis.json'])
+            if len(older) != 1 or len(current) != 1:
+                raise HTTPException(404, 'Comparison result is unavailable')
+            return {'results': [older[0], current[0]]}
         if operation == 'bt9_analysis':
             return _read(_safe(_result(args['path']), 'analysis.json'), 8 * 1024 * 1024)
         if operation == 'bt9_price':
@@ -659,7 +700,11 @@ def _operation(operation, cancel, payload=None):
             original = _safe(directory, 'pbgui.source.json')
             if not original.exists():
                 original = _safe(directory, 'config.original.json')
-            return _read(original if original.exists() else _safe(directory, 'config.json'))
+            source = _read(original if original.exists() else _safe(directory, 'config.json'))
+            reference = _result_reference(directory)
+            if reference:
+                source['pbgui'] = {'comparison_reference': reference}
+            return source
         if operation == 'bt9_delete_result':
             with _LOCK, _storage_lock():
                 directory = _result(args['path'])
@@ -877,6 +922,12 @@ def image(path: str, filename: str, session: SessionToken = Depends(require_auth
     if candidate.suffix.lower() != '.png' or not candidate.is_file():
         raise HTTPException(404, 'PB9 result image not found')
     return FileResponse(candidate, media_type='image/png')
+
+
+@router.get('/results/compare-source')
+async def compare_source(path: str, request: Request, session: SessionToken = Depends(require_auth)):
+    """Resolve the reviewed PB8 source for the existing cross-version Compare view."""
+    return await _call(request,'compare_source',{'path':path})
 
 
 @router.get('/results/analysis')

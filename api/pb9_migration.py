@@ -24,7 +24,7 @@ _reviews = {}
 _METADATA = {'pbgui', '_raw', '_raw_effective', '_transform_log', '_coins_sources', '_original_backtest_config'}
 
 
-def _read(path, root):
+def _read(path, root, *, decode=True, limit=_LIMIT):
     """Read bounded JSON through no-follow descriptors for every path component."""
     descriptors = []
     try:
@@ -40,13 +40,15 @@ def _read(path, root):
         if not stat.S_ISREG(os.fstat(descriptor).st_mode):
             raise ValueError('not regular')
         raw = bytearray()
-        while len(raw) <= _LIMIT:
-            chunk = os.read(descriptor, min(65536, _LIMIT + 1 - len(raw)))
+        while len(raw) <= limit:
+            chunk = os.read(descriptor, min(65536, limit + 1 - len(raw)))
             if not chunk:
                 break
             raw.extend(chunk)
-        if len(raw) > _LIMIT:
-            raise HTTPException(413, 'PB8 migration source exceeds 1 MiB')
+        if len(raw) > limit:
+            raise HTTPException(413, 'PB8 migration file exceeds its size limit')
+        if not decode:
+            return bytes(raw)
         value = json.loads(raw, parse_constant=lambda _: (_ for _ in ()).throw(ValueError('nonfinite')))
         return value, bytes(raw)
     except HTTPException:
@@ -133,6 +135,11 @@ def preview(body, owner, paths, cancel):
     if cancel.is_set():
         from pb9_config import PB9ConfigError
         raise PB9ConfigError('helper_cancelled')
+    reference = None
+    try:
+        reference = make_comparison_reference(body, fingerprint)
+    except HTTPException:
+        proposal['report'].setdefault('warnings', []).append('The PB8 comparison reference could not be captured; use manual Compare for this migration.')
     token = str(uuid.uuid4())
     with _LOCK:
         for key, item in list(_reviews.items()):
@@ -145,7 +152,8 @@ def preview(body, owner, paths, cancel):
             raise HTTPException(429, 'Migration review capacity is busy; try again later')
         _reviews[token] = {'created': time.monotonic(), 'owner': owner, 'selection': copy.deepcopy(body),
                           'fingerprint': fingerprint, 'name': name, 'config': proposal['config'],
-                          'report': proposal['report'], 'source': copy.deepcopy(native['source'])}
+                          'report': proposal['report'], 'source': copy.deepcopy(native['source']),
+                          'comparison_reference': reference}
     return {'status': 'ready', 'review_id': token, 'suggested_name': name, 'report': proposal['report']}
 
 
@@ -162,6 +170,8 @@ def reviewed(body, owner, runtime):
         raise HTTPException(409, 'PB8 source changed; create a new migration preview')
     if any(item['source'].get(key) != runtime.get(key) for key in ('commit', 'config_schema', 'package_version')):
         raise HTTPException(409, 'PB9 converter changed; create a new migration preview')
+    if item.get('comparison_reference'):
+        resolve_comparison_reference(item['comparison_reference'])
     return item
 
 
@@ -169,3 +179,57 @@ def shutdown():
     """Release API-owned review memory deterministically."""
     with _LOCK:
         _reviews.clear()
+
+
+def validate_comparison_reference(value):
+    """Validate persisted non-secret navigation metadata before any source lookup."""
+    if value is None:
+        return None
+    keys={'version','path','config_fingerprint','analysis_sha256'}
+    if (not isinstance(value,dict) or set(value)!=keys or value.get('version')!='v8'
+            or not isinstance(value.get('path'),str) or not 0<len(value['path'])<=4096
+            or not Path(value['path']).is_absolute() or '..' in Path(value['path']).parts
+            or '\\' in value['path'] or any(ord(char)<32 or ord(char)==127 for char in value['path'])
+            or any(not isinstance(value.get(key),str) or not re.fullmatch('[0-9a-f]{64}',value[key])
+                   for key in ('config_fingerprint','analysis_sha256'))):
+        raise HTTPException(422,'Invalid PB8 comparison reference')
+    return copy.deepcopy(value)
+
+
+def config_comparison_reference(config):
+    """Keep comparison metadata out of native Passivbot config validation."""
+    gui=config.get('pbgui') if isinstance(config,dict) else None
+    return validate_comparison_reference(gui.get('comparison_reference')) if isinstance(gui,dict) else None
+
+
+def carry_comparison_reference(source, document):
+    """Preserve only the reviewed PBGui reference while native parameters stay unchanged."""
+    reference=config_comparison_reference(document)
+    if reference:
+        source['pbgui']={'comparison_reference':reference}
+    return source
+
+
+def make_comparison_reference(selection, fingerprint):
+    """Bind a migration to its exact local PB8 result, never to a config name guess."""
+    if selection.get('source_type')!='result':
+        return None
+    from api import backtest_v8 as pb8
+    directory=pb8._resolve_result_dir(selection['source'],allow_archives=False,allow_legacy=False)
+    raw=_read(directory/'analysis.json',pb8._results_root(),decode=False,limit=8*1024*1024)
+    return {'version':'v8','path':str(directory),'config_fingerprint':fingerprint,
+            'analysis_sha256':hashlib.sha256(raw).hexdigest()}
+
+
+def resolve_comparison_reference(value):
+    """Reject missing/replaced source results instead of silently matching another run."""
+    reference=validate_comparison_reference(value)
+    if not reference:
+        raise HTTPException(404,'This PB9 result has no PB8 source reference; select results with Compare')
+    selection={'source_type':'result','source':reference['path']}
+    _,fingerprint,_=source_snapshot(selection)
+    current=make_comparison_reference(selection,fingerprint)
+    if current!=reference:
+        raise HTTPException(409,'The PB8 reference result changed; use manual Compare to select a reference')
+    from api import backtest_v8 as pb8
+    return pb8._resolve_result_dir(reference['path'],allow_archives=False,allow_legacy=False)

@@ -80,6 +80,8 @@ def publish_result_source(config_path: Path) -> None:
             raise RuntimeError('PB9 result source publication must not follow symbolic links')
         atomic_write_private_text(directory / 'pbgui.source.json', raw.decode('utf-8'))
         evidence = {key: record[key] for key in ('runtime', 'schema', 'commit', 'package_version', 'snapshot_sha256', 'filename')}
+        if isinstance(record.get('comparison_reference'), dict):
+            evidence['comparison_reference'] = record['comparison_reference']
         atomic_write_private_text(directory / 'pbgui.provenance.json', json.dumps(evidence, indent=4) + '\n')
 
 

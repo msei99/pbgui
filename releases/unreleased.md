@@ -2,6 +2,15 @@
 
 ## Development
 
+- Extend the existing cross-version Backtest Compare view to PB9, with PB7/PB8/
+  PB9 result selection, version-owned equity adapters and restored comparison
+  state after reload. Retain an exact PB8 result reference for new native
+  migrations through save, queue and result provenance, including after queue
+  cleanup. Open the existing chart directly from that reference, reject changed
+  source results, and leave older unlinked runs manually comparable. Keep GUI
+  references out of native runtime configs and isolate malformed metadata from
+  the result list.
+
 - Restore PB9 result-chart close prices using the shared PB7/PB8 read-only
   PBGui MarketData price reader. Add the missing authenticated native endpoint
   and split combined exchange labels into individual venue choices, including

@@ -8,8 +8,8 @@
 <script src="/app/plotly.min.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=13"></script>
-<script src="/app/js/backtest_v9_editor.js?v=6"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=14"></script>
+<script src="/app/js/backtest_v9_editor.js?v=9"></script>
 <script src="/app/js/backtest_v9_migration.js?v=1" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
@@ -921,7 +921,7 @@ textarea.json-invalid:focus {
       <div id="results-fixed-top" style="background:var(--bg);padding-bottom:var(--sp-sm);border-bottom:2px solid var(--border);box-shadow:0 4px 12px rgba(0,0,0,.6);margin-bottom:var(--sp-md)">
         <div id="results-toolbar" style="display:flex;gap:var(--sp-sm);align-items:center;margin-bottom:var(--sp-md);flex-wrap:wrap;padding-top:var(--sp-sm)">
           <label style="font-size:var(--fs-sm);color:var(--text-dim)">Version:</label>
-          <select id="results-version-filter" class="sb-input" style="max-width:100px" onchange="loadResults()">
+          <select id="results-version-filter" class="sb-input" style="max-width:100px" onchange="changeResultsVersion()">
             <option value="v7">PBv7</option><option value="v8">PBv8</option><option value="both">Both</option>
           </select>
           <label style="font-size:var(--fs-sm);color:var(--text-dim)">Config:</label>
@@ -2934,6 +2934,7 @@ function initializeBacktestLoopReturn() {
 }
 
 function hasBacktestResultArrival(url) {
+  if(backtestEditorAdapter.metadataDriven)return !!url.searchParams.get('compare_source') || url.searchParams.get('panel')==='results';
   if(!backtestEditorAdapter.isV8||url.searchParams.get('panel')!=='results'||url.hash&&url.hash!=='#results')return false;
   return !!url.searchParams.get('result_filter')||!!loopEvaluationSelection(url);
 }
@@ -2941,6 +2942,9 @@ function hasBacktestResultArrival(url) {
 async function initializeBacktestPageFromUrl(arrivalUrl) {
   initializeBacktestLoopReturn();
   var url = arrivalUrl || new URL(window.location.href);
+  if (backtestEditorAdapter.metadataDriven && url.searchParams.get('compare_source')) {
+    selectPanel('results',{deferResultsLoad:true});await openSourceComparison(url.searchParams.get('compare_source'));return;
+  }
   if (backtestEditorAdapter.metadataDriven && url.searchParams.get('panel') === 'results') {
     selectPanel('results', {deferResultsLoad:true});await loadResults(url.searchParams.get('result_filter') || '');return;
   }
@@ -6294,6 +6298,17 @@ function closeLogPanel() {
 /* ════════════════════════════════════════════════
    RESULTS VIEW
    ════════════════════════════════════════════════ */
+function changeResultsVersion() {
+  if (backtestEditorAdapter.metadataDriven) {
+    var url=new URL(window.location.href);url.searchParams.delete('compare_source');url.searchParams.delete('result_compare');
+    history.replaceState(null,'',url);
+    _selectedResultPaths.clear();
+    var compareArea=document.getElementById('compare-chart-area');compareArea.style.display='none';compareArea.textContent='';
+    window.PBGuiBacktestV9.rememberComparison([],false);
+  }
+  return loadResults();
+}
+
 function selectedResultsVersion() {
   var versionFilter = document.getElementById('results-version-filter');
   return (versionFilter && versionFilter.value) || backtestEditorAdapter.version;
@@ -6336,11 +6351,16 @@ function _applyResultsData(resultItems, filterName) {
 
 function loadResults(filterName, loadOptions) {
   loadOptions = loadOptions || {};
+  var sourceUrl=backtestEditorAdapter.metadataDriven ? new URL(window.location.href) : null;
+  if(backtestEditorAdapter.metadataDriven && sourceUrl.searchParams.get('compare_source')) {
+    if(typeof filterName!=='string')return openSourceComparison(sourceUrl.searchParams.get('compare_source'));
+    sourceUrl.searchParams.delete('compare_source');sourceUrl.searchParams.delete('result_compare');history.replaceState(null,'',sourceUrl);
+  }
   var evaluation=loopEvaluationSelection();
   if(evaluation)return loadLoopEvaluationResults(evaluation,typeof filterName==='string'?filterName:undefined,loadOptions);
   var selectedFilter = typeof filterName === 'string' ? filterName : (_pendingResultFilter ||
     (document.getElementById('results-config-filter') || {}).value || '');
-  if (selectedResultsVersion() === 'v9' && currentPanel === 'results') {
+  if (backtestEditorAdapter.metadataDriven && currentPanel === 'results') {
     var destination = new URL(window.location.href);
     if (selectedFilter) destination.searchParams.set('result_filter', selectedFilter);else destination.searchParams.delete('result_filter');
     history.replaceState(null, '', destination);
@@ -6354,7 +6374,7 @@ function loadResults(filterName, loadOptions) {
   var resultsStarted=performance.now();
   var loadGeneration = ++_resultsLoadGeneration;
   var selectedVersion = selectedResultsVersion();
-  var versions = selectedVersion === 'both' ? ['v7', 'v8'] : [selectedVersion];
+  var versions = selectedVersion === 'both' ? (backtestEditorAdapter.metadataDriven ? ['v7','v8','v9'] : ['v7','v8']) : [selectedVersion];
   if (typeof loadOptions.keepVisible === 'undefined') {
     loadOptions.keepVisible = resultsForSelectedVersion(results).some(function(result) {
       return !selectedFilter || result.config_name === selectedFilter;
@@ -6374,7 +6394,7 @@ function loadResults(filterName, loadOptions) {
   }
 
   function renderLoadedPages() {
-    var applied = _applyResultsData(selectedVersion === 'v9' ? resultsByVersion.v9 : resultsByVersion.v7.concat(resultsByVersion.v8), selectedFilter);
+    var applied = _applyResultsData(versions.reduce(function(all,version){return all.concat(resultsByVersion[version] || []);},[]), selectedFilter);
     displayedResultPage = true;
     var loaded = versions.reduce(function(total, version) { return total + progress[version].loaded; }, 0);
     var totalsKnown = versions.every(function(version) { return Number.isFinite(progress[version].total); });
@@ -6441,6 +6461,7 @@ function loadResults(filterName, loadOptions) {
     if (loadGeneration !== _resultsLoadGeneration) return results;
     backtestTiming('filtered-results',resultsStarted);backtestTiming('document-results',0);
     var applied = results;
+    if(backtestEditorAdapter.metadataDriven)window.PBGuiBacktestV9.restoreComparison();
     var selectedItems = resultsForSelectedVersion(applied);
     if (currentPanel === 'results' && selectedItems.length === 0 && _resultsEmptyRetryCount < 3) {
       _resultsEmptyRetryCount += 1;
@@ -6724,6 +6745,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
         '\x3Cbutton class="icon-btn" data-action="plot" data-idx="' + i + '" onclick="toggleResultAction(this)" title="' + String(r.backtest_version || backtestEditorAdapter.version).toUpperCase() + ' plot images">🖼\x3C/button>' +
         '\x3Cbutton class="icon-btn" data-action="fills" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Fills plots">📋\x3C/button>' +
         convertAction +
+        (r.backtest_version === 'v9' && r.comparison_reference ? '<button class="icon-btn" onclick="compareSourceResult(' + i + ')" title="Compare with PB8 source">↔8</button>' : '') +
         (backtestEditorAdapter.isV8 && r.backtest_version === 'v8' ? '<button class="icon-btn" data-migrate-pb9="result" data-result-index="' + i + '" title="Open as PB9 Backtest">V9</button>' : '') +
       '\x3C/td>' +
       '\x3C/tr>';
@@ -7027,6 +7049,7 @@ function setResultRowSelection(row, selected) {
     }
   });
   document.addEventListener('mouseup', function() {
+    var changedSelection=!!_rowDragStart;
     if (_rowDragStart && !_rowDragSelecting) {
       setResultRowSelection(_rowDragStart.tr, !_rowDragStart.tr.classList.contains('selected'));
     }
@@ -7034,6 +7057,7 @@ function setResultRowSelection(row, selected) {
     _rowDragSelecting = false;
     _rowDragMode = null;
     stopRowSelectAutoScroll();
+    if(changedSelection && backtestEditorAdapter.metadataDriven)window.PBGuiBacktestV9.rememberResults();
   });
 })();
 
@@ -9207,6 +9231,37 @@ function compareSelectedQueue() {
   }).catch(function() {});
 }
 
+async function compareSourceResult(index) {
+  var result=(_activeResultsCtx.data || [])[index];
+  if(!result || result.backtest_version!=='v9')return;
+  var url=new URL(window.location.href);url.searchParams.set('compare_source',result.path);
+  url.searchParams.set('result_compare','1');url.searchParams.set('panel','results');url.searchParams.delete('result_filter');
+  history.replaceState(null,'',url);
+  selectPanel('results',{deferResultsLoad:true});
+  return openSourceComparison(result.path);
+}
+
+async function openSourceComparison(path) {
+  var mine=++_resultsLoadGeneration;
+  function current(){return mine===_resultsLoadGeneration && currentPanel==='results' && new URL(window.location.href).searchParams.get('compare_source')===path;}
+  try {
+    var data=await apiFetchFrom(backtestApiBase('v9'),'/results/compare-source?path='+encodeURIComponent(path));
+    if(!current())return;
+    var pair=data.results;
+    if(!Array.isArray(pair)||pair.length!==2)throw new Error('The comparison pair is unavailable');
+    document.getElementById('results-version-filter').value='both';_clearResultsFilters();
+    var selected=pair.map(function(item){return item.path;});
+    _selectedResultPaths=new Set(selected);
+    var visible=new URL(window.location.href).searchParams.get('result_compare')==='1';
+    window.PBGuiBacktestV9.rememberComparison(selected,visible,'both');
+    _applyResultsData(pair,'');
+    if(visible)await _compareResultPaths(selected,pair,document.getElementById('compare-chart-area'),'compare-chart-div',current);
+  } catch(error) {
+    if(!current() || error.name==='AbortError')return;
+    var area=document.getElementById('compare-chart-area');area.style.display='';area.textContent='Comparison unavailable: '+error.message;
+  }
+}
+
 function compareSelected() {
   var compareEl = document.getElementById('compare-chart-area');
 
@@ -9214,7 +9269,8 @@ function compareSelected() {
   if (compareEl.style.display !== 'none' && compareEl.innerHTML !== '') {
     compareEl.style.display = 'none';
     compareEl.innerHTML = '';
-    if (backtestEditorAdapter.isV8) {
+    if (backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven) {
+      if(backtestEditorAdapter.metadataDriven)window.PBGuiBacktestV9.rememberComparison(getSelectedResults(),false);
       var url = new URL(window.location.href);
       if (url.searchParams.has('result_compare')) { url.searchParams.delete('result_compare'); history.replaceState(null, '', url); }
     }
@@ -9223,6 +9279,7 @@ function compareSelected() {
 
   var sel = getSelectedResults();
   if (sel.length < 2) { toast('Select at least 2 results to compare', 'err'); return; }
+  if(backtestEditorAdapter.metadataDriven)window.PBGuiBacktestV9.rememberComparison(sel,true);
   _compareResultPaths(sel, results, compareEl, 'compare-chart-div');
 }
 
@@ -11494,7 +11551,7 @@ backtestShell = window.PBGuiBacktestShell.upgradeLegacy({
     'selectPanel:legacy': function() { selectPanel('legacy'); },
     filterConfigs: renderConfigs,
     filterResults: changeResultsConfigFilter,
-    changeResultsVersion: function() { loadResults(''); }
+    changeResultsVersion: function() { changeResultsVersion(); }
   }
 });
 document.getElementById('main-content').prepend(loopReturnToolbar);

@@ -303,3 +303,74 @@ def test_combined_native_result_shows_individual_venues_and_close_price(backtest
     expect(page.locator('#price-status-0')).to_contain_text('full chart coverage')
     assert set(requested)=={'bybit','hyperliquid'}
     assert backtest.unexpected==[] and backtest.errors==[]
+
+
+def _comparison_fixture(backtest, *, linked=True):
+    """Supply version-owned summaries/CSV to the unchanged production Compare renderer."""
+    page=backtest.page;calls=[]
+    older={'path':'/fixture/pb8/combined/source','backtest_version':'v8','config_name':'original',
+           'result_name':'source','exchange_dir':'combined','exchanges':['bybit'],'coins':['HYPE'],
+           'start_date':'2025-01-01','end_date':'2025-01-02'}
+    newer={'path':'/fixture/pb9/combined/converted','backtest_version':'v9','config_name':'converted',
+           'result_name':'converted','exchange_dir':'bybit','exchanges':['bybit'],'coins':['HYPE'],
+           'start_date':'2025-01-01','end_date':'2025-01-02'}
+    if linked:newer['comparison_reference']={'version':'v8','path':older['path']}
+    def respond(route):
+        """Only explicit read endpoints are allowed; no backtest or persistence action runs."""
+        url=urlparse(route.request.url);path=url.path;calls.append(path)
+        if path.endswith('/results/compare-source'):route.fulfill(json={'results':[older,newer]})
+        elif path.endswith('/results'):
+            version=path.split('/')[2].removeprefix('backtest-')
+            route.fulfill(json={'results':{'v7':[],'v8':[older],'v9':[newer]}[version],
+                                'pagination':{'has_more':False,'total':0 if version=='v7' else 1}})
+        elif path.endswith('/results/equity'):
+            native='/backtest-v9/' in path
+            csv=('timestamp,usd_total_balance,usd_total_equity\n2025-01-01T00:00:00Z,1000,1000\n2025-01-02T00:00:00Z,1200,1300\n' if native else
+                 'minute,balance,equity\n0,1000,1000\n1440,1100,1150\n')
+            route.fulfill(content_type='text/csv',body=csv)
+        else:route.fulfill(json={})
+    for version in ['v7','v8','v9']:page.route('**/api/backtest-'+version+'/results**',respond)
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#sidebar-editor button[onclick="closeEditor()"]').click()
+    page.locator('#sidebar [data-panel="results"]').click()
+    return page,calls,older,newer
+
+
+def test_source_reference_opens_existing_compare_and_survives_reload(backtest):
+    """One row action uses the existing four-trace chart and each version's own CSV adapter."""
+    page,calls,older,newer=_comparison_fixture(backtest)
+    page.locator('#results-filter').fill('converted')
+    page.locator('#results-list tr[data-path="'+newer['path']+'"]').click()
+    page.locator('button[title="Compare with PB8 source"]').click()
+    expect(page.locator('#compare-chart-div .legendtext')).to_have_count(4)
+    expect(page.locator('#results-list tr.selected')).to_have_count(2)
+    assert '/api/backtest-v8/results/equity' in calls and '/api/backtest-v9/results/equity' in calls
+    assert page.evaluate('Date.parse(document.getElementById("compare-chart-div").data[0].x[0])')==page.evaluate('Date.parse(document.getElementById("compare-chart-div").data[2].x[0])')
+    assert 'compare_source=' in page.url
+    page.reload()
+    expect(page.locator('#compare-chart-div .legendtext')).to_have_count(4)
+    expect(page.locator('#results-list tr.selected')).to_have_count(2)
+    page.locator('#sidebar button[onclick="compareSelected()"]').click()
+    expect(page.locator('#compare-chart-area')).not_to_be_visible()
+    page.reload()
+    expect(page.locator('#results-list tr.selected')).to_have_count(2)
+    assert page.locator('#compare-chart-div').count()==0
+    assert backtest.errors==[] and backtest.unexpected==[]
+
+
+def test_manual_compare_includes_existing_unlinked_pb8_and_pb9_results(backtest):
+    """Older PB9 runs remain comparable through the ordinary version selector and row selection."""
+    page,calls,older,newer=_comparison_fixture(backtest,linked=False)
+    page.locator('#results-version-filter').select_option('both')
+    expect(page.locator('#results-list tr[data-path]')).to_have_count(2)
+    page.locator('#results-list tr[data-path="'+older['path']+'"]').click()
+    page.locator('#results-list tr[data-path="'+newer['path']+'"]').click()
+    page.locator('#results-list th').nth(0).click()
+    expect(page.locator('#results-list tr.selected')).to_have_count(2)
+    page.locator('#sidebar button[onclick="compareSelected()"]').click()
+    expect(page.locator('#compare-chart-div .legendtext')).to_have_count(4)
+    assert '/api/backtest-v7/results' in calls
+    page.reload()
+    expect(page.locator('#results-version-filter')).to_have_value('both')
+    expect(page.locator('#compare-chart-div .legendtext')).to_have_count(4)
+    assert backtest.errors==[] and backtest.unexpected==[]
