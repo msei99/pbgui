@@ -173,3 +173,76 @@ def test_native_equity_display_keeps_missing_balance_as_a_gap():
     '''
     result=run_javascript(['-e',script],cwd=ROOT,capture_output=True,text=True,check=False)
     assert result.returncode==0,result.stderr or result.stdout
+
+
+def _open_pb8_conversion(backtest, *, panel='configs', accept_status=200):
+    """Keep production PB8/PB9 pages/assets; replace only isolated API responses."""
+    page = backtest.page
+    backtest.migration_calls = []
+    report = {'mode':'best_effort','source_version':'v8.6.0','target_version':'v9.0.0',
+              'changes':[{'path':'bot.global.risk','reason':'<img src=x onerror=alert(1)>'}],
+              'warnings':['Review inferred risk memory']}
+    def respond(route):
+        """Record the two-phase handoff while exposing no real account or runtime data."""
+        path=urlparse(route.request.url).path
+        if path.endswith('/main_page'):
+            source=(ROOT/'frontend/v7_backtest.html').read_text()
+            values={'API_BASE':'/api/backtest-v8','WS_BASE':'ws://backtest9.test','VERSION':'test','SERIAL':'1',
+                    'MASTER_NAME':'fixture','NAV_HASH':'test','BASE_PREFIX':'','BACKTEST_VERSION':'v8',
+                    'BACKTEST_LABEL':'V8','BACKTEST_SUBTITLE':'PBv8 BACKTEST','BACKTEST_NAV_CURRENT':'v8_backtest'}
+            for key,value in values.items():source=source.replace('"%%'+key+'%%"',json.dumps(value)).replace('%%'+key+'%%',value)
+            route.fulfill(content_type='text/html',body=source)
+        elif path.endswith('/configs'):
+            route.fulfill(json={'configs':[{'name':'example','exchanges':['binance'],'strategy':'trailing_martingale',
+                     'coins':1,'twe_long':1,'twe_short':0,'results':1,'modified':1}]})
+        elif path.endswith('/results'):
+            route.fulfill(json={'results':[{'path':'example/binance/run','config_name':'example',
+                     'result_name':'run','backtest_version':'v8','exchange_dir':'binance','strategy':'trailing_martingale'}],
+                     'pagination':{'has_more':False,'total':1}})
+        else:route.fulfill(json={'queue':[],'items':[],'cpu':1,'autostart':False,'exchange_options':['binance']})
+    def migrate(route):
+        """An accepted proposal returns an owned draft, never saved data or queue work."""
+        kind=urlparse(route.request.url).path.rsplit('/',1)[1]
+        backtest.migration_calls.append((kind,route.request.post_data_json))
+        if kind=='preview':route.fulfill(json={'status':'ready','review_id':'review','suggested_name':'example_v9','report':report})
+        else:route.fulfill(status=accept_status,json={'draft_id':'migrated','suggested_name':'example_v9'} if accept_status==200 else {'detail':'PB8 source changed; create a new migration preview'})
+    page.route('**/api/backtest-v8/**',respond)
+    page.route('**/api/backtest-v9/migrate-v8/**',migrate)
+    page.route('**/api/backtest-v9/optimize-draft/migrated',lambda route:route.fulfill(json={'config':backtest.config,'migration_report':report}))
+    page.goto('http://backtest9.test/api/backtest-v8/main_page#'+panel)
+    return page
+
+
+def test_pb8_conversion_cancel_and_adopt_to_native_draft(backtest):
+    """Review is explicit, inert text; adoption/reload opens a native unsaved editor."""
+    page=_open_pb8_conversion(backtest)
+    button=page.locator('[data-migrate-pb9="config"]')
+    button.click()
+    expect(page.locator('#pbgui-dialog-title')).to_have_text('Review PB8 → PB9 migration')
+    expect(page.locator('#pbgui-dialog-detail')).to_contain_text('Review inferred risk memory')
+    assert page.locator('#pbgui-dialog-detail img').count()==0
+    page.locator('#pbgui-dialog-cancel').click()
+    assert [kind for kind,_ in backtest.migration_calls]==['preview']
+    assert '/backtest-v8/' in page.url
+    button.click();page.locator('#pbgui-dialog-accept').click()
+    expect(page.locator('#cfg-name')).to_have_value('example_v9')
+    expect(page.locator('#bt9-migration-report')).to_contain_text('Review inferred risk memory')
+    assert [kind for kind,_ in backtest.migration_calls]==['preview','preview','accept']
+    assert backtest.saved==backtest.queued==[]
+    page.reload()
+    expect(page.locator('#cfg-name')).to_have_value('example_v9')
+    expect(page.locator('#bt9-migration-report')).to_contain_text('best_effort')
+    assert page.locator('#bt9-migration-report img').count()==0
+    assert backtest.errors==[]
+
+
+def test_pb8_result_conversion_and_stale_source_error(backtest):
+    """Result actions send the original result path and stay in context on conflict."""
+    page=_open_pb8_conversion(backtest,panel='results',accept_status=409)
+    page.locator('[data-migrate-pb9="result"]').click()
+    page.locator('#pbgui-dialog-accept').click()
+    expect(page.locator('#toast')).to_contain_text('PB8 source changed')
+    assert backtest.migration_calls[0]==('preview',{'source_type':'result','source':'example/binance/run'})
+    assert '/backtest-v8/' in page.url and '#results' in page.url
+    assert backtest.saved==backtest.queued==[]
+    assert backtest.errors==[]

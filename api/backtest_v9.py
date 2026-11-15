@@ -500,6 +500,24 @@ def _operation(operation, cancel, payload=None):
     try:
         if cancel.is_set():
             raise PB9ConfigError('helper_cancelled')
+        if operation == 'bt9_migrate_preview':
+            from api.pb9_migration import preview
+            return preview(body, args['owner'], _paths(), cancel)
+        if operation == 'bt9_migrate_accept':
+            from api.pb9_migration import reviewed
+            status, _ = _runtime(cancel)
+            review = reviewed(body, args['owner'], status)
+            source, _ = _native(review['config'], cancel)
+            with _LOCK:
+                for key, value in list(_drafts.items()):
+                    if time.monotonic() - value['created'] > 600:
+                        del _drafts[key]
+                if len(_drafts) >= 100:
+                    del _drafts[next(iter(_drafts))]
+                token = str(uuid.uuid4())
+                _drafts[token] = {'created': time.monotonic(), 'owner': args['owner'], 'config': source,
+                                  'migration_report': review['report']}
+            return {'draft_id': token, 'suggested_name': review['name']}
         if operation == 'bt9_metadata':
             paths = _paths()
             return get_pb9_editor_metadata(paths['pb9dir'], paths['pb9venv'],
@@ -529,7 +547,8 @@ def _operation(operation, cancel, payload=None):
                 value = _drafts.get(args['id'])
                 if not value or value['owner'] != args['owner'] or time.monotonic() - value['created'] > 600:
                     raise HTTPException(404, 'Draft expired or not owned by this user')
-                return {'config': copy.deepcopy(value['config']), 'param_status': {}, 'override_configs': {}}
+                return {'config': copy.deepcopy(value['config']), 'param_status': {}, 'override_configs': {},
+                        **({'migration_report': copy.deepcopy(value['migration_report'])} if 'migration_report' in value else {})}
         if operation == 'bt9_configs':
             results = []
             if _root('configs').is_dir():
@@ -702,6 +721,18 @@ async def metadata(request: Request, session: SessionToken = Depends(require_aut
 async def prepare(request: Request, session: SessionToken = Depends(require_auth)):
     """Check an imported native PB9 document without migrating it."""
     return await _call(request, 'prepare', body=True)
+
+
+@router.post('/migrate-v8/preview')
+async def migrate_v8_preview(request: Request, session: SessionToken = Depends(require_auth)):
+    """Review the official conversion of a saved PB8 config or local result."""
+    return await _call(request, 'migrate_preview', {'owner': session.user_id}, body=True)
+
+
+@router.post('/migrate-v8/accept')
+async def migrate_v8_accept(request: Request, session: SessionToken = Depends(require_auth)):
+    """Adopt a reviewed proposal as a private unsaved PB9 backtest draft."""
+    return await _call(request, 'migrate_accept', {'owner': session.user_id}, body=True)
 
 
 @router.post('/optimize-draft')
@@ -887,3 +918,5 @@ async def shutdown():
     """Release only API-owned batch/controller state; native jobs remain independent."""
     with _LOCK:
         _drafts.clear()
+    from api.pb9_migration import shutdown as clear_reviews
+    clear_reviews()

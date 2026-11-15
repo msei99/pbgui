@@ -2,6 +2,14 @@
 
 ## Development
 
+- Open saved PB8 backtest configs and local results as native PB9 drafts using
+  the official installed Passivbot v8-to-v9 converter. Review the complete
+  best-effort changes and warnings before adoption; retain the report in the
+  native editor and reject source/converter changes during review. Snapshot
+  local JSON overrides safely, isolate conversion, preserve PB8 originals and
+  never automatically save or start a job. Align the parent PB9 backtest
+  validation gate with its helper's inline coin-override support.
+
 - Add manual local **PBv9 → Backtest** on the shared PB8 Backtest shell, with
   current Run-editor drafts, native typed fields, sparse config round trips,
   revision-protected saves and immutable queue snapshots. Isolate v9 configs,

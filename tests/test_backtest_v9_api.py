@@ -230,3 +230,121 @@ def test_non_monotonic_native_clock_is_rejected(native):
     with pytest.raises(HTTPException) as error:
         operation('equity',path='bad')
     assert error.value.status_code==422
+
+
+@pytest.fixture
+def migration(native, monkeypatch):
+    """Use real PB8 path/snapshot rules and an isolated synthetic native proposal."""
+    from api import pb9_migration as migration, backtest_v8 as pb8
+    source, status, root = native
+    monkeypatch.setattr(pb8, 'PBGDIR', root)
+    monkeypatch.setattr(pb8, '_results_root', lambda:root/'results8')
+    config = {'config_version':'v8.6.0','pbgui':{'note':'source untouched'},
+              'backtest':{'start_date':'2023-01-01','end_date':'2023-01-02'}}
+    path = root/'data/bt_v8/example/backtest.json'; path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(config))
+    calls = []
+    def convert(bundle, *args, **kwargs):
+        """Preserve inputs for inspection without invoking any installed runtime."""
+        calls.append(copy.deepcopy(bundle))
+        return {'source':status, 'migration':{'status':'ready','config':copy.deepcopy(source),
+                'report':{'mode':'best_effort','changes':[{'reason':'review'}],'warnings':['Risk memory changes']}}}
+    monkeypatch.setattr(migration,'migrate_pb8_config_to_pb9',convert)
+    migration.shutdown()
+    yield migration, path, config, calls
+    migration.shutdown()
+
+
+def test_migration_review_to_unsaved_draft_leaves_pb8_and_queue_unchanged(native, migration):
+    """Preview/adoption never persist a config, enqueue a job or edit the PB8 source."""
+    service,path,config,calls = migration
+    raw = path.read_bytes()
+    review = operation('migrate_preview',{'source_type':'config','source':'example'},owner='one')
+    assert 'pbgui' not in calls[0]['config']
+    assert review['report']['warnings']
+    with pytest.raises(HTTPException) as wrong_owner:
+        operation('migrate_accept',{'review_id':review['review_id']},owner='two')
+    assert wrong_owner.value.status_code == 404
+    accepted = operation('migrate_accept',{'review_id':review['review_id']},owner='one')
+    assert accepted['suggested_name'] == 'example_v9'
+    draft = operation('draft_get',id=accepted['draft_id'],owner='one')
+    assert draft['config']['config_version'] == 'v9.0.0'
+    assert draft['migration_report'] == review['report']
+    assert path.read_bytes() == raw
+    assert not bt._root('configs').exists()
+    assert not bt._root('queue').exists()
+
+
+@pytest.mark.parametrize('changed', ['source','override','converter','expired'])
+def test_migration_rejects_changes_after_review(native,migration,changed):
+    """Source/override edits, converter changes and expiry cannot reuse stale proposals."""
+    service,path,config,_ = migration
+    config['coin_overrides']={'BTC':{'override_config_path':'BTC.json'}}
+    path.write_text(json.dumps(config)); override=path.parent/'BTC.json';override.write_text('{}')
+    preview=operation('migrate_preview',{'source_type':'config','source':'example'},owner='one')
+    if changed == 'source': path.write_text(json.dumps({**config,'note':'edited'}))
+    elif changed == 'override': override.write_text('{"bot": {}}')
+    elif changed == 'converter': native[1]['commit']='b'*40
+    else: service._reviews[preview['review_id']]['created'] -= 601
+    with pytest.raises(HTTPException) as error:
+        operation('migrate_accept',{'review_id':preview['review_id']},owner='one')
+    assert error.value.status_code == (404 if changed == 'expired' else 409)
+
+
+def test_migration_result_prefers_authored_original_and_snapshots_local_overrides(native,migration):
+    """A result conversion uses its original config instead of runtime-expanded output."""
+    service,_,config,calls=migration
+    result=native[2]/'results8/example/binance/run'; result.mkdir(parents=True)
+    (result/'analysis.json').write_text('{}')
+    (result/'config.json').write_text('{"config_version":"v9.0.0"}')
+    config['coin_overrides']={'BTC':{'override_config_path':'BTC.json'}}
+    (result/'config.original.json').write_text(json.dumps(config))
+    (result/'BTC.json').write_text('{"bot":{"long":{}}}')
+    response=operation('migrate_preview',{'source_type':'result','source':str(result)},owner='one')
+    assert response['status']=='ready'
+    assert calls[0]['config']['config_version']=='v8.6.0'
+    assert calls[0]['files']=={'BTC.json':{'bot':{'long':{}}}}
+
+
+@pytest.mark.parametrize('broken',['traversal','symlink','missing','unknown_schema','secret','oversized'])
+def test_migration_source_boundaries(native,migration,broken):
+    """Invalid source files fail before the native converter sees their contents."""
+    service,path,config,calls=migration
+    if broken in {'traversal','symlink','missing'}:
+        filename='../outside.json' if broken=='traversal' else 'BTC.json'
+        config['coin_overrides']={'BTC':{'override_config_path':filename}}
+        if broken=='symlink':
+            outside=native[2]/'outside.json'; outside.write_text('{}');(path.parent/filename).symlink_to(outside)
+    elif broken=='unknown_schema':config['config_version']='v8.2.0'
+    elif broken=='secret':config['live']={'api_key':'sensitive'}
+    path.write_text(json.dumps(config))
+    if broken=='oversized':path.write_bytes(b' '*(1024*1024+1))
+    with pytest.raises(HTTPException):
+        operation('migrate_preview',{'source_type':'config','source':'example'},owner='one')
+    assert calls==[]
+
+
+def test_migration_review_capacity_does_not_evict_other_owners(native,migration):
+    """One user's repeated previews cannot remove another user's accepted context."""
+    service,_,_,_=migration
+    previews={}
+    for index in range(20):
+        owner=str(index)
+        previews[owner]=operation('migrate_preview',{'source_type':'config','source':'example'},owner=owner)['review_id']
+    with pytest.raises(HTTPException) as busy:
+        operation('migrate_preview',{'source_type':'config','source':'example'},owner='new')
+    assert busy.value.status_code==429
+    assert set(previews.values())==set(service._reviews)
+    assert operation('migrate_accept',{'review_id':previews['0']},owner='0')['draft_id']
+
+
+def test_migration_rejects_deep_source_with_diagnostic(native,migration):
+    """Deep but parseable JSON produces an actionable 422 rather than recursion failure."""
+    _,path,config,_=migration
+    value={}
+    for _ in range(70):value={'nested':value}
+    config['nested']=value;path.write_text(json.dumps(config))
+    with pytest.raises(HTTPException) as error:
+        operation('migrate_preview',{'source_type':'config','source':'example'},owner='one')
+    assert error.value.status_code==422
+    assert '64 levels' in error.value.detail

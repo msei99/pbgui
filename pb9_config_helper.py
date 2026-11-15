@@ -6,6 +6,8 @@ from contextlib import redirect_stdout
 import importlib
 import json
 import math
+import os
+import tempfile
 from pathlib import Path
 import re
 import sys
@@ -178,16 +180,137 @@ def _editor_metadata(schema, src: Path) -> dict:
             "rust_module_file": str(rust_file)}
 
 
+
+def migration_file_references(config):
+    """Allow bounded JSON migration inputs without native file discovery outside staging."""
+    _require_json_value(config)
+    references = set()
+
+    def file_ref(value):
+        """Accept only visible JSON basenames owned by the selected PB8 bundle."""
+        if (not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_. -]{0,119}\.json", value)
+                or any(word in value.lower() for word in ("api-key", "api_key", "secret", "credential", "pbgui"))):
+            raise _HelperError("external_reference_rejected")
+        references.add(value)
+
+    def coins(value):
+        """Reject URLs and path-like coin identifiers before upstream path resolution."""
+        if value is None:
+            return
+        if isinstance(value, dict):
+            for item in value.values():
+                coins(item)
+        elif isinstance(value, list):
+            for item in value:
+                if not isinstance(item, str):
+                    raise _HelperError("invalid_config")
+                coins(item)
+        elif isinstance(value, str):
+            if value.endswith('.json'):
+                file_ref(value)
+            elif value.rstrip('/.').lower().endswith(('.hjson', '.txt')) or any(ord(c) < 32 for c in value) or any(c in value for c in ('/', '\\', '~', ':')):
+                raise _HelperError("external_reference_rejected")
+        else:
+            raise _HelperError("invalid_config")
+
+    def walk(node):
+        """Check all root, scenario and optimizer contexts, including dotted keys."""
+        if isinstance(node, list):
+            for value in node:
+                walk(value)
+        elif isinstance(node, dict):
+            for key, value in node.items():
+                leaf = key.split('.')[-1]
+                if leaf.lower() in {'password', 'secret', 'api_key', 'apikey', 'token', 'private_key', 'credentials'}:
+                    raise _HelperError("invalid_config")
+                if leaf == 'override_config_path' and value:
+                    file_ref(value)
+                elif leaf in {'approved_coins', 'ignored_coins'}:
+                    coins(value)
+                elif (leaf in {'coin_flags', 'coin_sources'} and value
+                      or leaf.endswith('_path') and value
+                      or leaf == 'organillo_csv' and value):
+                    raise _HelperError("external_reference_rejected")
+                walk(value)
+    walk(config)
+    return references
+
+
+def check_migration_input(envelope):
+    """Validate the complete bounded migration bundle before starting native code."""
+    if not isinstance(envelope, dict) or set(envelope) != {'config', 'files'}:
+        raise _HelperError('invalid_request')
+    config, files = envelope['config'], envelope['files']
+    if not isinstance(config, dict) or config.get('config_version') not in {'v8.0.0', 'v8.1.0', 'v8.6.0'}:
+        raise _HelperError('config_version_mismatch')
+    if not isinstance(files, dict) or len(files) > 32:
+        raise _HelperError('invalid_request')
+    required = migration_file_references(config)
+    for name, document in files.items():
+        # Check filenames even when a malicious caller supplies an unreferenced file.
+        migration_file_references({'override_config_path': name})
+        required.update(migration_file_references(document))
+    if required != set(files):
+        raise _HelperError('external_reference_rejected')
+    done = set()
+    def visit(name, ancestors):
+        """Reject recursive include graphs before upstream resolution."""
+        if name in ancestors:
+            raise _HelperError('external_reference_rejected')
+        if name in done:
+            return
+        for child in migration_file_references(files[name]):
+            visit(child, ancestors | {name})
+        done.add(name)
+    for name in migration_file_references(config):
+        visit(name, set())
+    if len(json.dumps(envelope, allow_nan=False).encode()) > MAX_VALIDATION_BYTES - 4096:
+        raise _HelperError('invalid_request')
+
+
+def _migrate_v8(envelope, src, schema_version):
+    """Run the official converter once in a private, disposable file context."""
+    check_migration_input(envelope)
+    converter = importlib.import_module('tools.migrate_config_v9')
+    module_file = _module_path(converter, src)
+    with tempfile.TemporaryDirectory(prefix='pbgui-v8-v9-') as directory:
+        root = Path(directory)
+        for name, document in envelope['files'].items():
+            target = root / name
+            target.write_text(json.dumps(document, allow_nan=False), encoding='utf-8')
+            target.chmod(0o600)
+        # Upstream resolves override paths relative to the source directory.
+        input_path = root / '__pbgui_migration_source__.json'
+        input_path.write_text(json.dumps(envelope['config']), encoding='utf-8')
+        input_path.chmod(0o600)
+        previous = Path.cwd()
+        try:
+            os.chdir(root)
+            try:
+                result = converter.migrate(envelope['config'], base_config_path=str(input_path),
+                                           best_effort=True, disabled_sides='preserve', bot_layout='preserve')
+                check_inline_config(result.config, schema_version, allow_inline_overrides=True)
+            except (ValueError, TypeError, KeyError, _HelperError) as exc:
+                message = ''.join(c if ord(c) >= 32 else ' ' for c in str(exc))
+                return {'status': 'blocked', 'message': message.replace(str(root), '[migration]')[:2000]}, module_file
+            report = {'source_version': envelope['config']['config_version'], 'target_version': schema_version,
+                      'mode': 'best_effort', 'changes': result.changes, 'warnings': list(result.warnings)}
+            _require_json_value(report)
+            return {'status': 'ready', 'config': result.config, 'report': report}, module_file
+        finally:
+            os.chdir(previous)
+
+
 def handle(request: dict) -> dict:
-    """Return templates or validate in-memory native configs, never save or migrate."""
+    """Return templates or validate in-memory native configs, never save user configs."""
     if not isinstance(request, dict) or not isinstance(request.get("operation"), str):
         raise _HelperError("invalid_request")
     required = {"operation", "pb9_dir", "config_schema", "package_version"}
-    if isinstance(request, dict) and request.get("operation") in {"validate", "validate_live", "validate_backtest"}:
+    if isinstance(request, dict) and request.get("operation") in {"validate", "validate_live", "validate_backtest", "migrate_v8"}:
         required.add("config")
     if not isinstance(request, dict) or set(request) != required:
         raise _HelperError("invalid_request")
-    if not isinstance(request["operation"], str) or request["operation"] not in {"template", "metadata", "validate", "validate_live", "validate_backtest"} or any(
+    if not isinstance(request["operation"], str) or request["operation"] not in {"template", "metadata", "validate", "validate_live", "validate_backtest", "migrate_v8"} or any(
         not isinstance(request[key], str) or not request[key]
         for key in ("pb9_dir", "config_schema", "package_version")
     ):
@@ -195,6 +318,8 @@ def handle(request: dict) -> dict:
     if request["operation"] in {"validate", "validate_live", "validate_backtest"}:
         check_inline_config(request["config"], request["config_schema"],
                             allow_inline_overrides=request["operation"] in {"validate_live", "validate_backtest"})
+    if request["operation"] == "migrate_v8":
+        check_migration_input(request["config"])
     root = Path(request["pb9_dir"])
     if not root.is_absolute():
         raise _HelperError("invalid_request")
@@ -214,6 +339,11 @@ def handle(request: dict) -> dict:
                 or schema_version != request["config_schema"]
                 or package_version != request["package_version"]):
             raise _HelperError("runtime_identity_mismatch")
+        if request["operation"] == "migrate_v8":
+            migration, converter_file = _migrate_v8(request["config"], src, schema_version)
+            return {"migration": migration, "converter_module_file": converter_file,
+                    "config_schema": schema_version, "package_version": package_version,
+                    "schema_module_file": schema_file, "version_module_file": version_file}
         if request["operation"] == "metadata":
             try:
                 result = _editor_metadata(schema, src)

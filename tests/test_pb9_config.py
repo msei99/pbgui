@@ -965,3 +965,71 @@ def test_file_api_native_validation_create_load_and_update(validation_runtime, m
             await pb9.shutdown(app)
 
     asyncio.run(exercise())
+
+
+def test_official_migration_uses_isolated_converter_and_staged_overrides(runtime, tmp_path):
+    """Only the selected native converter sees disposable inputs; caller data stays intact."""
+    tools = runtime.root / 'src/tools'; tools.mkdir()
+    (tools / '__init__.py').write_text('')
+    record = tmp_path / 'migration-call.json'
+    (tools / 'migrate_config_v9.py').write_text(
+        'import json\nfrom pathlib import Path\nfrom types import SimpleNamespace\n'
+        'def migrate(config, **kwargs):\n'
+        "    assert Path(kwargs['base_config_path']).is_file()\n"
+        "    assert json.loads(Path('BTC.json').read_text()) == {'bot': {'long': {}}}\n"
+        f"    Path({str(record)!r}).write_text(json.dumps(kwargs))\n"
+        "    return SimpleNamespace(config={'config_version':'v9.0.0','bot':{'long':{},'short':{}}}, changes=[{'reason':'official proposal'}], warnings=('Review risk policy',))\n")
+    bundle = {'config': {'config_version':'v8.6.0','coin_overrides':{'BTC':{'override_config_path':'BTC.json'}}},
+              'files': {'BTC.json': {'bot':{'long':{}}}}}
+    original = copy.deepcopy(bundle)
+    result = pb9_config.migrate_pb8_config_to_pb9(bundle, runtime.root, runtime.python)
+    assert result['migration']['status'] == 'ready'
+    assert result['migration']['report']['mode'] == 'best_effort'
+    assert result['migration']['report']['warnings'] == ['Review risk policy']
+    assert bundle == original
+    options = json.loads(record.read_text())
+    assert options['best_effort'] is True
+    assert options['disabled_sides'] == options['bot_layout'] == 'preserve'
+    assert not Path(options['base_config_path']).exists()
+    assert 'tools.migrate_config_v9' not in sys.modules
+
+
+@pytest.mark.parametrize('patch,files', [
+    ({'coin_overrides':{'BTC':{'override_config_path':'../secret.json'}}}, {}),
+    ({'coin_overrides':{'BTC':{'override_config_path':'api-keys.json'}}}, {}),
+    ({'live':{'coin_flags':{'BTC':'-lc /tmp/other.json'}}}, {}),
+    ({'live':{'approved_coins':['/tmp/coins.json']}}, {}),
+    ({'live':{'approved_coins':['coins.txt']}}, {}),
+    ({'live':{'password':'never expose'}}, {}),
+    ({}, {'unused.json': {}}),
+    ({'coin_overrides':{'BTC':{'override_config_path':'loop.json'}}}, {'loop.json':{'override_config_path':'loop.json'}}),
+])
+def test_migration_rejects_external_or_recursive_inputs_before_execution(runtime, monkeypatch, patch, files):
+    """Unsafe source references cannot reach runtime inspection or process creation."""
+    def forbidden(*args, **kwargs):
+        """No subprocess/runtime work is permitted for invalid inputs."""
+        pytest.fail('Unsafe migration reached runtime inspection')
+    monkeypatch.setattr(pb9_config, 'inspect_pb9_runtime', forbidden)
+    with pytest.raises(pb9_config.PB9ConfigError):
+        pb9_config.migrate_pb8_config_to_pb9({'config':{'config_version':'v8.6.0',**patch},'files':files},runtime.root,runtime.python)
+
+
+def test_backtest_validation_accepts_inline_coin_overrides(validation_runtime):
+    """Parent and helper gates agree on the native backtest override contract."""
+    config = {'config_version':'v9.0.0', 'coin_overrides':{'BTC':{'bot':{'long':{'enabled':False}}}}}
+    assert pb9_config.validate_pb9_backtest_config(config,validation_runtime.root,validation_runtime.python)['valid']
+
+
+def test_migration_include_graph_validation_is_bounded(monkeypatch):
+    """Shared include subgraphs are visited once rather than exponentially expanded."""
+    import pb9_config_helper as helper
+    files={f'file{index}.json':{'coin_overrides':{str(child):{'override_config_path':f'file{child}.json'}
+                  for child in range(index+1,30)}} for index in range(30)}
+    bundle={'config':{'config_version':'v8.6.0','coin_overrides':{'BTC':{'override_config_path':'file0.json'}}},'files':files}
+    original=helper.migration_file_references;calls=[]
+    def counted(config):
+        """Count traversals without timing assumptions or native execution."""
+        calls.append(1);return original(config)
+    monkeypatch.setattr(helper,'migration_file_references',counted)
+    helper.check_migration_input(bundle)
+    assert len(calls)<100

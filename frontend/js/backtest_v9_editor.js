@@ -46,6 +46,17 @@
     ];
     if (!renderer) renderer = window.PBGuiEditorShared.createMetadataFieldRenderer({idPrefix:'bt9-field', resolve:resolve});
     var open = renderer.clear(), available = fields(config);
+    var previousReport = document.getElementById('bt9-migration-report');
+    if (previousReport) previousReport.remove();
+    if (window._nativeMigrationReport && window.editingConfig === '__new__') {
+      var report = document.createElement('details'); report.id = 'bt9-migration-report';
+      var summary = document.createElement('summary'); summary.textContent = 'PB8 → PB9 migration report';
+      var explanation = document.createElement('p'); explanation.textContent = 'Official best-effort conversion. Review inferred settings before saving or running the backtest.';
+      var text = document.createElement('pre'); text.style.whiteSpace = 'pre-wrap'; text.style.overflowWrap = 'anywhere';
+      text.textContent = JSON.stringify(window._nativeMigrationReport, null, 2);
+      report.append(summary, explanation, text);
+      document.getElementById('configs-editor').prepend(report);
+    }
     var sections = groupDefs.map(function(definition) {
       var prefix = definition[2];
       return {id:definition[0], title:definition[1], expander:true, groups:[{title:'', fields:available.filter(function(field) {

@@ -16,7 +16,7 @@ import time
 
 from logging_helpers import human_log as _log
 from pb9_runtime import inspect_pb9_runtime
-from pb9_config_helper import MAX_VALIDATION_BYTES, _HelperError, _require_json_value, check_inline_config
+from pb9_config_helper import MAX_VALIDATION_BYTES, _HelperError, _require_json_value, check_inline_config, check_migration_input
 
 
 SERVICE = "PB9Config"
@@ -71,10 +71,10 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
         "operation": operation, "pb9_dir": status["pb9dir"],
         "config_schema": status["config_schema"], "package_version": status["package_version"],
     }
-    if operation in {"validate", "validate_live", "validate_backtest"}:
+    if operation in {"validate", "validate_live", "validate_backtest", "migrate_v8"}:
         payload["config"] = config
     request = json.dumps(payload, allow_nan=False).encode("utf-8")
-    if len(request) > (MAX_VALIDATION_BYTES if operation in {"validate", "validate_live", "validate_backtest"} else 16384):
+    if len(request) > (MAX_VALIDATION_BYTES if operation in {"validate", "validate_live", "validate_backtest", "migrate_v8"} else 16384):
         raise PB9ConfigError("invalid_request")
     env = {key: value for key, value in os.environ.items() if key.upper() in _ENV_KEYS}
     env["PATH"] = os.pathsep.join((str(Path(status["pb9venv"]).parent), os.defpath))
@@ -185,6 +185,8 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
     module_keys = ("schema_module_file", "version_module_file")
     if operation in {"validate", "validate_live", "validate_backtest"}:
         module_keys += ("load_module_file",)
+    elif operation == "migrate_v8":
+        module_keys += ("converter_module_file",)
     elif operation == "metadata":
         module_keys += ("registry_module_file", "strategy_module_file")
     for key in module_keys:
@@ -205,6 +207,18 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
     if operation in {"validate", "validate_live", "validate_backtest"}:
         source["load_module_file"] = result["load_module_file"]
         return {"valid": True, "source": source}
+    if operation == "migrate_v8":
+        migration = result.get('migration')
+        if not isinstance(migration, dict) or migration.get('status') not in {'ready', 'blocked'}:
+            raise PB9ConfigError('invalid_response')
+        if migration['status'] == 'ready':
+            check_inline_config(migration.get('config'), status['config_schema'], allow_inline_overrides=True)
+            if not isinstance(migration.get('report'), dict):
+                raise PB9ConfigError('invalid_response')
+        elif not isinstance(migration.get('message'), str):
+            raise PB9ConfigError('invalid_response')
+        source['converter_module_file'] = result['converter_module_file']
+        return {'migration': migration, 'source': source}
     if operation == "metadata":
         metadata = result.get("metadata")
         if (not isinstance(metadata, dict) or metadata.get("contract_version") != 1
@@ -341,16 +355,20 @@ def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: 
         if not _SUPPORTED_PLATFORM:
             raise PB9ConfigError("unsupported_platform")
         validating = operation in {"validate", "validate_live", "validate_backtest"}
+        if operation == "migrate_v8":
+            check_migration_input(config)
         if validating:
-            check_inline_config(config, allow_inline_overrides=operation == "validate_live")
+            check_inline_config(config, allow_inline_overrides=operation in {"validate_live", "validate_backtest"})
         status = (inspect_pb9_runtime(pb9dir, pb9venv, other_slots, cancel_event=cancel_event)
                   if cancel_event is not None else inspect_pb9_runtime(pb9dir, pb9venv, other_slots))
         if cancel_event is not None and cancel_event.is_set():
             raise PB9ConfigError("helper_cancelled")
         if not status["detected"]:
             raise PB9ConfigError("runtime_not_detected")
-        if validating:
-            check_inline_config(config, status["config_schema"], allow_inline_overrides=operation == "validate_live")
+        if operation == "migrate_v8":
+            raw = _run_helper(status, timeout, operation=operation, config=config, cancel_event=cancel_event)
+        elif validating:
+            check_inline_config(config, status["config_schema"], allow_inline_overrides=operation in {"validate_live", "validate_backtest"})
             options = {"cancel_event": cancel_event} if cancel_event is not None else {}
             raw = _run_helper(status, timeout, operation=operation, config=config, **options)
         elif operation == "metadata":
@@ -369,3 +387,9 @@ def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: 
         if error is exc:
             raise
         raise error from exc
+
+
+def migrate_pb8_config_to_pb9(bundle, pb9dir, pb9venv, other_slots=None, *, timeout=90, cancel_event=None):
+    """Preview an official PB8 migration using the existing isolated PB9 process owner."""
+    return _config_operation('migrate_v8', pb9dir, pb9venv, other_slots, timeout=timeout,
+                             config=bundle, cancel_event=cancel_event)

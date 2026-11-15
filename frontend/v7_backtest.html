@@ -9,7 +9,8 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
 <script src="/app/js/backtest_editor_adapter.js?v=13"></script>
-<script src="/app/js/backtest_v9_editor.js?v=2"></script>
+<script src="/app/js/backtest_v9_editor.js?v=3"></script>
+<script src="/app/js/backtest_v9_migration.js?v=1" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
   <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
@@ -864,6 +865,7 @@ textarea.json-invalid:focus {
         <button class="sb-btn" onclick="importConfig()" title="Import JSON config">📥 Import</button>
         <hr class="sb-sep">
         <button class="sb-btn" id="sb-btn-results" onclick="goEditorResults()" title="Show all backtest results">📊 Results</button>
+        <button class="sb-btn" id="sb-btn-convert-v9" data-migrate-pb9="editor" title="Convert the saved PB8 config to a PB9 backtest draft" hidden disabled>⏩ Open as PB9 Backtest</button>
         <button class="sb-btn" id="sb-btn-convert-v8" onclick="convertConfigToV8(editingConfig)" title="Convert the saved V7 config to V8" disabled>⏩ Convert to V8</button>
         <button class="sb-btn" id="sb-btn-add-to-run" onclick="addConfigToRunByName(editingConfig)" title="Open this config in Run V7 editor" disabled>▶ Add to Run</button>
         <button class="sb-btn" onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
@@ -2040,6 +2042,7 @@ function renderConfigs() {
   sorted.forEach(function(c) {
     var convertAction = backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven ? '' :
       '<button class="act-btn convert-v8-btn" data-config-name="' + esc(c.name) + '" title="Convert to V8">V8</button> ';
+    if (backtestEditorAdapter.isV8) convertAction += '<button class="act-btn" data-migrate-pb9="config" data-config-name="' + esc(c.name) + '" title="Open as PB9 Backtest">V9</button> ';
     html += '<tr data-name="' + esc(c.name) + '">' +
       '<td title="' + esc(c.name) + '">' + esc(c.name) + '</td>' +
       '<td>' + esc(Array.isArray(c.exchanges) ? c.exchanges.join(', ') : c.exchanges) + '</td>' +
@@ -2237,6 +2240,8 @@ function showEditorSidebar() {
   var btnRun = document.getElementById('sb-btn-add-to-run');
   var btnConvertV8 = document.getElementById('sb-btn-convert-v8');
   var isExisting = editingConfig && editingConfig !== '__new__';
+  var btnConvertV9 = document.getElementById('sb-btn-convert-v9');
+  if (btnConvertV9) { btnConvertV9.hidden = !backtestEditorAdapter.isV8; btnConvertV9.disabled = !isExisting; }
   if (btnRun) btnRun.disabled = !isExisting;
   if (btnConvertV8) {
     btnConvertV8.style.display = backtestEditorAdapter.isV8 ? 'none' : '';
@@ -2338,6 +2343,7 @@ function openLogPanel() {
 }
 
 async function newConfig() {
+  window._nativeMigrationReport = null;
   var tmpl = {};
   var tmplParamStatus = {};
   try {
@@ -2422,8 +2428,10 @@ async function openInitialBacktestDraftFromUrl() {
     if (backtestEditorAdapter.metadataDriven) window._nativeConfigRevision = null;
     editingConfig = '__new__';
     selectPanel('configs');
+    window._nativeMigrationReport = backtestEditorAdapter.metadataDriven && draft ? draft.migration_report : null;
     _pendingMigrationReviewDraft = draft && draft.migration_report ? draft : null;
     _pendingMigrationReport = draft && draft.migration_report ? draft.migration_report : null;
+    if (backtestEditorAdapter.metadataDriven) { _pendingMigrationReviewDraft = null; _pendingMigrationReport = null; }
     showConfigEditor(name, prepared.config, raw, prepared.param_status || draft.param_status || {});
     if (!backtestEditorAdapter.metadataDriven) clearInitialBacktestUrlParams(url, runDraftId ? ['draft_id', 'draft_name'] : ['opt_draft_id', 'draft_name']);
     return true;
@@ -6706,6 +6714,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
         '\x3Cbutton class="icon-btn" data-action="plot" data-idx="' + i + '" onclick="toggleResultAction(this)" title="' + String(r.backtest_version || backtestEditorAdapter.version).toUpperCase() + ' plot images">🖼\x3C/button>' +
         '\x3Cbutton class="icon-btn" data-action="fills" data-idx="' + i + '" onclick="toggleResultAction(this)" title="Fills plots">📋\x3C/button>' +
         convertAction +
+        (backtestEditorAdapter.isV8 && r.backtest_version === 'v8' ? '<button class="icon-btn" data-migrate-pb9="result" data-result-index="' + i + '" title="Open as PB9 Backtest">V9</button>' : '') +
       '\x3C/td>' +
       '\x3C/tr>';
   }
