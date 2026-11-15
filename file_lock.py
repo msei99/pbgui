@@ -5,8 +5,10 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import os
+import math
 import stat
 import threading
+import time
 from typing import Iterator
 
 try:
@@ -22,7 +24,8 @@ _HELD_DIRECTORY_LOCKS = threading.local()
 
 
 @contextmanager
-def advisory_directory_lock(directory_fd: int) -> Iterator[None]:
+def advisory_directory_lock(directory_fd: int, *, cancel_requested=None,
+                            timeout: float | None = None) -> Iterator[None]:
     """Lock a directory inode without a pathname, reentrantly within one thread.
 
     Open a separate file description even when threads share the input FD, so
@@ -33,6 +36,11 @@ def advisory_directory_lock(directory_fd: int) -> Iterator[None]:
     """
     if fcntl is None or type(directory_fd) is not int or directory_fd < 0:
         raise RuntimeError("Directory locking requires a POSIX directory descriptor")
+    if cancel_requested is not None and not callable(cancel_requested):
+        raise ValueError("Directory cancellation must be callable")
+    if timeout is not None and (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+                                or not 0 < timeout <= 60 or not math.isfinite(timeout)):
+        raise ValueError("Directory timeout must be positive and at most 60 seconds")
     owned_fd = os.open(".", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
     try:
         info = os.fstat(owned_fd)
@@ -45,10 +53,27 @@ def advisory_directory_lock(directory_fd: int) -> Iterator[None]:
         held = _HELD_DIRECTORY_LOCKS.entries
         key = (info.st_dev, info.st_ino)
         if key in held:
+            if cancel_requested is not None and cancel_requested():
+                raise InterruptedError("Directory lock cancelled")
             yield
             return
-        fcntl.flock(owned_fd, fcntl.LOCK_EX)
+        if cancel_requested is None and timeout is None:
+            fcntl.flock(owned_fd, fcntl.LOCK_EX)
+        else:
+            deadline = time.monotonic() + timeout if timeout is not None else None
+            while True:
+                if cancel_requested is not None and cancel_requested():
+                    raise InterruptedError("Directory lock cancelled")
+                try:
+                    fcntl.flock(owned_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except BlockingIOError:
+                    if deadline is not None and time.monotonic() >= deadline:
+                        raise TimeoutError("Directory lock is busy")
+                    time.sleep(0.02)
         try:
+            if cancel_requested is not None and cancel_requested():
+                raise InterruptedError("Directory lock cancelled")
             held.add(key)
             yield
         finally:

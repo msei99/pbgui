@@ -24,7 +24,7 @@ def _identity(pid):
         return None
 
 
-@pytest.mark.parametrize("operation", ["template", "validate"])
+@pytest.mark.parametrize("operation", ["template", "validate", "save"])
 def test_sigterm_aborts_helper_group_before_uvicorn_request_drain(validation_runtime, tmp_path, operation):
     """An early signal cancels helpers even while the ASGI loop is temporarily blocked."""
     runtime = validation_runtime
@@ -112,8 +112,12 @@ uvicorn.run(app, uds=settings["socket"], log_config=None, access_log=False, time
                 pass
             assert time.monotonic() < deadline, "fixture server did not start"
             time.sleep(0.02)
-        workers.append(threading.Thread(target=request, args=("template", "POST", "/api/pb9/" + operation),
-                                       kwargs={"json": {} if operation == "template" else {"config": {"config_version": "v9.0.0"}}, "headers": {"Authorization": "Bearer fixture-auth"}}))
+        route = "configs/save" if operation == "save" else operation
+        body = {} if operation == "template" else {"config": {"config_version": "v9.0.0"}}
+        if operation == "save":
+            body.update({"name": "example.json", "revision": None})
+        workers.append(threading.Thread(target=request, args=("native", "POST", "/api/pb9/" + route),
+                                       kwargs={"json": body, "headers": {"Authorization": "Bearer fixture-auth"}}))
         workers[-1].start()
         deadline = time.monotonic() + 5
         while not record_path.exists():
@@ -139,8 +143,10 @@ uvicorn.run(app, uds=settings["socket"], log_config=None, access_log=False, time
             worker.join(8)
             assert not worker.is_alive()
         assert not errors
-        assert responses["template"].status_code == 503
-        assert responses["template"].headers["x-pbgui-error-codes"] == "helper_cancelled"
+        assert responses["native"].status_code == 503
+        assert responses["native"].headers["x-pbgui-error-codes"] == "helper_cancelled"
+        if operation == "save":
+            assert not (root / "data" / "configs_v9" / "example.json").exists()
     finally:
         if process.poll() is None:
             process.kill()

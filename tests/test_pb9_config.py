@@ -915,3 +915,53 @@ def test_cancelled_document_validation_never_launches_late_helper(validation_run
         pb9_config.validate_pb9_document({"config_version": "v9.0.0"}, validation_runtime.root,
                                          validation_runtime.python, cancel_event=cancel)
     assert caught.value.error_codes == ("helper_cancelled",)
+
+
+def test_file_api_native_validation_create_load_and_update(validation_runtime, monkeypatch, tmp_path):
+    """The whole file API uses a real isolated helper and exact revision round trips."""
+    import asyncio
+    import configparser
+    import httpx
+    from fastapi import FastAPI
+    from api import auth, pb9
+
+    runtime = validation_runtime
+    application = tmp_path / "application"
+    application.mkdir()
+    monkeypatch.setattr(pb9, "PBGDIR", application)
+    parser = configparser.ConfigParser()
+    parser.read_dict({"main": {"pb9dir": str(runtime.root), "pb9venv": str(runtime.python)}})
+    monkeypatch.setattr(pb9, "load_ini_snapshot", lambda: parser)
+    monkeypatch.setattr(auth, "validate_token", lambda token: SimpleNamespace(user_id="fixture")
+                        if token == "fixture-auth" else None)
+    document = {"config_version": "v9.0.0", "bot": {"long": {}, "short": {}}, "pbgui": {"name": "Original"}}
+
+    async def exercise():
+        app = FastAPI()
+        app.add_middleware(auth.BrowserOriginMiddleware)
+        app.include_router(pb9.router, prefix="/api/pb9")
+        pb9.startup(app)
+        try:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture",
+                                         headers={"Authorization": "Bearer fixture-auth"}) as client:
+                created = await client.post("/api/pb9/configs/save", json={"name": "test.json", "config": document, "revision": None})
+                assert created.status_code == 200
+                loaded = await client.post("/api/pb9/configs/load", json={"name": "test.json"})
+                assert loaded.status_code == 200
+                assert loaded.json()["config"] == document
+                edited = copy.deepcopy(document)
+                edited["pbgui"]["name"] = "Edited"
+                updated = await client.post("/api/pb9/configs/save", json={"name": "test.json", "config": edited,
+                                                                           "revision": loaded.json()["revision"]})
+                assert updated.status_code == 200
+                reloaded = await client.post("/api/pb9/configs/load", json={"name": "test.json"})
+                assert reloaded.json()["config"] == edited
+                assert reloaded.json()["revision"] != loaded.json()["revision"]
+                native = json.loads(runtime.record.read_text())
+                assert native["config"] == {key: value for key, value in edited.items() if key != "pbgui"}
+                listing = await client.get("/api/pb9/configs")
+                assert listing.json() == {"configs": ["test.json"]}
+        finally:
+            await pb9.shutdown(app)
+
+    asyncio.run(exercise())

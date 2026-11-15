@@ -6,6 +6,7 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 import json
 import math
+import re
 import signal
 import threading
 
@@ -18,7 +19,9 @@ from logging_helpers import human_log as _log
 from pb9_config import (MAX_DOCUMENT_BYTES, PB9CancelSignal, PB9ConfigError,
                         load_pb9_template, validate_pb9_document)
 from pb9_runtime import inspect_pb9_runtime
-from pbgui_purefunc import load_ini_snapshot
+from pbgui_purefunc import PBGDIR, load_ini_snapshot
+from pb7_config import load_pb7_config, save_pb7_config
+from pb9_config_library import config_library, config_name, list_configs, require_config
 
 
 SERVICE = "PB9Config"
@@ -27,7 +30,7 @@ MAX_VALIDATION_BODY_BYTES = MAX_DOCUMENT_BYTES
 MAX_JSON_DEPTH = 64
 _VALIDATION_ERRORS = frozenset({"invalid_request", "invalid_document", "invalid_config",
                                 "config_version_mismatch", "external_reference_rejected",
-                                "native_config_rejected"})
+                                "native_config_rejected", "invalid_config_name", "invalid_revision"})
 _PATH_KEYS = ("pb9dir", "pb9venv", "pb7dir", "pb7venv", "pb8dir", "pb8venv")
 
 
@@ -73,7 +76,7 @@ def _read_paths() -> dict:
     raise PB9ConfigError("runtime_settings_unavailable") from None
 
 
-def _validation_document(payload: bytes) -> dict:
+def _request_envelope(payload: bytes, keys: set[str]) -> dict:
     """Decode one explicit config envelope without coercion or duplicate members."""
     def unique_object(pairs):
         """Reject duplicate fields at every depth rather than choosing a value."""
@@ -98,7 +101,7 @@ def _validation_document(payload: bytes) -> dict:
     try:
         envelope = json.loads(payload.decode("utf-8"), object_pairs_hook=unique_object,
                               parse_constant=reject_constant, parse_float=finite_float)
-        if isinstance(envelope, dict) and set(envelope) == {"config"} and isinstance(envelope["config"], dict):
+        if isinstance(envelope, dict) and set(envelope) == keys:
             pending = [(envelope, 0)]
             while pending:
                 value, depth = pending.pop()
@@ -111,11 +114,19 @@ def _validation_document(payload: bytes) -> dict:
             # Reject lone surrogate escapes before a successful JSONResponse
             # would attempt strict UTF-8 encoding on the event loop.
             json.dumps(envelope, ensure_ascii=False, allow_nan=False).encode("utf-8")
-            return envelope["config"]
+            return envelope
     except (ValueError, RecursionError):
         pass
     # JSONDecodeError retains the submitted document: keep it out of error chains.
     raise PB9ConfigError("invalid_document") from None
+
+
+def _validation_document(payload: bytes) -> dict:
+    """Require an object document inside the explicit validation envelope."""
+    envelope = _request_envelope(payload, {"config"})
+    if not isinstance(envelope["config"], dict):
+        raise PB9ConfigError("invalid_document")
+    return envelope["config"]
 
 
 def _operation(operation: str, cancel_event: PB9CancelSignal, payload: bytes | None = None) -> dict:
@@ -123,10 +134,40 @@ def _operation(operation: str, cancel_event: PB9CancelSignal, payload: bytes | N
     if cancel_event.is_set():
         raise PB9ConfigError("helper_cancelled")
     document = _validation_document(payload) if operation == "validate" else None
+    envelope = None
+    if operation == "config_load":
+        envelope = _request_envelope(payload, {"name"})
+    elif operation == "config_save":
+        envelope = _request_envelope(payload, {"name", "config", "revision"})
+        if not isinstance(envelope["config"], dict):
+            raise PB9ConfigError("invalid_document")
+    if envelope is not None:
+        envelope["name"] = config_name(envelope["name"])
+        if operation == "config_save" and envelope["revision"] is not None:
+            if not isinstance(envelope["revision"], str) or not re.fullmatch(r"[0-9a-f]{64}", envelope["revision"]):
+                raise PB9ConfigError("invalid_revision")
     paths = _read_paths()
     if cancel_event.is_set():
         raise PB9ConfigError("helper_cancelled")
     other_slots = {key: paths[key] for key in _PATH_KEYS[2:]}
+    if operation in {"config_list", "config_load", "config_save"}:
+        try:
+            create = operation == "config_save" and envelope["revision"] is None
+            with config_library(PBGDIR, paths, cancel_event, create=create) as context:
+                if operation == "config_list":
+                    return {"configs": list_configs(context)}
+                if operation == "config_load":
+                    name = require_config(context, envelope["name"])
+                    return load_pb7_config(name, pb9_context=context, pb9_with_revision=True)
+                save_pb7_config(envelope["config"], envelope["name"], pb9_context=context,
+                                pb9_expected_revision=envelope["revision"])
+                return {"saved": True, "name": envelope["name"]}
+        except PB9ConfigError as exc:
+            if operation == "config_list" and exc.error_codes == ("config_file_not_found",):
+                return {"configs": []}
+            if operation == "config_save" and exc.error_codes == ("config_file_not_found",):
+                raise PB9ConfigError("config_revision_conflict") from None
+            raise
     if operation == "runtime":
         result = inspect_pb9_runtime(paths["pb9dir"], paths["pb9venv"], other_slots, cancel_event=cancel_event)
         if cancel_event.is_set():
@@ -157,7 +198,8 @@ def _worker(operation: str, future: Future, cancel_event: PB9CancelSignal, paylo
                   else _operation(operation, cancel_event))
     except BaseException as exc:
         code = exc.error_codes[0] if isinstance(exc, PB9ConfigError) else "api_operation_failed"
-        level = "WARNING" if operation == "validate" and code in _VALIDATION_ERRORS else "ERROR"
+        expected = _VALIDATION_ERRORS | {"config_file_not_found", "config_file_exists", "config_revision_conflict"}
+        level = "WARNING" if operation in {"validate", "config_save", "config_load"} and code in expected else "ERROR"
         _log(SERVICE, "PB9 API operation failed", level=level,
              meta={"operation": operation, "error_codes": [code]})
         future.set_exception(PB9ConfigError(code))
@@ -354,9 +396,14 @@ async def _execute(request: Request, operation: str, payload: bytes | None = Non
     except HTTPException:
         raise
     except PB9ConfigError as exc:
-        if operation == "validate" and exc.error_codes[0] in _VALIDATION_ERRORS:
+        if operation in {"validate", "config_save", "config_load"} and exc.error_codes[0] in _VALIDATION_ERRORS:
             raise _error(422, exc.error_codes[0], "PB9 config was rejected") from None
-        raise _error(503, exc.error_codes[0], "PB9 inspection failed") from None
+        if exc.error_codes[0] in {"config_file_exists", "config_revision_conflict"}:
+            raise _error(409, exc.error_codes[0], "PB9 config changed; load its current revision") from None
+        if exc.error_codes[0] == "config_file_not_found":
+            raise _error(404, exc.error_codes[0], "PB9 config was not found") from None
+        raise _error(503, exc.error_codes[0], "PB9 request failed",
+                     busy=exc.error_codes[0] == "config_storage_busy") from None
     except Exception:
         _log(SERVICE, "PB9 API response failed", level="ERROR",
              meta={"operation": operation, "error_codes": ["api_response_failed"]})
@@ -405,3 +452,33 @@ async def validate(request: Request, session: SessionToken = Depends(require_aut
             raise _error(413, "invalid_document", "PB9 validation request is too large")
         body.extend(chunk)
     return await _execute(request, "validate", bytes(body))
+
+
+async def _file_payload(request: Request, operation: str, limit: int) -> JSONResponse:
+    """Bound each explicit file request before decoding it in its owned worker."""
+    _no_query(request)
+    body = bytearray()
+    async for chunk in request.stream():
+        if len(body) + len(chunk) > limit:
+            raise _error(413, "invalid_document", "PB9 config request is too large")
+        body.extend(chunk)
+    return await _execute(request, operation, bytes(body))
+
+
+@router.get("/configs")
+async def configs(request: Request, session: SessionToken = Depends(require_auth)):
+    """List only the server-owned PB9 config library."""
+    _no_query(request)
+    return await _execute(request, "config_list")
+
+
+@router.post("/configs/load")
+async def config_load(request: Request, session: SessionToken = Depends(require_auth)):
+    """Load one JSON basename together with the exact-byte update revision."""
+    return await _file_payload(request, "config_load", 4096)
+
+
+@router.post("/configs/save")
+async def config_save(request: Request, session: SessionToken = Depends(require_auth)):
+    """Create exclusively or update an exact revision; never migrate or overwrite implicitly."""
+    return await _file_payload(request, "config_save", MAX_VALIDATION_BODY_BYTES)

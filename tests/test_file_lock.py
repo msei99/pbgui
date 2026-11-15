@@ -202,3 +202,35 @@ def test_parent_file_error_is_propagated(tmp_path):
         with advisory_file_lock(parent / "state.json"):
             pytest.fail("file parent accepted")
     assert parent.read_text(encoding="utf-8") == "unchanged"
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_directory_lock_wait_can_timeout_or_stop(tmp_path, cancel):
+    """An independently opened description cannot trap an owned API worker indefinitely."""
+    root = tmp_path / "locked"
+    root.mkdir()
+    descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    requested = threading.Event()
+    results = []
+
+    def contender():
+        """Wait on the actual flock held by the main thread, with bounded ownership."""
+        try:
+            with advisory_directory_lock(descriptor, timeout=0.1, cancel_requested=requested.is_set):
+                results.append("unexpected acquisition")
+        except (InterruptedError, TimeoutError) as exc:
+            results.append(type(exc))
+
+    try:
+        with advisory_directory_lock(descriptor):
+            worker = threading.Thread(target=contender)
+            worker.start()
+            if cancel:
+                requested.set()
+            worker.join(2)
+            assert not worker.is_alive()
+        assert results == [InterruptedError if cancel else TimeoutError]
+        with advisory_directory_lock(descriptor, timeout=0.1):
+            pass
+    finally:
+        os.close(descriptor)

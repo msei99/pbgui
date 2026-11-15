@@ -248,3 +248,66 @@ def test_two_processes_publish_exactly_one_complete_file(tmp_path):
             receiver.close()
     assert (root / "example.json").read_bytes() in (b"first complete candidate", b"second complete candidate")
     assert list(root.iterdir()) == [root / "example.json"]
+
+
+@pytest.mark.parametrize("update", [False, True])
+def test_stop_after_temp_fsync_prevents_atomic_publication(tmp_path, monkeypatch, update):
+    """Stop at the last preparation step leaves the original target and no temp file."""
+    import threading
+
+    root = tmp_path / "private"
+    cancel = threading.Event()
+    with private_directory(root) as descriptor:
+        target = root / "example.json"
+        if update:
+            target.write_bytes(b"original")
+            info = target.stat()
+        actual = secure_files.os.fsync
+
+        def stop_after_sync(fd):
+            """Model SIGTERM arriving during the final file synchronization."""
+            actual(fd)
+            cancel.set()
+
+        monkeypatch.setattr(secure_files.os, "fsync", stop_after_sync)
+        with pytest.raises(InterruptedError):
+            if update:
+                secure_files.replace_private_file_at(descriptor, target.name, b"edited",
+                    expected_identity=(info.st_dev, info.st_ino), cancel_requested=cancel.is_set)
+            else:
+                secure_files.create_private_file_at(descriptor, target.name, b"created", cancel_requested=cancel.is_set)
+        assert sorted(path.name for path in root.iterdir()) == ([target.name] if update else [])
+        if update:
+            assert target.read_bytes() == b"original"
+
+
+@pytest.mark.parametrize("update", [False, True])
+def test_stop_after_publication_does_not_undo_committed_bytes(tmp_path, monkeypatch, update):
+    """A late stop cannot turn an acknowledged atomic publication into a rollback."""
+    import threading
+
+    root = tmp_path / "private"
+    cancel = threading.Event()
+    with private_directory(root) as descriptor:
+        target = root / "example.json"
+        if update:
+            target.write_bytes(b"original")
+            info = target.stat()
+        operation = "replace" if update else "link"
+        actual = getattr(secure_files.os, operation)
+
+        def publish_then_stop(*args, **kwargs):
+            """Request stop immediately after the filesystem commit point."""
+            result = actual(*args, **kwargs)
+            cancel.set()
+            return result
+
+        monkeypatch.setattr(secure_files.os, operation, publish_then_stop)
+        if update:
+            secure_files.replace_private_file_at(descriptor, target.name, b"committed",
+                expected_identity=(info.st_dev, info.st_ino), cancel_requested=cancel.is_set)
+        else:
+            secure_files.create_private_file_at(descriptor, target.name, b"committed", cancel_requested=cancel.is_set)
+        assert cancel.is_set()
+        assert target.read_bytes() == b"committed"
+        assert list(root.iterdir()) == [target]

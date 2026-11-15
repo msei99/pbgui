@@ -2,6 +2,14 @@
 
 ## Development
 
+- Add an authenticated PB9 config library with bounded listing, validated loads
+  and private atomic saves under `data/configs_v9`. Creation is exclusive;
+  updates require the exact loaded revision. Keep native work and transactions
+  owned through shutdown, allow bounded/cancellable lock waits, and check stop
+  requests immediately before publication without rolling back committed files.
+  Never follow symlink parents, repair existing permissions, delete or migrate
+  configs. Missing reads do not create storage. File errors use fixed codes.
+
 - Add authenticated PB9 inline-document validation with strict, bounded JSON
   requests, a 64-level nesting limit, server-selected runtime paths and separate
   authored GUI metadata. Reject lone Unicode surrogates and sanitize response

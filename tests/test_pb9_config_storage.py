@@ -150,7 +150,7 @@ def test_file_limit_applies_even_if_size_changes_after_stat(library, monkeypatch
 
 @pytest.mark.parametrize("data", [b'{"config_version":"v9.0.0","config_version":"v9.1.0"}',
     b'{"pbgui":{"name":"a","name":"b"}}', b'{"value":NaN}', b'{"value":Infinity}',
-    b'{"value":1e999}', b'{"value":-1e999}', b'{broken', b'[]', b'null', b'{"bad":"\xff"}'])
+    b'{"pbgui":{"note":"\\ud800"}}', b'{"\\udfff":0}', b'{"value":1e999}', b'{"value":-1e999}', b'{broken', b'[]', b'null', b'{"bad":"\xff"}'])
 def test_invalid_file_json_is_rejected_before_validator(library, data):
     """Duplicate members and malformed/nonfinite JSON never gain native meaning."""
     (library.root / "example.json").write_bytes(data)

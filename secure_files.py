@@ -6,6 +6,7 @@ import os
 import errno
 import stat
 import uuid
+from contextlib import contextmanager
 from pathlib import Path
 
 
@@ -21,7 +22,34 @@ class PrivateFileChangedError(OSError):
     """An existing replacement target no longer has the expected inode identity."""
 
 
-def create_private_file_at(directory_fd: int, name: str, content: bytes) -> None:
+@contextmanager
+def private_directory_at(directory_fd: int, name: str, *, create: bool = False, private: bool = True):
+    """Open an owned child without following links; optionally create it as 0700.
+
+    Existing permissions are never repaired. The optional nonprivate parent
+    variant supports PBGui's existing data directory without changing its mode.
+    """
+    if (not isinstance(name, str) or not name or name in {".", ".."}
+            or any(char in name for char in ("/", "\\"))
+            or any(ord(char) < 32 or ord(char) == 127 for char in name)):
+        raise ValueError("Private directory requires a child basename")
+    if create:
+        try:
+            os.mkdir(name, PRIVATE_DIR_MODE, dir_fd=directory_fd)
+            os.fsync(directory_fd)
+        except FileExistsError:
+            pass
+    child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd)
+    try:
+        info = os.fstat(child)
+        if info.st_uid != os.geteuid() or (private and stat.S_IMODE(info.st_mode) != PRIVATE_DIR_MODE):
+            raise ValueError("Private directory must be owned with mode 0700")
+        yield child
+    finally:
+        os.close(child)
+
+
+def create_private_file_at(directory_fd: int, name: str, content: bytes, *, cancel_requested=None) -> None:
     """Atomically create a private file without replacing any existing entry.
 
     The caller owns the open directory descriptor. It must refer to an existing
@@ -31,11 +59,11 @@ def create_private_file_at(directory_fd: int, name: str, content: bytes) -> None
     ``PrivateFilePublishedError`` means the target exists: do not roll it back
     or blindly retry after an acknowledgement error.
     """
-    return _publish_private_file_at(directory_fd, name, content)
+    return _publish_private_file_at(directory_fd, name, content, cancel_requested=cancel_requested)
 
 
 def replace_private_file_at(directory_fd: int, name: str, content: bytes, *,
-                             expected_identity: tuple[int, int]) -> None:
+                             expected_identity: tuple[int, int], cancel_requested=None) -> None:
     """Replace a regular inode atomically, inside the caller's locked transaction.
 
     The caller must keep the compared file descriptor open and hold the root
@@ -45,11 +73,12 @@ def replace_private_file_at(directory_fd: int, name: str, content: bytes, *,
     if (not isinstance(expected_identity, tuple) or len(expected_identity) != 2
             or any(type(value) is not int or value < 0 for value in expected_identity)):
         raise ValueError("Replacement requires an explicit inode identity")
-    return _publish_private_file_at(directory_fd, name, content, expected_identity=expected_identity)
+    return _publish_private_file_at(directory_fd, name, content, expected_identity=expected_identity,
+                                    cancel_requested=cancel_requested)
 
 
 def _publish_private_file_at(directory_fd: int, name: str, content: bytes, *,
-                              expected_identity: tuple[int, int] | None = None) -> None:
+                              expected_identity: tuple[int, int] | None = None, cancel_requested=None) -> None:
     """Own temporary bytes and their create-or-replace publication commit point."""
     if (os.name != "posix" or not hasattr(os, "O_NOFOLLOW")
             or type(directory_fd) is not int or directory_fd < 0):
@@ -77,6 +106,8 @@ def _publish_private_file_at(directory_fd: int, name: str, content: bytes, *,
     temporary = f".pbgui-create-{os.getpid()}-{uuid.uuid4().hex}.tmp"
     created, published, error = False, False, None
     try:
+        if cancel_requested is not None and cancel_requested():
+            raise InterruptedError("Private publication cancelled")
         try:
             descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                                  PRIVATE_FILE_MODE, dir_fd=directory_fd)
@@ -95,11 +126,15 @@ def _publish_private_file_at(directory_fd: int, name: str, content: bytes, *,
             os.fsync(descriptor)
         finally:
             os.close(descriptor)
+        if cancel_requested is not None and cancel_requested():
+            raise InterruptedError("Private publication cancelled")
         if expected_identity is None:
             os.link(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd,
                     follow_symlinks=False)
         else:
             verify_target()
+            if cancel_requested is not None and cancel_requested():
+                raise InterruptedError("Private publication cancelled")
             os.replace(temporary, name, src_dir_fd=directory_fd, dst_dir_fd=directory_fd)
             created = False  # The rename consumed the temporary directory entry.
         published = True

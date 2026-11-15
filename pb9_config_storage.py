@@ -9,10 +9,11 @@ import os
 import re
 from pathlib import Path
 import stat
+import threading
 
 from logging_helpers import human_log as _log
 from file_lock import advisory_directory_lock
-from pb9_config import MAX_DOCUMENT_BYTES, PB9ConfigError, validate_pb9_document
+from pb9_config import MAX_DOCUMENT_BYTES, PB9CancelSignal, PB9ConfigError, validate_pb9_document
 from secure_files import (PRIVATE_DIR_MODE, PrivateFileChangedError, PrivateFilePublishedError,
                           create_private_file_at, replace_private_file_at)
 
@@ -34,6 +35,7 @@ class PB9FileContext:
     pb9venv: str | Path | None
     other_slots: dict | None = None
     timeout: float = 60
+    cancel_event: threading.Event | PB9CancelSignal | None = None
 
 
 def _approved_root(context: PB9FileContext) -> Path:
@@ -42,6 +44,9 @@ def _approved_root(context: PB9FileContext) -> Path:
         raise PB9ConfigError("invalid_storage_context")
     if context.other_slots is not None and not isinstance(context.other_slots, dict):
         raise PB9ConfigError("invalid_storage_context")
+    if context.cancel_event is not None and not isinstance(context.cancel_event, (threading.Event, PB9CancelSignal)):
+        raise PB9ConfigError("invalid_storage_context")
+    _check_cancel(context)
     raw = str(context.approved_root)
     if not raw.strip() or any(ord(char) < 32 or ord(char) == 127 for char in raw):
         raise PB9ConfigError("invalid_storage_context")
@@ -49,6 +54,17 @@ def _approved_root(context: PB9FileContext) -> Path:
     if not root.is_absolute() or ".." in root.parts:
         raise PB9ConfigError("invalid_storage_context")
     return root
+
+
+def _check_cancel(context: PB9FileContext) -> None:
+    """Stop before native work or a file publication commit point."""
+    if context.cancel_event is not None and context.cancel_event.is_set():
+        raise PB9ConfigError("helper_cancelled")
+
+
+def _native_options(context: PB9FileContext) -> dict:
+    """Keep legacy keyword shapes intact when no owner supplies a stop flag."""
+    return {"cancel_event": context.cancel_event} if context.cancel_event is not None else {}
 
 
 def _config_name(name: str | Path) -> str:
@@ -165,6 +181,7 @@ def _parse_document(data: bytes) -> dict:
                               parse_constant=reject_constant, parse_float=finite_float)
         if not isinstance(document, dict):
             raise ValueError("document must be an object")
+        json.dumps(document, ensure_ascii=False, allow_nan=False).encode("utf-8")
         return document
     except (ValueError, RecursionError):
         pass
@@ -201,6 +218,7 @@ def load_pb9_config_file(name: str | Path, context: PB9FileContext, *,
         raise PB9ConfigError(error_code) from None
     validated = validate_pb9_document(
         document, context.pb9dir, context.pb9venv, context.other_slots, timeout=context.timeout,
+        **_native_options(context),
     )
     config = validated["config"]
     if validated["pbgui"] is not None:
@@ -250,11 +268,13 @@ def save_pb9_config_file(document: dict, name: str | Path, context: PB9FileConte
         raise PB9ConfigError(error_code) from None
     validated = validate_pb9_document(
         document, context.pb9dir, context.pb9venv, context.other_slots, timeout=context.timeout,
+        **_native_options(context),
     )
     config = validated["config"]
     if validated["pbgui"] is not None:
         config["pbgui"] = validated["pbgui"]
     try:
+        _check_cancel(context)
         encoded = bytearray()
         encoder = json.JSONEncoder(indent=4, ensure_ascii=False, allow_nan=False)
         for chunk in encoder.iterencode(config):
@@ -284,20 +304,26 @@ def save_pb9_config_file(document: dict, name: str | Path, context: PB9FileConte
                 else:
                     raise PB9ConfigError("config_file_exists")
                 try:
-                    create_private_file_at(directory_fd, filename, data)
+                    options = {"cancel_requested": context.cancel_event.is_set} if context.cancel_event is not None else {}
+                    create_private_file_at(directory_fd, filename, data, **options)
                     published = True
                 except PrivateFilePublishedError:
                     published = True
                     raise
             else:
-                with advisory_directory_lock(directory_fd):
+                options = ({"cancel_requested": context.cancel_event.is_set, "timeout": 2}
+                           if context.cancel_event is not None else {})
+                with advisory_directory_lock(directory_fd, **options):
+                    _check_cancel(context)
                     try:
                         with _config_descriptor_at(directory_fd, filename) as current_fd:
                             _expect_revision(_read_descriptor_bytes(current_fd), expected_revision)
                             current = os.fstat(current_fd)
                             try:
                                 replace_private_file_at(directory_fd, filename, data,
-                                                        expected_identity=(current.st_dev, current.st_ino))
+                                                        expected_identity=(current.st_dev, current.st_ino),
+                                                        **({"cancel_requested": context.cancel_event.is_set}
+                                                           if context.cancel_event is not None else {}))
                                 published = True
                             except PrivateFilePublishedError:
                                 published = True
@@ -309,6 +335,10 @@ def save_pb9_config_file(document: dict, name: str | Path, context: PB9FileConte
             error_code = "config_file_updated_io_failed" if expected_revision is not None else "config_file_created_io_failed"
         elif isinstance(exc, PB9ConfigError):
             error_code = exc.error_codes[0]
+        elif isinstance(exc, InterruptedError):
+            error_code = "helper_cancelled"
+        elif isinstance(exc, TimeoutError):
+            error_code = "config_storage_busy"
         elif expected_revision is not None and isinstance(exc, PrivateFileChangedError):
             error_code = "config_revision_conflict"
         elif isinstance(exc, FileExistsError):

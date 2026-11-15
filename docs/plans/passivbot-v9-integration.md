@@ -3,8 +3,8 @@
 Stand: 15. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung,
 Vorlagenadapter, Inline-Validierung und Dokumentgrenze committed; der explizite
 v9-Dateiladepfad, sichere Neuerstellung und Revisionsschutz sind committed;
-die authentifizierten Status-/Vorlagenrouten sind committed; die Inline-
-Validierungs-API ist umgesetzt und wird geprüft.
+die Inline-Validierungs-API ist committed; die sichere Datei-API ist umgesetzt
+und unabhängig geprüft. Die Editor-Oberfläche folgt als nächster Schritt.
 
 ## Vorgehen
 
@@ -523,7 +523,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
     Sein P3-Hinweis auf `math.isfinite` bei extrem großen Integer-Zeitlimits
     ist durch vorgezogene Bereichsprüfung korrigiert und parametrisiert getestet.
 
-13. **Inline-Validierungs-API, unabhängig geprüft und commitfähig.** `POST /api/pb9/validate`
+13. **Inline-Validierungs-API, Commit `0d47545c`.** `POST /api/pb9/validate`
     akzeptiert ausschließlich `{"config": <Dokument>}`. Query-Overrides werden
     abgelehnt; der gestreamte Body ist auf 1 MiB begrenzt. Striktes UTF-8/JSON
     verwirft doppelte Schlüssel auf jeder Ebene, NaN/Infinity, Exponentenüberlauf
@@ -549,6 +549,43 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
     Der separate Dokument-/Transport-Check zählt weiterhin
     ASCII-escaped JSON und kann unterhalb des rohen Body-Limits 422 ablehnen.
     Serial nach den finalen API-Änderungen: **3707**.
+
+14. **Isolierte Datei-API, unabhängig geprüft.** Die authentifizierten Routen
+    `GET /api/pb9/configs`, `POST /configs/load` und `POST /configs/save` nutzen
+    den vorhandenen Owner und genau einen Einstellungen-Snapshot. Die Ablage
+    ist ausschließlich `PBGDIR/data/configs_v9`. Nur gültige UTF-8-JSON-Basenamen
+    mit höchstens 255 Bytes sind erlaubt; Anfragen können keine Root wählen.
+    Liste und Load erzeugen keine Verzeichnisse. Save verlangt ausdrücklich
+    `revision: null` für exklusive Neuerstellung oder eine SHA-256-Revision für
+    Updates. Ein fehlendes Update legt keine Ablage an und bleibt ein Konflikt.
+    Laden liefert authored Config inklusive ursprünglichem Root-`pbgui` und die
+    Revision der gelesenen Bytes. Save bestätigt nur `saved` und `name`; der
+    Editor lädt danach die Revision erneut, ohne neuere Eingaben zu verlieren.
+
+    `secure_files.private_directory_at` erzeugt ausschließlich neue 0700-
+    Verzeichnisse FD-relativ und öffnet vorhandene ohne Symlink-Verfolgung.
+    Vorhandene Rechte werden nicht verändert; das bestehende Datenverzeichnis
+    darf seinen Modus behalten. Die Liste scannt höchstens 1000 Einträge und
+    berücksichtigt nur sichtbare reguläre JSON-Dateien. Dateioperationen bleiben
+    am gemeinsamen PB7/PB9-Dispatcher mit explizitem `PB9FileContext` angebunden.
+    Native Validierung, Private-File-Veröffentlichung und Wartezeit auf die
+    Verzeichnissperre erhalten optional das Owner-Stop-Flag. API-Updates warten
+    höchstens zwei Sekunden auf die Sperre. Alte Aufrufer ohne Flag bleiben
+    unverändert. Stop vor Veröffentlichung entfernt vorbereitete Tempdateien;
+    nach `link`/`replace` wird ein gespeichertes Ergebnis nicht zurückgerollt.
+    I/O-Bestätigungsfehler nach Veröffentlichung behalten eigene Fehlercodes.
+
+    Claude Fable 5.2 / medium fand keine P1/P2-Befunde und empfiehlt den Commit.
+    Seine P3-Hinweise zu impliziter Ablage bei Updates, Rechten/Fehlercodes und
+    UTF-8-Namenslänge sind korrigiert. Echte temporäre Native-Helper prüfen den
+    API-Create/Load/Update-Zyklus; ein lokaler Uvicorn-Test prüft nun auch Stop
+    während Save bei blockierter Event-Schleife, inklusive Kindprozess und
+    ausbleibender Zielveröffentlichung. Alle Daten bleiben in Pytest-Tempwurzeln.
+    Fokus-Regressionen: Datei-API, Storage/Revisionen, private Dateifunktionen,
+    Locks und API/Auth/Restart **305 passed in 12.87s**; Native-Bridge und
+    Signal-/Stop-Integration **147 passed in 24.99s**. Auch HTTP-Save direkt nach
+    Veröffentlichung bestätigt Erfolg trotz Stop; nachträglicher Abbruch rollt
+    die Datei nicht zurück. Serial nach finalen API-/Startcode-Edits: **3708**.
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
