@@ -2437,3 +2437,37 @@ def test_save_datetime_dates_through_shared_helper(tmp_path, monkeypatch, suffix
     assert validated == [expected]
     assert "prepare" in operations and "validate_overrides" in operations
     assert not list(configs.glob(".calendar_dates.*"))
+
+
+def test_autostart_shutdown_publishes_owned_launch_before_controller_finishes(monkeypatch):
+    """A PB8 launch drained during shutdown still publishes its reserved native process."""
+    import asyncio
+    entered, release = threading.Event(), threading.Event()
+    published = []
+    worker = backtest_v8.BacktestV8Worker()
+    monkeypatch.setattr(backtest_v8, 'load_ini_section', lambda *_: {'autostart': 'True'})
+    monkeypatch.setattr(backtest_v8, '_load_queue', lambda: [{'filename': 'queued', 'status': 'queued'}])
+    monkeypatch.setattr(backtest_v8, 'claim_backtest_slot', lambda *_: True)
+    monkeypatch.setattr(backtest_v8, 'publish_backtest_process', lambda *args: published.append(args))
+    monkeypatch.setattr(backtest_v8, 'release_backtest_slot', lambda *_: pytest.fail('successful launch released'))
+    monkeypatch.setattr(backtest_v8, '_log', lambda *args, **kwargs: None)
+    def launch(_):
+        """Keep native preparation alive while API shutdown begins."""
+        entered.set()
+        assert release.wait(5)
+        return {'pid': 123, 'create_time': 1.5, 'command_markers': ['fixture-runner']}
+    monkeypatch.setattr(worker, 'launch', launch)
+    async def exercise():
+        """The owner waits for publication and never launches another queue item."""
+        worker.start()
+        assert await asyncio.to_thread(entered.wait, 2)
+        stopping = asyncio.create_task(worker.stop())
+        await asyncio.sleep(.02)
+        assert not stopping.done()
+        release.set()
+        await stopping
+    try:
+        asyncio.run(exercise())
+    finally:
+        release.set()
+    assert published == [('v8', 'queued', 123, 1.5, ['fixture-runner'])]

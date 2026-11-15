@@ -1,5 +1,6 @@
 """PB9 native queue, immutable provenance and artifact boundaries with temporary data."""
 import copy
+import datetime as dt
 import hashlib
 import json
 from pathlib import Path
@@ -26,6 +27,7 @@ def native(tmp_path, monkeypatch):
     monkeypatch.setattr(logging_helpers,'LOG_ROOT',tmp_path/'data/logs')
     import backtest_autostart
     monkeypatch.setattr(backtest_autostart,'PBGDIR',tmp_path)
+    monkeypatch.setattr(backtest_autostart,'_managed_processes',lambda: {})
     import backtest_result_index
     monkeypatch.setattr(backtest_result_index,'PBGDIR',tmp_path)
     monkeypatch.setattr(bt,'_runtime',lambda cancel=None:(copy.deepcopy(status),{'pb9dir':str(tmp_path/'source'),'pb9venv':str(tmp_path/'env/bin/python')}))
@@ -43,6 +45,8 @@ def native(tmp_path, monkeypatch):
         validate(config)
         return {'config':copy.deepcopy(config),'pbgui':None,'source':status}
     monkeypatch.setattr(pb9_config_storage,'validate_pb9_document',document)
+    monkeypatch.setattr(bt,'load_ini_section',lambda section:{})
+    monkeypatch.setattr(bt,'save_ini_section',lambda *args,**kwargs:pytest.fail('Unexpected settings write'))
     bt._drafts.clear()
     yield source,status,tmp_path
     bt._drafts.clear()
@@ -52,6 +56,38 @@ def operation(action,body=None,**args):
     """Call the same owned-worker handler used by authenticated routes."""
     payload=json.dumps({'args':args,'body':body}).encode()
     return bt._operation('bt9_'+action,PB9CancelSignal(),payload)
+
+
+def test_ohlcv_dispatch_retains_native_config_and_cancellation(native, monkeypatch):
+    """Both tools use the PB9 adapter, never the legacy preparation endpoint."""
+    from api import pb9_ohlcv_tools as tools
+    source, _, _ = native
+    calls=[]
+    monkeypatch.setattr(tools,'preflight',lambda config,cancel:calls.append((copy.deepcopy(config),cancel)) or {'summary':{'headline':'Ready'}})
+    monkeypatch.setattr(tools,'start',lambda config,owner:calls.append((copy.deepcopy(config),owner)) or {'job_id':'0123456789ab'})
+    assert operation('ohlcv_preflight',{'config':source})['summary']['headline']=='Ready'
+    assert calls[0][0]==source and isinstance(calls[0][1],PB9CancelSignal)
+    assert operation('ohlcv_start',{'config':source},owner='alice')['job_id']=='0123456789ab'
+    assert calls[1]==(source,'alice')
+    assert not bt._root('queue').exists()
+
+
+def test_ohlcv_rejects_other_generation_before_job_admission(native, monkeypatch):
+    """A PB8 config at the same package version cannot enter the native lookup."""
+    from api import pb9_ohlcv_tools as tools
+    source, _, _ = native;source['config_version']='v8.6.0'
+    monkeypatch.setattr(tools,'start',lambda *args:pytest.fail('foreign config admitted'))
+    with pytest.raises(HTTPException) as error:
+        operation('ohlcv_start',{'config':source},owner='alice')
+    assert error.value.status_code==422
+
+
+@pytest.mark.parametrize('action',['ohlcv_preflight','ohlcv_start'])
+def test_ohlcv_requires_bounded_config_envelope(native,action):
+    """Missing config input fails before source inspection or creating a helper."""
+    with pytest.raises(HTTPException) as error:
+        operation(action,{'config':None},owner='alice')
+    assert error.value.status_code==422
 
 
 def test_queue_snapshot_is_separate_immutable_and_preserves_sparse_source(native):
@@ -85,6 +121,26 @@ def test_config_gateway_save_and_load_preserves_native_side_overrides(native):
     source['backtest']['starting_balance']=1234
     operation('save',{'config':source,'expected_revision':operation('load',name='sample')['revision']},name='sample')
     assert operation('load',name='sample')['config']['backtest']['starting_balance'] == 1234
+
+
+@pytest.mark.parametrize('shared,long,short,expected', [
+    ([], ['HYPE'], ['HYPE'], 1),
+    (['BTC'], None, ['HYPE'], 2),
+    (['BTC'], [], [], 0),
+    ([], 'all', [], 'all'),
+    (['BTC'], None, None, 1),
+])
+def test_config_list_counts_native_side_universes(native, shared, long, short, expected):
+    """The real summary operation resolves inheritance without inventing a zero count."""
+    source, _, _ = native
+    source['bot']['global']['universe']['approved_coins'] = shared
+    for side, selected in [('long', long), ('short', short)]:
+        source['bot'][side].setdefault('universe', {})['approved_coins'] = selected
+    operation('save', {'config': source}, name='sample')
+    row = operation('configs')['configs'][0]
+    assert row['coins'] == expected
+    assert row['modified'].endswith('+00:00')
+    assert dt.datetime.fromisoformat(row['modified']).timestamp() == pytest.approx(bt._cfg_path('sample').stat().st_mtime)
 
 
 def test_draft_is_owned_bounded_and_expires(native,monkeypatch):
@@ -152,7 +208,7 @@ def test_foreign_process_record_is_never_signalled(native,monkeypatch):
     bt._write(bt._job_path(job,'.pid.json'),{'pid':os.getpid(),'create_time':psutil.Process().create_time()})
     monkeypatch.setattr(psutil.Process,'terminate',lambda self:pytest.fail('foreign process signalled'))
     operation('stop',id=job)
-    assert operation('queue')['queue'][0]['status']=='error'
+    assert operation('queue')['queue'][0]['status']=='stopped'
 
 
 def test_native_npz_equity_preserves_real_timestamps_and_quantities(native):
@@ -187,6 +243,158 @@ def test_stop_keeps_a_completed_native_state(native):
     operation('stop',id=job)
     assert bt._read(bt._job_path(job,'.state.json')) == state
     assert operation('queue')['queue'][0]['status'] == 'complete'
+
+
+def test_gui_preferences_survive_every_handoff_without_native_pollution(native):
+    """Safe filters follow drafts, saved configs and results, not the native input."""
+    from pb9_backtest_runtime import publish_result_source
+    source, _, _ = native
+    prefs = {'market_cap': 25, 'vol_mcap': 5.5, 'tags': ['defi'], 'only_cpt': True,
+             'notices_ignore': False, 'note': 'review me'}
+    source['pbgui'] = {**prefs, 'enabled_on': 'remote', 'runtime': 'pb9'}
+    assert operation('prepare', {'config': source})['config']['pbgui'] == prefs
+    draft = operation('draft_create', {'config': source}, owner='alice')['draft_id']
+    assert operation('draft_get', id=draft, owner='alice')['config']['pbgui'] == prefs
+    operation('save', {'config': source}, name='filters')
+    assert operation('load', name='filters')['config']['pbgui'] == prefs
+    job = operation('enqueue', {'name': 'filters'})['filename']
+    assert bt._read(bt._job_path(job))['gui_preferences'] == prefs
+    snapshot = bt._read(bt._job_path(job, '.config.json'))
+    assert 'pbgui' not in snapshot
+    result = Path(snapshot['backtest']['base_dir']) / 'combined' / 'result'
+    result.mkdir(parents=True)
+    bt._write(result / 'analysis.json', {})
+    publish_result_source(bt._job_path(job, '.config.json'))
+    assert operation('result_config', path=str(result))['pbgui'] == prefs
+
+
+@pytest.mark.parametrize('prefs', [{'market_cap': -1}, {'tags': ['bad\n']}, {'only_cpt': 1}, {'note': []}])
+def test_invalid_gui_preferences_fail_before_saving_or_enqueue(native, prefs):
+    """Malformed sidecar values never become native or persisted GUI inputs."""
+    source, _, _ = native
+    source['pbgui'] = prefs
+    for action, body, args in [('prepare', {'config': source}, {}),
+                               ('save', {'config': source}, {'name': 'bad'}),
+                               ('enqueue', {'name': 'bad', 'config': source}, {})]:
+        with pytest.raises(HTTPException) as error:
+            operation(action, body, **args)
+        assert error.value.status_code == 422
+    assert not bt._cfg_path('bad').exists()
+    assert operation('queue')['queue'] == []
+
+
+def test_stop_is_reported_as_stopped_and_cleanup_does_not_follow_links(native):
+    """Deleting queue caches cannot remove results or the linked public data."""
+    source, _, root = native
+    job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
+    workspace = bt._working_dir(job); workspace.mkdir(parents=True)
+    public = root / 'public'; public.mkdir(); (public / 'keep').write_text('candles')
+    (workspace / 'metadata').symlink_to(public, target_is_directory=True)
+    result = Path(bt._read(bt._job_path(job, '.config.json'))['backtest']['base_dir'])
+    result.mkdir(parents=True); (result / 'keep').write_text('result')
+    operation('stop', id=job)
+    assert operation('queue')['queue'][0]['status'] == 'stopped'
+    assert operation('clear_finished')['removed'] == 1
+    assert not workspace.exists() and not bt._job_path(job).exists()
+    assert (public / 'keep').read_text() == 'candles'
+    assert (result / 'keep').read_text() == 'result'
+
+
+def test_restart_uses_new_output_and_keeps_original_result(native, monkeypatch):
+    """A retry uses the frozen source while retaining the old run's evidence."""
+    source, _, _ = native
+    source['pbgui'] = {'tags': ['defi']}
+    old = operation('enqueue', {'name': 'sample', 'config': source})['filename']
+    original = bt._read(bt._job_path(old, '.config.json'))
+    result = Path(original['backtest']['base_dir']); result.mkdir(parents=True)
+    (result / 'keep').write_text('original')
+    bt._write(bt._job_path(old, '.state.json'), {'returncode': 1})
+    launched = []
+    monkeypatch.setattr(bt, '_start', lambda job, cancel: launched.append(job) or {'ok': True})
+    new = operation('restart', id=old)['filename']
+    assert launched == [new] and old != new
+    snapshot = bt._read(bt._job_path(new, '.config.json'))
+    assert snapshot['bot'] == original['bot']
+    assert snapshot['backtest']['base_dir'] != original['backtest']['base_dir']
+    assert bt._read(bt._job_path(new))['gui_preferences'] == {'tags': ['defi']}
+    assert (result / 'keep').read_text() == 'original'
+    assert bt._read(bt._job_path(old, '.state.json')) == {'returncode': 1}
+
+
+@pytest.mark.parametrize('remove_results', [True, False])
+def test_config_delete_honors_result_choice_recoverably(native, remove_results):
+    """The shared deletion dialog has the same effect for native PB9 configs."""
+    source, _, _ = native
+    operation('save', {'config': source}, name='sample')
+    results = bt._safe(bt._root('results'), 'sample'); results.mkdir(parents=True)
+    (results / 'keep').write_text('result')
+    operation('delete_config', name='sample', remove_results=remove_results)
+    assert not bt._cfg_path('sample').exists()
+    assert results.exists() is not remove_results
+    trashed = list(bt._root('trash').iterdir())
+    assert len(trashed) == (2 if remove_results else 1)
+    assert any((directory / 'config.json').exists() for directory in trashed)
+
+
+@pytest.mark.parametrize('exit_code,expected', [(0,'complete'), (1,'error'), (-15,'stopped')])
+def test_stop_distinguishes_concurrent_native_exit_from_requested_signal(native, monkeypatch, exit_code, expected):
+    """A natural exit keeps its state; termination cannot be displayed as failure."""
+    from types import SimpleNamespace
+    source, _, _ = native
+    job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
+    active = [True]
+    original_status = bt._job_status
+    record = {'pid': 123}
+    monkeypatch.setattr(bt, '_job_status', lambda job: ('running',record) if active[0] else original_status(job))
+    def terminate():
+        """Simulate the race without creating or signalling any actual process."""
+        active[0] = False
+        bt._write(bt._job_path(job, '.state.json'), {'returncode': exit_code})
+    process = SimpleNamespace(children=lambda recursive: [], terminate=terminate)
+    monkeypatch.setattr(bt.psutil, 'Process', lambda pid: process)
+    monkeypatch.setattr(bt.psutil, 'wait_procs', lambda processes, timeout: (processes, []))
+    operation('stop', id=job)
+    assert operation('queue')['queue'][0]['status'] == expected
+    assert bt._read(bt._job_path(job, '.state.json')).get('stopped', False) == (exit_code < 0)
+
+
+def test_config_delete_rolls_back_when_result_move_fails(native, monkeypatch):
+    """A failed combined deletion retains both original user-visible data roots."""
+    source, _, _ = native
+    operation('save', {'config': source}, name='sample')
+    results = bt._safe(bt._root('results'), 'sample'); results.mkdir(parents=True)
+    (results / 'keep').write_text('original')
+    replace = bt.os.replace
+    def fail_result(old, new):
+        """Fail only the result move; allow the config rollback to complete."""
+        if old == results:
+            raise OSError('synthetic result move failure')
+        return replace(old, new)
+    monkeypatch.setattr(bt.os, 'replace', fail_result)
+    with pytest.raises(OSError, match='synthetic'):
+        operation('delete_config', name='sample', remove_results=True)
+    assert operation('load', name='sample')['config']['config_version'] == 'v9.0.0'
+    assert (results / 'keep').read_text() == 'original'
+    assert list(bt._root('trash').iterdir()) == []
+
+
+@pytest.mark.parametrize('change', ['runtime','snapshot'])
+def test_restart_rejects_changed_identity_without_creating_a_new_job(native, change):
+    """Restart cannot bless a different runtime or altered frozen input."""
+    source, status, _ = native
+    job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
+    bt._write(bt._job_path(job, '.state.json'), {'returncode': 0})
+    if change == 'runtime':
+        status['commit'] = 'b' * 40
+    else:
+        snapshot = bt._read(bt._job_path(job, '.config.json'))
+        snapshot['backtest']['starting_balance'] += 1
+        bt._write(bt._job_path(job, '.config.json'), snapshot)
+    with pytest.raises(HTTPException) as error:
+        operation('restart', id=job)
+    assert error.value.status_code == 409
+    assert len(operation('queue')['queue']) == 1
+    assert bt._read(bt._job_path(job, '.state.json')) == {'returncode': 0}
 
 
 def test_stale_save_revision_is_rejected_without_overwrite(native):
@@ -271,6 +479,7 @@ def test_migration_review_to_unsaved_draft_leaves_pb8_and_queue_unchanged(native
     assert accepted['suggested_name'] == 'example_v9'
     draft = operation('draft_get',id=accepted['draft_id'],owner='one')
     assert draft['config']['config_version'] == 'v9.0.0'
+    assert draft['config']['pbgui']['note'] == 'source untouched'
     assert draft['migration_report'] == review['report']
     assert path.read_bytes() == raw
     assert not bt._root('configs').exists()
@@ -511,3 +720,249 @@ def test_invalid_optional_reference_does_not_hide_native_results(native):
     assert 'comparison_reference' not in data[0]
     with pytest.raises(HTTPException) as rejected:operation('compare_source',path=str(directory))
     assert rejected.value.status_code==422
+
+
+def test_queue_policy_defaults_and_separate_atomic_persistence(native, monkeypatch):
+    """PB9 starts disabled and its locked INI writes preserve legacy queue settings."""
+    import pbgui_purefunc as pure
+    _, _, root = native
+    path = root / 'test.ini'
+    path.write_text('[backtest_v7]\nautostart = True\ncpu = 3\n')
+    monkeypatch.setattr(pure, 'pbgui_ini_path', lambda: path)
+    monkeypatch.setattr(bt, 'load_ini_section', pure.load_ini_section)
+    monkeypatch.setattr(bt, 'save_ini_section', pure.save_ini_section)
+    monkeypatch.setattr(bt.os, 'cpu_count', lambda: 4)
+    assert bt.settings()['autostart'] is False
+    assert bt.settings()['cpu'] == 1
+    assert bt.settings()['capabilities']['autostart'] is True
+    bt.update_settings({'autostart': True, 'cpu': 99})
+    assert bt.settings()['autostart'] is True
+    assert bt.settings()['cpu'] == bt.settings()['cpu_max'] == 4
+    assert pure.load_ini_section('backtest_v7') == {'autostart': 'True', 'cpu': '3'}
+    bt.update_settings({'autostart': False})
+    assert bt.settings()['cpu'] == 4
+    assert bt.settings()['autostart'] is False
+
+
+@pytest.mark.parametrize('body', [{'cpu': True}, {'cpu': '2'}, {'autostart': 'true'},
+                                  {'autostart': 1}, {'hlcvs_cleanup_enabled': True}])
+def test_queue_settings_reject_invalid_types_without_write(native, body):
+    """Only supported typed controls can modify the native queue section."""
+    with pytest.raises(HTTPException) as error:
+        bt.update_settings(body)
+    assert error.value.status_code == 422
+
+
+def test_auto_pause_during_runtime_preflight_prevents_spawn(native, monkeypatch):
+    """A freshly acknowledged pause wins over a scan that already selected a job."""
+    source, _, _ = native
+    job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
+    policy = {'autostart': 'True'}
+    monkeypatch.setattr(bt, 'load_ini_section', lambda _: policy.copy())
+    monkeypatch.setattr(bt, 'prepare_market_metadata', lambda *args: policy.update(autostart='False'))
+    monkeypatch.setattr(bt, 'claim_backtest_slot', lambda *args, **kwargs: pytest.fail('must not reserve'))
+    with pytest.raises(HTTPException, match='paused'):
+        bt._start(job, PB9CancelSignal(), automatic=True)
+    assert operation('queue')['queue'][0]['status'] == 'queued'
+    assert not bt._job_path(job, '.state.json').exists()
+
+
+def test_manual_start_uses_configured_shared_capacity_when_autostart_disabled(native, monkeypatch):
+    """Manual execution remains available and uses the same cross-version slot limit."""
+    source, _, _ = native
+    job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
+    monkeypatch.setattr(bt, 'prepare_market_metadata', lambda *args: None)
+    monkeypatch.setattr(bt, 'load_ini_section', lambda _: {'cpu': '2'})
+    monkeypatch.setattr(bt.os, 'cpu_count', lambda: 4)
+    claims = []
+    monkeypatch.setattr(bt, 'claim_backtest_slot', lambda *args, **kwargs: claims.append(args) or False)
+    with pytest.raises(HTTPException, match='slots'):
+        operation('start', id=job)
+    assert claims == [('v9', job, 2)]
+    assert operation('queue')['queue'][0]['status'] == 'queued'
+
+
+def test_worker_obeys_disabled_policy_capacity_and_pause_between_dispatches(native, monkeypatch):
+    """Automatic selection uses fresh policy for each dispatch and ignores completed jobs."""
+    import asyncio
+    worker = bt.BacktestV9Worker(); worker._running = True
+    policy = {'autostart': False, 'cpu': 2}
+    launches = []
+    monkeypatch.setattr(bt, '_queue_settings', lambda: policy.copy())
+    monkeypatch.setattr(bt, '_queue', lambda: pytest.fail('disabled worker must not scan'))
+    asyncio.run(worker._cycle())
+    monkeypatch.setattr(bt, '_queue', lambda: [
+        {'filename': 'done', 'status': 'complete'}, {'filename': 'running', 'status': 'running'},
+        {'filename': 'first', 'status': 'queued'}, {'filename': 'second', 'status': 'queued'}])
+    policy['autostart'] = True
+    monkeypatch.setattr(worker, '_dispatch', lambda job: launches.append(job))
+    asyncio.run(worker._cycle())
+    assert launches == ['first']
+    launches.clear(); policy['cpu'] = 3
+    def dispatch(job):
+        """Simulate a second client pausing the durable queue after the first launch."""
+        launches.append(job); policy['autostart'] = False
+    monkeypatch.setattr(worker, '_dispatch', dispatch)
+    asyncio.run(worker._cycle())
+    assert launches == ['first']
+
+
+@pytest.mark.parametrize('phase', ['scan', 'launch'])
+def test_worker_shutdown_drains_its_work_without_stopping_published_jobs(native, monkeypatch, phase):
+    """Repeated shutdown requests join one executor owner and never signal native jobs."""
+    import asyncio
+    import threading
+    entered, release, finished = (threading.Event() for _ in range(3))
+    worker = bt.BacktestV9Worker()
+    monkeypatch.setattr(bt, '_queue_settings', lambda: {'autostart': True, 'cpu': 1})
+    def slow():
+        """Keep an owned operation alive until shutdown has started."""
+        entered.set()
+        assert release.wait(5)
+        finished.set()
+        return [{'filename': 'one', 'status': 'queued'}]
+    if phase == 'scan':
+        monkeypatch.setattr(bt, '_queue', slow)
+        monkeypatch.setattr(worker, '_dispatch', lambda *_: pytest.fail('late launch'))
+    else:
+        monkeypatch.setattr(bt, '_queue', lambda: [{'filename': 'one', 'status': 'queued'}])
+        monkeypatch.setattr(worker, '_dispatch', lambda *_: slow())
+    async def exercise():
+        """Stop stays pending until work completes; concurrent callers share the owner."""
+        worker.start(); task = worker._task
+        assert await asyncio.to_thread(entered.wait, 2)
+        stopping = asyncio.create_task(worker.stop())
+        await asyncio.sleep(.02)
+        assert worker._cancel.is_set() and not stopping.done()
+        again = asyncio.create_task(worker.stop())
+        await asyncio.sleep(.02)
+        release.set()
+        await asyncio.gather(stopping, again)
+        assert finished.is_set() and task.done() and worker._task is None
+        worker.start()
+        assert not worker._cancel.is_set()
+        await worker.stop()
+    try:
+        asyncio.run(exercise())
+    finally:
+        release.set()
+
+
+def test_native_automatic_launch_publishes_one_slot_and_survives_controller_stop(native, monkeypatch):
+    """One synthetic detached launch is published once and is not stopped by the controller."""
+    import asyncio
+    import shutil
+    source, status, root = native
+    job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
+    monkeypatch.setattr(bt, '_runtime', lambda cancel=None: ({**status, 'cli_file': root/'cli'},
+                        {'pb9dir': str(root/'source'), 'pb9venv': str(root/'env/bin/python')}))
+    monkeypatch.setattr(bt, 'prepare_market_metadata', lambda *args: None)
+    monkeypatch.setattr(bt, 'load_ini_section', lambda _: {'autostart': 'True', 'cpu': '1'})
+    monkeypatch.setattr(shutil, 'which', lambda *_: None)
+    claims, published, launches = [], [], []
+    monkeypatch.setattr(bt, 'claim_backtest_slot', lambda *args, **kwargs: claims.append(args) or True)
+    monkeypatch.setattr(bt, 'publish_backtest_process', lambda *args: published.append(args))
+    class Process:
+        """A synthetic independent runner: real subprocess creation is prohibited."""
+        def poll(self):
+            """Remain running after ready publication."""
+            return None
+        def terminate(self):
+            """Published jobs must not be signalled by API controller stop."""
+            pytest.fail('published child was stopped')
+    def launch(command, **kwargs):
+        """Publish the same runner handshake as production, entirely in tmp_path."""
+        launches.append((command, kwargs))
+        bt._write(Path(command[6]), {'pid': 12345, 'create_time': 1.25})
+        Path(command[7]).write_text('12345')
+        return Process()
+    monkeypatch.setattr(bt.subprocess, 'Popen', launch)
+    worker = bt.BacktestV9Worker()
+    assert worker._dispatch(job) == {'ok': True, 'pid': 12345}
+    asyncio.run(worker.stop())
+    assert claims == [('v9', job, 1)]
+    assert len(launches) == len(published) == 1
+    assert published[0][:4] == ('v9', job, 12345, 1.25)
+    assert launches[0][1]['start_new_session'] is True
+    assert not bt._job_path(job, '.state.json').exists()
+
+
+def test_automatic_queue_orders_oldest_first(native, monkeypatch):
+    """UUID filename ordering cannot overtake a previously queued snapshot."""
+    source, _, _ = native
+    first = operation('enqueue', {'name': 'first', 'config': source})['filename']
+    second = operation('enqueue', {'name': 'second', 'config': source})['filename']
+    for job, created in [(first, 1), (second, 2)]:
+        record = bt._read(bt._job_path(job)); record['created_at'] = created
+        bt._write(bt._job_path(job), record)
+    assert [item['filename'] for item in bt._queue()] == [first, second]
+
+
+def test_worker_stops_cycle_at_full_capacity_and_throttles_unchanged_deferrals(native, monkeypatch):
+    """One failed global reservation cannot trigger preflight for the whole queue."""
+    import asyncio
+    worker = bt.BacktestV9Worker(); worker._running = True
+    monkeypatch.setattr(bt, '_queue_settings', lambda: {'autostart': True, 'cpu': 2})
+    monkeypatch.setattr(bt, '_queue', lambda: [{'filename': str(i), 'status': 'queued'} for i in range(5)])
+    launches, logs = [], []
+    def full(job):
+        """Simulate PB8 consuming every shared slot."""
+        launches.append(job); raise bt._QueueCapacityUnavailable(409, 'full')
+    monkeypatch.setattr(worker, '_dispatch', full)
+    asyncio.run(worker._cycle())
+    assert launches == ['0']
+    def deferred(job):
+        """A durable mismatch stays actionable without writing five lines every poll."""
+        raise HTTPException(409, 'Source changed')
+    monkeypatch.setattr(worker, '_dispatch', deferred)
+    monkeypatch.setattr(bt, '_log', lambda *args, **kwargs: logs.append(args))
+    asyncio.run(worker._cycle()); asyncio.run(worker._cycle())
+    assert len(logs) == 5
+
+
+def test_automatic_start_does_not_wait_for_a_manually_owned_job_lock(native, monkeypatch):
+    """An automatic scan never waits on a manual start or another lock-stripe owner."""
+    import concurrent.futures
+    source, _, _ = native
+    job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
+    monkeypatch.setattr(bt, '_runtime', lambda *_: pytest.fail('busy job entered preflight'))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        with bt._job_lock(job):
+            future = pool.submit(bt._start, job, PB9CancelSignal(), True)
+            with pytest.raises(BlockingIOError):
+                future.result(timeout=2)
+
+
+def test_cancelled_unpublished_start_returns_to_queue_after_confirmed_cleanup(native, monkeypatch):
+    """An API restart during readiness leaves an unstarted snapshot retryable."""
+    import shutil
+    source, status, root = native
+    job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
+    monkeypatch.setattr(bt, '_runtime', lambda cancel=None: ({**status, 'cli_file': root/'cli'},
+                        {'pb9dir': str(root/'source'), 'pb9venv': str(root/'env/bin/python')}))
+    monkeypatch.setattr(bt, 'prepare_market_metadata', lambda *args: None)
+    monkeypatch.setattr(bt, 'load_ini_section', lambda _: {'autostart': 'True'})
+    monkeypatch.setattr(shutil, 'which', lambda *_: None)
+    cancel = PB9CancelSignal(); stopped = []
+    class Process:
+        """A not-yet-ready synthetic runner owned by the cancelled launch."""
+        def poll(self):
+            """Remain alive until cancellation cleanup."""
+            return None
+        def terminate(self):
+            """Record cleanup without touching a real process."""
+            stopped.append('terminate')
+        def wait(self, timeout=None):
+            """Confirm that the synthetic launch is stopped."""
+            return 0
+    def launch(*args, **kwargs):
+        """Cancel immediately after admission, before any ready handshake."""
+        cancel.set(); return Process()
+    monkeypatch.setattr(bt.subprocess, 'Popen', launch)
+    with pytest.raises(bt.PB9ConfigError):
+        bt._start(job, cancel, automatic=True)
+    assert stopped == ['terminate']
+    assert bt._job_status(job)[0] == 'queued'
+    assert not bt._job_path(job, '.state.json').exists()
+    assert not any(key in bt._read(bt._job_path(job)) for key in ['started_at', 'launch_command', 'status_override'])
+    assert not (root/'data/locks/backtest-autostart.json').exists()

@@ -66,6 +66,18 @@ Load base sidebar CSS first, any required content CSS next, then page-specific s
 
 Page-local CSS may style domain content. Do not duplicate sidebar widths, header padding, toolbar spacing, button geometry, active states or mouse-drag implementations. If a necessary reusable variant is missing, extend the shared component and test its consumers.
 
+PB9 queue settings reuse the shared Backtest Settings dialog for CPU slots and Autostart. Hide legacy market-data/cache-maintenance options for native PB9. Settings pushes update an open untouched dialog; preserve unsaved edits and apply local state only after a successful save.
+
+Native metadata editors share `frontend/css/metadata_fields.css` after their form styles. It owns compact explicit-value toggles, inherited-value styling and validation/count labels for both Run and Backtest editors.
+
+PB9 Backtest follows the PB8 editor's identity/date, balance, fees, OHLCV, sources, coin filters and two-column Long/Short order. Reuse `buildBacktestSourcesHtml`, `buildBacktestCoinFiltersHtml`, the coin-override and suite components. Use the shared metadata renderer's optional steppers and explicit grid spans for native primary fields, without explicit-value checkboxes on those main rows; place additional native settings under Advanced Settings. Full side JSON displays inherited values and applies only edited differences through the shared config-path helpers. Preserve open sections and JSON views as non-secret navigation state.
+
+Place **Additional Parameters** before Raw JSON using `buildExtraBtExpanderHtml` and `collectExtraBtParams`, with a version-specific set of keys covered by dedicated controls. Include unmapped template/registry/source backtest keys, preserve null/boolean/number/string/array/object values, leave unedited defaults absent, and keep the managed result path read-only. Discover future bot/logging fields under Advanced Settings. Never expose an actionable legacy-only tool for native PB9; document pending integrations in its Guide.
+
+OHLCV Readiness uses the shared floating panel with automatic coalesced checks, request generations and open-state restoration per config/draft. Do not add a Refresh action. Reuse the 1st/All/Stop controls through an explicit capability predicate; labels must not hard-code PB8 for a PB9 adapter. Native PB9 planning uses its own runtime/universe/age/warmup and read-only public metadata references, with private writes only after removing those links.
+
+Native PB9 Run discovers unregistered prototype/template/source fields under **Advanced Settings → Additional Parameters** through the same metadata renderer. Give each value a single author: a registered nested control excludes its parent object from the Backtest JSON fallback. Both editors use `nativeV9BalanceConfig` only for the shared calculator's analysis inputs; never persist that projection or execute it as a bot config.
+
 Do not copy an entire old page as a design reference: legacy pages can contain obsolete styles. The shared files and this guide define the standard.
 
 ## 3. Sidebar dimensions and controls

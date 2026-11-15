@@ -306,24 +306,40 @@ def handle(request: dict) -> dict:
     if not isinstance(request, dict) or not isinstance(request.get("operation"), str):
         raise _HelperError("invalid_request")
     required = {"operation", "pb9_dir", "config_schema", "package_version"}
-    if isinstance(request, dict) and request.get("operation") in {"validate", "validate_live", "validate_backtest", "migrate_v8"}:
+    if isinstance(request, dict) and request.get("operation") in {"validate", "validate_live", "validate_backtest", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates"}:
         required.add("config")
+    if request.get("operation") in {"ohlcv_preflight", "ohlcv_start_dates"}:
+        required.update({"work_dir", "metadata_roots"})
     if not isinstance(request, dict) or set(request) != required:
         raise _HelperError("invalid_request")
-    if not isinstance(request["operation"], str) or request["operation"] not in {"template", "metadata", "validate", "validate_live", "validate_backtest", "migrate_v8"} or any(
+    if request.get("operation") in {"ohlcv_preflight", "ohlcv_start_dates"}:
+        work = request["work_dir"]
+        roots = request["metadata_roots"]
+        if (not isinstance(work, str) or not Path(work).is_absolute() or Path(work).is_symlink()
+                or not Path(work).is_dir() or Path(work).resolve() == Path(tempfile.gettempdir()).resolve()
+                or not Path(work).resolve().is_relative_to(Path(tempfile.gettempdir()).resolve())
+                or not isinstance(roots, list) or len(roots) > 2
+                or any(not isinstance(root, str) or not Path(root).is_absolute()
+                       or len(root) > 4096 or any(ord(char) < 32 for char in root) for root in roots)):
+            raise _HelperError("invalid_request")
+    if not isinstance(request["operation"], str) or request["operation"] not in {"template", "metadata", "validate", "validate_live", "validate_backtest", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates"} or any(
         not isinstance(request[key], str) or not request[key]
         for key in ("pb9_dir", "config_schema", "package_version")
     ):
         raise _HelperError("invalid_request")
-    if request["operation"] in {"validate", "validate_live", "validate_backtest"}:
+    if request["operation"] in {"validate", "validate_live", "validate_backtest", "ohlcv_preflight", "ohlcv_start_dates"}:
         check_inline_config(request["config"], request["config_schema"],
-                            allow_inline_overrides=request["operation"] in {"validate_live", "validate_backtest"})
+                            allow_inline_overrides=request["operation"] in {"validate_live", "validate_backtest", "ohlcv_preflight", "ohlcv_start_dates"})
     if request["operation"] == "migrate_v8":
         check_migration_input(request["config"])
     root = Path(request["pb9_dir"])
     if not root.is_absolute():
         raise _HelperError("invalid_request")
     root = root.resolve()
+    if request["operation"] in {"ohlcv_preflight", "ohlcv_start_dates"}:
+        work = Path(request["work_dir"]).resolve()
+        if work.is_relative_to(root) or root.is_relative_to(work):
+            raise _HelperError("invalid_request")
     src = (root / "src").resolve()
     if not src.is_relative_to(root) or not src.is_dir():
         raise _HelperError("invalid_request")
@@ -339,6 +355,21 @@ def handle(request: dict) -> dict:
                 or schema_version != request["config_schema"]
                 or package_version != request["package_version"]):
             raise _HelperError("runtime_identity_mismatch")
+        if request["operation"] in {"ohlcv_preflight", "ohlcv_start_dates"}:
+            try:
+                from importlib import util
+                spec = util.spec_from_file_location("_pbgui_native_ohlcv_probe", Path(__file__).with_name("pb9_ohlcv_probe.py"))
+                probe = util.module_from_spec(spec)
+                spec.loader.exec_module(probe)
+                result = probe.build(request["config"], root, work=Path(request["work_dir"]),
+                                     metadata_roots=request["metadata_roots"], start_dates=request["operation"] == "ohlcv_start_dates")
+            except Exception as exc:
+                code = getattr(exc, "error_code", None)
+                if code not in {"ohlcv_metadata_missing", "ohlcv_coins_required", "ohlcv_pair_limit", "ohlcv_dataset_override"}:
+                    code = "native_ohlcv_failed"
+                raise _HelperError(code) from exc
+            return {**result, "config_schema": schema_version, "package_version": package_version,
+                    "schema_module_file": schema_file, "version_module_file": version_file}
         if request["operation"] == "migrate_v8":
             migration, converter_file = _migrate_v8(request["config"], src, schema_version)
             return {"migration": migration, "converter_module_file": converter_file,

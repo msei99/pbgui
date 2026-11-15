@@ -28,7 +28,8 @@ _ENV_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "SYSTEMROOT", "WINDIR
              "TMPDIR", "TMP", "TEMP", "TZ"}
 _HELPER_CODES = {"invalid_request", "runtime_identity_mismatch", "native_template_failed",
                  "helper_output_limit", "invalid_template", "invalid_config", "config_version_mismatch",
-                 "external_reference_rejected", "native_config_rejected", "native_validation_failed", "native_metadata_failed"}
+                 "external_reference_rejected", "native_config_rejected", "native_validation_failed", "native_metadata_failed", "native_ohlcv_failed",
+                 "ohlcv_metadata_missing", "ohlcv_coins_required", "ohlcv_pair_limit", "ohlcv_dataset_override"}
 
 
 class PB9ConfigError(RuntimeError):
@@ -61,7 +62,7 @@ class PB9CancelSignal:
 
 
 def _run_helper(status: dict, timeout: float, *, operation: str = "template", config: dict | None = None,
-                 cancel_event: threading.Event | PB9CancelSignal | None = None) -> bytes:
+                 cancel_event: threading.Event | PB9CancelSignal | None = None, probe_context=None, progress_callback=None) -> bytes:
     """Own one process group and nonblocking pipes under a single deadline.
 
     Requires normal SIGCHLD handling: no SIG_IGN or external child reaper.
@@ -71,10 +72,12 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
         "operation": operation, "pb9_dir": status["pb9dir"],
         "config_schema": status["config_schema"], "package_version": status["package_version"],
     }
-    if operation in {"validate", "validate_live", "validate_backtest", "migrate_v8"}:
+    if operation in {"validate", "validate_live", "validate_backtest", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates"}:
         payload["config"] = config
+    if operation in {"ohlcv_preflight", "ohlcv_start_dates"}:
+        payload.update(probe_context or {})
     request = json.dumps(payload, allow_nan=False).encode("utf-8")
-    if len(request) > (MAX_VALIDATION_BYTES if operation in {"validate", "validate_live", "validate_backtest", "migrate_v8"} else 16384):
+    if len(request) > (MAX_VALIDATION_BYTES if operation in {"validate", "validate_live", "validate_backtest", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates"} else 16384):
         raise PB9ConfigError("invalid_request")
     env = {key: value for key, value in os.environ.items() if key.upper() in _ENV_KEYS}
     env["PATH"] = os.pathsep.join((str(Path(status["pb9venv"]).parent), os.defpath))
@@ -83,7 +86,7 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
         raise PB9ConfigError("helper_cancelled")
     proc = subprocess.Popen(
         [status["pb9venv"], "-I", "-B", str(_HELPER_PATH)], cwd=status["pb9dir"], env=env,
-        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE if progress_callback else subprocess.DEVNULL, bufsize=0,
         start_new_session=True,
     )
     selector = None
@@ -106,6 +109,11 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
         os.set_blocking(proc.stdout.fileno(), False)
         selector.register(proc.stdin, selectors.EVENT_WRITE, "input")
         selector.register(proc.stdout, selectors.EVENT_READ, "output")
+        progress_buffer = bytearray()
+        progress_size = 0
+        if progress_callback:
+            os.set_blocking(proc.stderr.fileno(), False)
+            selector.register(proc.stderr, selectors.EVENT_READ, "progress")
         remaining_input = memoryview(request)
         group_stopped = False
         while selector.get_map():
@@ -131,6 +139,18 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
                         if not chunk:
                             selector.unregister(key.fileobj)
                             key.fileobj.close()
+                        elif key.data == "progress":
+                            progress_size += len(chunk)
+                            if progress_size > 32 * 1024 * 1024:
+                                raise PB9ConfigError("helper_output_limit")
+                            progress_buffer.extend(chunk)
+                            while b'\n' in progress_buffer:
+                                line, _, tail = progress_buffer.partition(b'\n')
+                                progress_buffer[:] = tail
+                                if line.startswith(b'PBGUI_OHLCV_START_PROGRESS ') and len(line) <= 16384:
+                                    progress_callback(line.decode('utf-8', errors='replace'))
+                            if len(progress_buffer) > 16384:
+                                progress_buffer.clear()
                         elif len(output) + len(chunk) > MAX_RESPONSE_BYTES:
                             raise PB9ConfigError("helper_output_limit")
                         else:
@@ -153,6 +173,8 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
                 selector.close()
             proc.stdin.close()
             proc.stdout.close()
+            if proc.stderr is not None:
+                proc.stderr.close()
             proc.wait()
     if proc.returncode != 0:
         raise PB9ConfigError("helper_failed")
@@ -204,6 +226,10 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
         "schema_module_file": result["schema_module_file"],
         "version_module_file": result["version_module_file"],
     }
+    if operation in {"ohlcv_preflight", "ohlcv_start_dates"}:
+        if not isinstance(result.get("summary"), dict) or not isinstance(result.get("request"), dict):
+            raise PB9ConfigError("invalid_response")
+        return {"report": {key: value for key, value in result.items() if key not in {"config_schema", "package_version", "schema_module_file", "version_module_file"}}, "source": source}
     if operation in {"validate", "validate_live", "validate_backtest"}:
         source["load_module_file"] = result["load_module_file"]
         return {"valid": True, "source": source}
@@ -341,7 +367,7 @@ def validate_pb9_document(document: dict, pb9dir: str | Path | None, pb9venv: st
     return {"config": snapshot, "pbgui": metadata, "source": validation["source"]}
 
 
-def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: float, config=None,
+def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: float, config=None, probe_context=None,
                       cancel_event: threading.Event | PB9CancelSignal | None = None) -> dict:
     """Apply shared preflight, isolation and sanitized failure mapping."""
     try:
@@ -355,17 +381,21 @@ def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: 
         if not _SUPPORTED_PLATFORM:
             raise PB9ConfigError("unsupported_platform")
         validating = operation in {"validate", "validate_live", "validate_backtest"}
+        probing = operation in {"ohlcv_preflight", "ohlcv_start_dates"}
         if operation == "migrate_v8":
             check_migration_input(config)
-        if validating:
-            check_inline_config(config, allow_inline_overrides=operation in {"validate_live", "validate_backtest"})
+        if validating or probing:
+            check_inline_config(config, allow_inline_overrides=probing or operation in {"validate_live", "validate_backtest"})
         status = (inspect_pb9_runtime(pb9dir, pb9venv, other_slots, cancel_event=cancel_event)
                   if cancel_event is not None else inspect_pb9_runtime(pb9dir, pb9venv, other_slots))
         if cancel_event is not None and cancel_event.is_set():
             raise PB9ConfigError("helper_cancelled")
         if not status["detected"]:
             raise PB9ConfigError("runtime_not_detected")
-        if operation == "migrate_v8":
+        if probing:
+            check_inline_config(config, status["config_schema"], allow_inline_overrides=True)
+            raw = _run_helper(status, timeout, operation=operation, config=config, cancel_event=cancel_event, probe_context=probe_context)
+        elif operation == "migrate_v8":
             raw = _run_helper(status, timeout, operation=operation, config=config, cancel_event=cancel_event)
         elif validating:
             check_inline_config(config, status["config_schema"], allow_inline_overrides=operation in {"validate_live", "validate_backtest"})

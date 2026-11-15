@@ -118,7 +118,7 @@ from api.coin_data import (
 )
 from api.backtest_v7 import router as backtest_v7_router
 from api.backtest_v7 import startup as bt7_startup, shutdown as bt7_shutdown
-from api.backtest_v9 import router as backtest_v9_router, shutdown as bt9_shutdown
+from api.backtest_v9 import router as backtest_v9_router, startup as bt9_startup, shutdown as bt9_shutdown
 from api.backtest_v8 import router as backtest_v8_router
 from api.backtest_v8 import startup as bt8_startup, shutdown as bt8_shutdown
 from api.cluster import router as cluster_router, shutdown as cluster_shutdown
@@ -953,6 +953,7 @@ async def _lifespan(app: FastAPI):
 
         bt7_startup()
         bt8_startup()
+        bt9_startup()
         opt7_startup()
         opt8_startup()
         coin_data_startup()
@@ -992,6 +993,7 @@ async def _lifespan(app: FastAPI):
             _log(SERVICE, f"[lifespan] pb8-loop shutdown failed: {type(exc).__name__}", level="ERROR", meta={"traceback": traceback.format_exc()})
 
         shutdown_steps = (
+            ("backtest-v9", bt9_shutdown),
             ("pb9", lambda: pb9_shutdown(app)),
             ("auth", auth_shutdown),
             ("ai-chat", ai_chat_shutdown),
@@ -1010,7 +1012,6 @@ async def _lifespan(app: FastAPI):
             ("storage", storage_shutdown),
             ("backtest-v7", bt7_shutdown),
             ("backtest-v8", bt8_shutdown),
-            ("backtest-v9", bt9_shutdown),
             ("optimize-v7", opt7_shutdown),
             ("optimize-v8", opt8_shutdown),
         )

@@ -1,4 +1,4 @@
-/* Shared PB8 editor inception lookup: same request, polling, stop and stale-result rules. */
+/* Shared native editor inception lookup: same request, polling, stop and stale-result rules. */
 (function (global) {
   'use strict';
   function create(options) {
@@ -60,7 +60,7 @@ async function refresh() {
     }
     if (response.status === 'error' || response.status === 'stopped') {
       options.status(response.status === 'error'
-        ? 'Lookup unsuccessful: ' + (response.error || 'PB8 lookup failed.') + ' Retry after correcting the problem.'
+        ? 'Lookup unsuccessful: ' + (response.error || 'OHLCV lookup failed.') + ' Retry after correcting the problem.'
         : 'Lookup stopped. Retry when ready.', response.status === 'error' ? 'error' : '');
       clear();
       return;
@@ -75,14 +75,14 @@ async function refresh() {
 }
 
 async function start(mode, triggerButton) {
-  if (!options.isV8() || state.run) return;
+  if (!(options.enabled ? options.enabled() : options.isV8()) || state.run) return;
   if ((mode !== 'earliest' && mode !== 'all_markets') || !triggerButton) return;
   var requestId = ++state.requestId;
   var run = {jobId: null, mode: mode, requestId: requestId, silentStop: false};
   state.run = run;
   options.status('');
   options.running(true);
-  options.progress({status: 'queued', progress: {percent: 0, message: 'Starting PB8 lookup...'}});
+  options.progress({status: 'queued', progress: {percent: 0, message: 'Starting OHLCV lookup...'}});
   try {
     var config = await options.collect();
     if (state.run !== run) return;
@@ -132,7 +132,7 @@ async function stop(silent) {
     state.timer = null;
   }
   options.progress({status: 'stopping', stop_requested: true,
-    progress: Object.assign({}, run.lastProgress || {}, {message: 'Stopping PB8 lookup...'})});
+    progress: Object.assign({}, run.lastProgress || {}, {message: 'Stopping OHLCV lookup...'})});
   try {
     var response = await options.fetch('/ohlcv-start-dates/' + encodeURIComponent(run.jobId), {method: 'DELETE'});
     if (state.run !== run) return;

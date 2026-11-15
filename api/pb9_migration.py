@@ -71,7 +71,7 @@ def _clean(value, depth=0):
     return value
 
 
-def source_snapshot(selection):
+def source_snapshot(selection, *, with_preferences=False):
     """Resolve one saved config or local PB8 result through the existing PB8 boundaries."""
     from api import backtest_v8 as pb8
     if not isinstance(selection, dict) or set(selection) != {'source_type', 'source'} or not isinstance(selection['source'], str):
@@ -94,6 +94,13 @@ def source_snapshot(selection):
     # Same writer lock as PB8 config persistence, without its recovery/write path.
     with advisory_file_lock(root / '.write'):
         document, raw = _read(path, root)
+        preferences = {}
+        if with_preferences:
+            from pb9_gui_preferences import backtest_preferences
+            try:
+                preferences = backtest_preferences(document)
+            except ValueError as exc:
+                raise HTTPException(422, str(exc)) from None
         config = _clean(document)
         if not isinstance(config, dict):
             raise HTTPException(422, 'Expected a PB8 config object')
@@ -121,17 +128,20 @@ def source_snapshot(selection):
             raise HTTPException(422, message) from None
     fingerprint = hashlib.sha256(json.dumps({name: hashlib.sha256(raw).hexdigest() for name, raw in sorted(originals.items())}).encode()).hexdigest()
     name = re.sub(r'[^A-Za-z0-9_. -]', '_', str(name)).strip(' ._') or 'backtest'
-    return bundle, fingerprint, name[:112] + '_v9'
+    result = (bundle, fingerprint, name[:112] + '_v9')
+    return (*result, preferences) if with_preferences else result
 
 
 def preview(body, owner, paths, cancel):
     """Create a bounded owner-bound proposal, never a saved config or queue job."""
-    bundle, fingerprint, name = source_snapshot(body)
+    bundle, fingerprint, name, preferences = source_snapshot(body, with_preferences=True)
     native = migrate_pb8_config_to_pb9(bundle, paths['pb9dir'], paths['pb9venv'],
               {key: value for key, value in paths.items() if not key.startswith('pb9')}, cancel_event=cancel)
     proposal = native['migration']
     if proposal['status'] != 'ready':
         return proposal
+    if preferences:
+        proposal['config']['pbgui'] = preferences
     if cancel.is_set():
         from pb9_config import PB9ConfigError
         raise PB9ConfigError('helper_cancelled')
@@ -203,10 +213,17 @@ def config_comparison_reference(config):
 
 
 def carry_comparison_reference(source, document):
-    """Preserve only the reviewed PBGui reference while native parameters stay unchanged."""
+    """Preserve safe editor preferences and the reviewed comparison reference."""
+    from pb9_gui_preferences import backtest_preferences
+    try:
+        gui = backtest_preferences(document)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
     reference=config_comparison_reference(document)
     if reference:
-        source['pbgui']={'comparison_reference':reference}
+        gui['comparison_reference']=reference
+    if gui:
+        source['pbgui']=gui
     return source
 
 

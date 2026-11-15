@@ -63,7 +63,8 @@
     { id: 'portfolio', host: 'bot', title: 'Portfolio', prefix: ['bot', 'portfolio'] },
     { id: 'global', host: 'bot', title: 'Global defaults', prefix: ['bot', 'global'] },
     { id: 'long', host: 'bot', title: 'Long overrides', prefix: ['bot', 'long'] },
-    { id: 'short', host: 'bot', title: 'Short overrides', prefix: ['bot', 'short'] }
+    { id: 'short', host: 'bot', title: 'Short overrides', prefix: ['bot', 'short'] },
+    { id: 'additional', host: 'settings', title: 'Additional Parameters', additional: true, prefix: [] }
   ];
   var V9_UNSAFE_SEGMENTS = ['__proto__', 'constructor', 'prototype'];
   var V9_NO_COIN_OVERRIDE = /^(never|none|no|false|forbidden|disabled|unsupported)$/i;
@@ -82,6 +83,7 @@
     var fixedInputs = {};
     var coinInputs = {};
     var jsonInputs = {};
+    var registeredFields = [], template = {};
 
     function paths() {
       return window.PBGuiEditorShared.configPath;
@@ -234,7 +236,26 @@
       fields = fields.map(function (field, index) { return { field: field, index: index }; })
         .sort(function (left, right) { return left.field.order - right.field.order || left.index - right.index; })
         .map(function (item) { return item.field; });
+      registeredFields=fields.slice();template=object(raw.template);
       renderedKind = null;
+    }
+
+    function discoverAdditional(config) {
+      fields=registeredFields.slice();fieldIndex={};
+      fields.forEach(function(field) {fieldIndex[field.path.join('.')]=field;});
+      [metadata.prototype,template,config].forEach(function(document,index) {
+        ['live','bot','logging','monitor'].forEach(function(root) {
+          flattenLeaves(object(document)[root],[root],[]).forEach(function(leaf) {
+            if (leaf.value === undefined || fieldIndex[leaf.path.join('.')]) return;
+            if (fields.some(function(field) {return field.path.every(function(part,i) {return part === '*' || part === leaf.path[i];});})) return;
+            var field=leafField(leaf.path,leaf.value,'Additional native PB9 parameter');
+            field.additional=true;
+            if (index === 2) {field.hasDefault=false;delete field.default;}
+            addField(field);
+          });
+        });
+      });
+      renderedKind=null;
     }
 
     function fixedKeys() {
@@ -257,6 +278,8 @@
     function sectionItem(definition, field, kind) {
       var path = field.path;
       var key = path.join('.');
+      if (definition.additional) return field.additional ? {group:path[0],label:path.slice(1).join('.')} : null;
+      if (field.additional) return null;
       if (definition.keys) return definition.keys.indexOf(key) >= 0 ? { group: '', label: path.slice(1).join('.') } : null;
       var prefix = definition.prefix;
       if (path.length <= prefix.length || prefix.some(function (segment, index) { return path[index] !== segment; })) return null;
@@ -383,12 +406,7 @@
     }
 
     function mergeJson(target, patch) {
-      Object.keys(object(patch)).forEach(function(key) {
-        if (V9_UNSAFE_SEGMENTS.indexOf(key) >= 0) return;
-        if (plain(patch[key])) target[key] = mergeJson(plain(target[key]) ? target[key] : {}, patch[key]);
-        else target[key] = clone(patch[key]);
-      });
-      return target;
+      return paths().merge(target, patch);
     }
 
     function sideProjection(source, side) {
@@ -411,16 +429,7 @@
     }
 
     function applyJsonDelta(target, before, after, prefix) {
-      var cp = paths();
-      Object.keys(before).forEach(function(key) {
-        if (!Object.prototype.hasOwnProperty.call(after, key)) cp.remove(target, prefix.concat(key), 2);
-      });
-      Object.keys(after).forEach(function(key) {
-        if (JSON.stringify(before[key]) === JSON.stringify(after[key])) return;
-        var path = prefix.concat(key);
-        if (plain(before[key]) && plain(after[key])) applyJsonDelta(target, before[key], after[key], path);
-        else cp.set(target, path, clone(after[key]));
-      });
+      paths().applyDelta(target, before, after, prefix);
     }
 
     function renderSideJson(source, reset) {
@@ -633,6 +642,7 @@
         };
       },
       populateForm: function (config, page) {
+        discoverAdditional(config);
         var pbgui = object(config.pbgui);
         var user = this.getUser(config);
         page.ensureSelectOption('f-user', user);
@@ -723,33 +733,7 @@
       },
       // Read-only PB8-shaped inputs for the shared Balance Calculator; never saved.
       balanceCalcConfig: function (source) {
-        source = object(source);
-        var kind = this.getStrategyKind(source);
-        var projection = {
-          live: { user: this.getUser(source), strategy_kind: kind, approved_coins: {}, ignored_coins: {} },
-          bot: {},
-          pbgui: clone(object(source.pbgui))
-        };
-        delete projection.pbgui.dynamic_ignore;
-        V9_SIDES.forEach(function (side) {
-          var enabled = resolve(source, ['bot', side, 'enabled']).value === true;
-          var approved = resolveCoins(source, 'approved_coins', side).list;
-          var strategyPath = ['bot', side, 'strategy', kind];
-          var quantity = [['entry', 'initial_qty_fraction'], ['entry', 'initial_qty_pct'], ['base_qty_fraction'], ['base_qty_pct']]
-            .map(function (path) { return Number(resolve(source, strategyPath.concat(path)).value); })
-            .filter(function (value) { return Number.isFinite(value); })[0] || 0;
-          projection.live.approved_coins[side] = !enabled ? [] : approved.indexOf('all') >= 0 ? 'all' : approved;
-          projection.live.ignored_coins[side] = resolveCoins(source, 'ignored_coins', side).list;
-          projection.bot[side] = {
-            risk: {
-              n_positions: enabled ? sideNumber(source, side, 'n_positions') : 0,
-              total_wallet_exposure_limit: enabled ? sideNumber(source, side, 'total_wallet_exposure_limit') : 0
-            },
-            strategy: {}
-          };
-          projection.bot[side].strategy[kind || 'strategy'] = { entry: { initial_qty_pct: quantity } };
-        });
-        return projection;
+        return window.PBGuiEditorShared.nativeV9BalanceConfig(source, function(path) {return resolve(source,path).value;});
       }
     };
   }

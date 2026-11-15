@@ -2,6 +2,64 @@
 
 ## Development
 
+- Add PB9 queue Autostart and CPU slots through the existing Backtest Settings
+  dialog, with separate native settings (default off / one slot), oldest-first
+  dispatch, fresh pause checks and shared PB7/PB8/PB9 capacity. Push policy changes
+  automatically while preserving in-progress dialog edits.
+- Reject busy automatic job-lock admission without waiting, return cancelled
+  unpublished starts to the queue after confirmed cleanup, stop dispatch at full
+  shared capacity and count identified pending PB9 runners only once. Throttle
+  repeated unchanged queue-deferral logs. Existing blocking transactions retain
+  their locking behavior.
+- Share the PB8/PB9 controller lifecycle and drain owned scans/launch preparation
+  on API shutdown. Published native backtests remain independent and continue
+  across API restarts; pausing autostart never stops running jobs.
+
+- Add native PB9 OHLCV Readiness and 1st/All using the existing PB8 panel,
+  planner reports and lookup controller, with PB9 universe/activation/age/warmup,
+  approved source roots and direct PBGui candle access. Preserve empty native
+  source selection and report prepared-dataset overrides separately.
+- Use the PB9 selector transport for lookup progress, cancellation and unreaped
+  process-group ownership; validate helper source identity before publishing
+  results. Separate PB8/PB9 capacity and history, keep lookups login-scoped and
+  join owned helpers at shutdown. Public metadata links are read-only; online
+  fallback writes only in cleaned private workspaces and never copies candles.
+- Automatically update OHLCV Readiness after edits, window return and background
+  changes; ignore stale responses and restore the open panel on browser reload.
+  Remove the shared manual Refresh Check control and genericize lookup labels.
+
+- Address the bounded Fable review of PB9 Run/Backtest: preserve validated filter
+  preferences and notes through migration, drafts, saves, queue snapshots and
+  result reuse while keeping native inputs free of GUI metadata. Share the
+  existing Run filter validator with Backtest.
+- Correct PB9 stopped status, restart into a fresh result namespace, honour
+  config deletion with results using recoverable managed trash, and remove owned
+  queue workspaces without following public market-data links. Preserve prior
+  result provenance and reject changed restart snapshots/runtimes.
+- Reuse the shared Balance Calculator/Calc Balance in PB9 Backtest and the same
+  native analysis projection in Run. Discover unregistered native Run fields
+  under Additional Parameters, prevent duplicate parent/child field authors and
+  unintended coin-list rewrites, and make Save & Queue single-flight/idempotent.
+
+- Add PB9 Additional Parameters through the existing PB8 typed fallback, with
+  managed result-path preview, template/registry/source discovery, sparse default
+  preservation and invalid-JSON save protection. Discover unregistered bot and
+  logging fields under Advanced Settings. Preserve current edits and GUI metadata
+  in Add to Run drafts, prevent unconnected tools from routing PB9 configs to
+  legacy handlers, and document remaining PB8 integration gaps. Replace the fixed
+  zero in the PB9 config-list coin count with native side/global universe counting
+  and return UTC modification dates instead of seconds misread as 1970 dates.
+
+- Align the PB9 Backtest editor with PB8's compact identity, balance, fees,
+  OHLCV, source, coin-filter and Long/Short layout. Reuse the existing source
+  chips, market overrides, coin overrides, suite editor and numeric steppers;
+  keep additional native fields under Advanced Settings. Show effective side
+  JSON while saving only edited overrides, preserve native side-owned lists,
+  reducer maps and sparse inheritance. Restore open sections/JSON views after
+  reload and open the Guide topic for the selected bot version. Share compact
+  metadata-field styles with Run, omit literal registry wildcard controls,
+  escape numeric GUI metadata and retain coin edits during catalog loading.
+
 - Extend the existing cross-version Backtest Compare view to PB9, with PB7/PB8/
   PB9 result selection, version-owned equity adapters and restored comparison
   state after reload. Retain an exact PB8 result reference for new native

@@ -94,7 +94,7 @@ function suiteInit(containerId, opts) {
   _suiteState.containerId = containerId;
   _suiteState.apiBase = opts.apiBase || '';
   _suiteState.aggregateMetrics = _suiteNormalizeAggMetrics(opts.aggregateMetrics);
-  _suiteState.preserveMarketIdentifiers = String(opts.version || '').toLowerCase() === 'v8';
+  _suiteState.preserveMarketIdentifiers = ['v8','v9'].indexOf(String(opts.version || '').toLowerCase()) >= 0;
   _suiteState.scenarioGeneratorEnabled = _suiteState.preserveMarketIdentifiers && opts.scenarioGenerator === true;
   _suiteState.getScenarioContext = typeof opts.getScenarioContext === 'function' ? opts.getScenarioContext : null;
   _suiteState.onApplyScenarioPreview = typeof opts.onApplyScenarioPreview === 'function' ? opts.onApplyScenarioPreview : null;
@@ -110,19 +110,22 @@ function suiteInit(containerId, opts) {
   } else {
     _suiteState.exchanges = ['binance','bybit','bitget','okx','hyperliquid','kucoin'];
   }
-  if (String(opts.version || '').toLowerCase() === 'v8') {
+  if (['v8','v9'].indexOf(String(opts.version || '').toLowerCase()) >= 0) {
     ['TWE Sensitivity', 'n_positions Sensitivity'].forEach(function(name) {
       var template = _suiteTemplates[name];
       (template && template.scenarios || []).forEach(function(scenario) {
         var migrated = {};
         Object.keys(scenario.overrides || {}).forEach(function(key) {
-          migrated[key.replace(/^(bot\.(?:long|short))\.(total_wallet_exposure_limit|n_positions)$/, '$1.risk.$2')] = scenario.overrides[key];
+          var nativeKey = key.replace(/^(bot\.(?:long|short))\.(total_wallet_exposure_limit|n_positions)$/, '$1.risk.$2');
+          if (String(opts.version).toLowerCase() === 'v9') nativeKey = nativeKey.replace(/\.risk\.total_wallet_exposure_limit$/, '.risk.total_wallet_exposure_limit_ratio').replace(/\.risk\.n_positions$/, '.risk.max_positions');
+          migrated[nativeKey] = scenario.overrides[key];
         });
         scenario.overrides = migrated;
       });
     });
   }
-  _suiteLoadBotParams();
+  if (Array.isArray(opts.botParams)) _suiteState.botParams = opts.botParams.slice();
+  else _suiteLoadBotParams();
 }
 
 function _suiteNormalizeAggMetrics(metrics) {

@@ -29,3 +29,19 @@ def test_untracked_manual_backtests_consume_shared_capacity(tmp_path: Path, monk
     monkeypatch.setattr(arbitration, "_managed_processes", lambda: {201: 20.0})
 
     assert arbitration.claim_backtest_slot("v8", "queued", 1) is False
+
+
+def test_pending_native_runner_counts_once_with_exact_command_identity(tmp_path, monkeypatch):
+    """A real pending runner consumes one slot; unrelated untracked jobs still count."""
+    monkeypatch.setattr(arbitration, '_state_root', lambda: tmp_path)
+    monkeypatch.setattr(arbitration, '_managed_processes', lambda: {})
+    assert arbitration.claim_backtest_slot('v9', 'first', 2,
+        command_markers=['pb9_backtest_runner.py', 'unique-first.config.json'])
+    monkeypatch.setattr(arbitration, '_managed_processes', lambda: {201: 20.0})
+    monkeypatch.setattr(arbitration, '_process_matches', lambda payload:
+        payload.get('pid') == 201 and payload.get('command_markers') == ['pb9_backtest_runner.py', 'unique-first.config.json'])
+    assert arbitration.claim_backtest_slot('v8', 'second', 2)
+    assert not arbitration.claim_backtest_slot('v7', 'third', 2)
+    arbitration.release_backtest_slot('v8', 'second')
+    monkeypatch.setattr(arbitration, '_managed_processes', lambda: {201: 20.0, 202: 21.0})
+    assert not arbitration.claim_backtest_slot('v8', 'second', 2)

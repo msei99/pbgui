@@ -17,15 +17,34 @@
         window.PBGuiBacktestV9.restoreSearch();
         document.querySelectorAll('button[onclick]').forEach(function(button) {
           var action=button.getAttribute('onclick') || '';
-          if (/^(?:openSettingsModal|optimizeFromResult|optimizePresetFromResult|strategyExplorerFromResult|goBalanceCalculatorFromResult|calcBalanceFromResult|addResultToArchive|pushArchive|convertConfigToV8|goBalanceCalculator|calcBalance|showOhlcvPreflight)/.test(action)) button.hidden=true;
+          if (/^(?:optimizeFromResult|optimizePresetFromResult|strategyExplorerFromResult|addResultToArchive|pushArchive|convertConfigToV8|goStrategyExplorer)/.test(action)) {
+            button.hidden=true;button.disabled=true;button.style.display='none';
+          }
         });
+        var readiness=document.getElementById('sb-btn-ohlcv-preflight');
+        if (readiness) readiness.title='Check PB9 OHLCV readiness for the current config';
+        ['goStrategyExplorer'].forEach(function(action) {
+          window[action]=function() {window.toast('This tool is not yet available for native PB9.','err');};
+        });
+        var openCalculator=window.openBalanceCalculatorWithConfig, inlineCalculator=window._showBalanceCalcModal;
+        window.openBalanceCalculatorWithConfig=async function(config,exchange) {
+          return openCalculator(await window.PBGuiBacktestV9.balanceConfig(config),exchange);
+        };
+        window._showBalanceCalcModal=async function(config,exchange) {
+          try {return inlineCalculator(await window.PBGuiBacktestV9.balanceConfig(config),exchange);} catch(error) {window.toast(error.message,'err');}
+        };
+        var runButton=document.getElementById('sb-btn-add-to-run');if(runButton)runButton.title='Open this config in PB9 Run editor';
         var convert=document.getElementById('sb-btn-convert-v8');if(convert)convert.remove();
         function openRun(config) {
           var run=String(window.API_BASE).replace(/\/backtest-v9$/, '/v9');
-          var candidate=JSON.parse(JSON.stringify(config));candidate.pbgui={runtime:'pb9',enabled_on:'disabled'};
+          var candidate=JSON.parse(JSON.stringify(config));candidate.pbgui=Object.assign({},candidate.pbgui || {},{runtime:'pb9',enabled_on:'disabled'});
           return fetch(run+'/draft',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:candidate})}).then(function(response){if(!response.ok)throw new Error('PB9 Run draft was rejected');return response.json();}).then(function(data){window.location.href=run+'/edit_page?new=1&draft_id='+encodeURIComponent(data.draft_id);});
         }
         window.addConfigToRunByName=function(name) {
+          if (window.currentPanel === 'configs' && window.editingConfig === name && document.getElementById('cfg-name')) {
+            if (!window.PBGuiBacktestV9.validate() || !window.ensureRawJsonValidForSave()) return;
+            openRun(window.PBGuiBacktestV9.collect()).catch(function(error){window.toast(error.message,'err');});return;
+          }
           window.apiFetch('/configs/'+encodeURIComponent(name)).then(function(data){return openRun(data.config);}).catch(function(error){window.toast(error.message,'err');});
         };
         window.addToRun=function() {

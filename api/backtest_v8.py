@@ -51,7 +51,7 @@ from api.pb8_ohlcv_tools import (
 from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log, rotate_managed_log_before_open
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
-from backtest_autostart import claim_backtest_slot, publish_backtest_process, release_backtest_slot
+from backtest_autostart import BacktestQueueWorker, claim_backtest_slot, publish_backtest_process, release_backtest_slot
 from backtest_result_index import invalidate_result as invalidate_result_index, load_indexed_results
 from ParetoDataLoader import _flatten_bot_params
 from pareto_preset_generator import (
@@ -1947,30 +1947,12 @@ def _list_results(
     return sorted(results, key=lambda item: item["modified"], reverse=True)
 
 
-class BacktestV8Worker:
+class BacktestV8Worker(BacktestQueueWorker):
     """Launch queued V8 backtests while leaving child jobs independently running."""
 
     def __init__(self):
-        self._task: Optional[asyncio.Task] = None
-        self._running = False
+        super().__init__("backtest-v8-worker")
         self._last_cleanup_at = 0.0
-
-    def start(self) -> None:
-        if self._task is None or self._task.done():
-            self._running = True
-            self._task = asyncio.create_task(self._loop(), name="backtest-v8-worker")
-            _log(SERVICE, "V8 backtest worker started", level="INFO")
-
-    async def stop(self) -> None:
-        self._running = False
-        task = self._task
-        if task is None:
-            return
-        if not task.done() and not task.cancelling():
-            task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        if self._task is task:
-            self._task = None
 
     async def _loop(self) -> None:
         try:
@@ -1981,7 +1963,7 @@ class BacktestV8Worker:
                     if time.time() - self._last_cleanup_at >= interval:
                         days = _bounded_setting(settings, "hlcvs_cleanup_days", 7, 1, 365)
                         try:
-                            await asyncio.to_thread(_cleanup_pb8_caches, days)
+                            await self.run_sync(_cleanup_pb8_caches, days)
                         except Exception as exc:
                             _log(SERVICE, f"PB8 cache cleanup failed: {exc}", level="WARNING")
                         self._last_cleanup_at = time.time()
@@ -1992,12 +1974,7 @@ class BacktestV8Worker:
                 # A large retained Loop queue may take seconds to inspect. Keep
                 # filesystem/PID probes off the API event loop, and join a started
                 # read before shutdown so it cannot outlive this controller.
-                scan = asyncio.create_task(asyncio.to_thread(_load_queue), name="backtest-v8-queue-scan")
-                try:
-                    items = await asyncio.shield(scan)
-                except asyncio.CancelledError:
-                    await asyncio.gather(scan, return_exceptions=True)
-                    raise
+                items = await self.run_sync(_load_queue)
                 running = sum(item["status"] == "running" for item in items)
                 for item in items:
                     if item["status"] != "queued" or item.get("loop_id") or running >= cpu_limit:
@@ -2005,14 +1982,7 @@ class BacktestV8Worker:
                     if not claim_backtest_slot("v8", item["filename"], cpu_limit):
                         break
                     try:
-                        record = await asyncio.to_thread(self.launch, item["filename"])
-                        publish_backtest_process(
-                            "v8",
-                            item["filename"],
-                            record["pid"],
-                            record["create_time"],
-                            record["command_markers"],
-                        )
+                        await self.run_sync(self._autostart_launch, item["filename"])
                         running += 1
                     except HTTPException as exc:
                         release_backtest_slot("v8", item["filename"])
@@ -2033,6 +2003,16 @@ class BacktestV8Worker:
                 level="ERROR",
                 meta={"traceback": traceback.format_exc()},
             )
+
+    def _autostart_launch(self, filename):
+        """Publish a reserved job before its owned launch operation can be drained."""
+        try:
+            record = self.launch(filename)
+            publish_backtest_process("v8", filename, record["pid"], record["create_time"], record["command_markers"])
+            return record
+        except Exception:
+            release_backtest_slot("v8", filename)
+            raise
 
     def launch(self, filename: str, loop_id: str | None = None) -> dict:
         """Validate the queued snapshot and launch the configured PB8 CLI."""

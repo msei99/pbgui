@@ -90,8 +90,8 @@ def _thread_lock(key: str) -> threading.RLock:
 
 
 @contextmanager
-def advisory_file_lock(target: Path) -> Iterator[None]:
-    """Serialize a file transaction across threads and PBGui processes."""
+def advisory_file_lock(target: Path, *, blocking: bool = True) -> Iterator[None]:
+    """Serialize transactions; nonblocking admission raises BlockingIOError if busy."""
     target_path = Path(target).expanduser().resolve(strict=False)
     key = str(target_path)
     lock_path = target_path.with_name(f"{target_path.name}.lock")
@@ -99,7 +99,10 @@ def advisory_file_lock(target: Path) -> Iterator[None]:
     if not parent.is_dir():
         parent.mkdir(parents=True, exist_ok=True)
 
-    with _thread_lock(key):
+    thread_lock = _thread_lock(key)
+    if not thread_lock.acquire(blocking=blocking):
+        raise BlockingIOError("PBGui transaction is busy")
+    try:
         held = getattr(_HELD_LOCKS, "entries", None)
         if held is None:
             held = {}
@@ -116,7 +119,8 @@ def advisory_file_lock(target: Path) -> Iterator[None]:
         try:
             os.chmod(lock_path, 0o600)
             if fcntl is not None:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                flags = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
+                fcntl.flock(lock_file.fileno(), flags)
             held[key] = {"depth": 1, "file": lock_file}
             yield
         finally:
@@ -124,3 +128,6 @@ def advisory_file_lock(target: Path) -> Iterator[None]:
             if fcntl is not None:
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
             lock_file.close()
+
+    finally:
+        thread_lock.release()

@@ -16,6 +16,8 @@ Der Katalog verwendet die native Standard-Abrechnungswährung der Börse: USDT f
 
 Save erzeugt eine neue Konfigurationsversion. Bei vorhandenen Instanzen muss die geladene Version noch aktuell sein; konkurrierende Änderungen werden abgelehnt. PBGui speichert Laufzeit, Version, Notiz und Host-Zuordnung in einer privaten Begleitdatei. Die native Konfiguration enthält ausschließlich Passivbot-Felder. Für fortgeschrittene Bearbeitung gibt es Raw JSON.
 
+Felder aus der installierten Vorlage oder geladenen Konfiguration ohne eigenes Bedienelement erscheinen unter **Advanced Settings → Additional Parameters**. Unbearbeitete Vorgaben bleiben geerbt. Bearbeitung und Entfernen expliziter Werte erhalten native Datentypen und Vererbung.
+
 ## Lokaler Betrieb
 
 **Enabled on → disabled** speichert ohne geplanten Trading-Start. Mit Auswahl dieses PBGui-Hosts übernimmt der PBRun-Daemon die Instanz. Voraussetzung sind eine funktionierende separate PB9-Installation, eine aktuelle Rust-Erweiterung, verfügbare Kontozugangsdaten und der laufende PBRun-Dienst. Eine konkurrierende PB7-/PB8-/PB9-Zuordnung desselben Kontos blockiert die Aktivierung. Speichern umgeht diese Startprüfungen nicht.

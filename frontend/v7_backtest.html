@@ -1,15 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<script src="/app/js/ohlcv_start_dates.js?v=3"></script>
+<script src="/app/js/ohlcv_start_dates.js?v=4"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui — %%BACKTEST_LABEL%% Backtest</title>
 <script src="/app/plotly.min.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=14"></script>
-<script src="/app/js/backtest_v9_editor.js?v=9"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=18"></script>
+<script src="/app/js/backtest_v9_editor.js?v=18"></script>
 <script src="/app/js/backtest_v9_migration.js?v=1" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
@@ -724,6 +724,7 @@ textarea.json-invalid:focus {
 .gs-topic { color:#93c5fd; font-weight:600; font-size: var(--fs-sm); margin-bottom:5px; }
 .gs-snip { color:#94a3b8; font-size: var(--fs-xs); line-height:1.55; overflow:hidden; text-overflow:ellipsis; }
 </style>
+<link rel="stylesheet" href="/app/css/metadata_fields.css?v=2">
 <link rel="stylesheet" href="/app/css/backtest_shell.css?v=9">
 <link rel="stylesheet" href="/app/css/pb8_parameter_help.css?v=1">
 <script src="/app/js/date_overwrite.js?v=2"></script>
@@ -1099,7 +1100,7 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=19"></script>
+<script src="/app/js/editor_shared.js?v=26"></script>
 <script src="/app/js/pb8_hsl_report.js?v=1"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
 <script src="/app/js/optimize_preset_builder.js?v=4"></script>
@@ -1625,11 +1626,13 @@ function connectWS() {
         if (msg.settings) {
           settings.autostart = msg.settings.autostart === 'True' || msg.settings.autostart === true;
           settings.cpu = parseInt(msg.settings.cpu) || 1;
+          if (msg.settings.cpu_max) settings.cpu_max = Number(msg.settings.cpu_max);
           settings.use_pbgui_market_data = msg.settings.use_pbgui_market_data === 'True' || msg.settings.use_pbgui_market_data === true;
           settings.hlcvs_cleanup_enabled = msg.settings.hlcvs_cleanup_enabled === 'True' || msg.settings.hlcvs_cleanup_enabled === true;
           settings.hlcvs_cleanup_days = parseInt(msg.settings.hlcvs_cleanup_days) || 7;
           settings.hlcvs_cleanup_interval_h = parseInt(msg.settings.hlcvs_cleanup_interval_h) || 24;
         }
+        syncOpenSettingsModal();
         if (changed) {
           renderQueue();
           updateQueueBadge();
@@ -1863,6 +1866,7 @@ function renderSettingsModal() {
         '\x3Cinput type="checkbox" id="set-autostart"' + (autostart ? ' checked' : '') + ' onchange="settingsModalDirty=true">' +
         '\x3Cspan>Autostart\x3C/span>' +
       '\x3C/label>' +
+      '\x3Cdiv id="legacy-queue-settings"' + (backtestEditorAdapter.metadataDriven ? ' hidden' : '') + '>' +
       '\x3Clabel class="sb-toggle">' +
         '\x3Cinput type="checkbox" id="set-pbgui-market-data"' + (usePbguiMarketData ? ' checked' : '') + ' onchange="settingsModalDirty=true">' +
         '\x3Cspan>Use PBGui Market Data\x3C/span>' +
@@ -1888,6 +1892,7 @@ function renderSettingsModal() {
       '\x3C/div>' +
       '\x3Cdiv style="margin-top:var(--sp-sm)">' +
         '\x3Cbutton class="modal-btn" id="clean-now-btn" onclick="cleanHlcvsNow()" style="font-size:var(--fs-sm)">🧹 Clean Now\x3C/button>' +
+      '\x3C/div>' +
       '\x3C/div>' +
     '\x3C/div>';
 
@@ -1950,25 +1955,16 @@ function saveSettingsFromModal() {
   var cleanupDays = parseInt(document.getElementById('set-cleanup-days').value, 10) || 7;
   var cleanupInterval = parseInt(document.getElementById('set-cleanup-interval').value, 10) || 24;
 
-  settings.cpu = cpu;
-  settings.autostart = autostart;
-  settings.use_pbgui_market_data = usePbguiMarketData;
-  settings.hlcvs_cleanup_enabled = cleanupEnabled;
-  settings.hlcvs_cleanup_days = cleanupDays;
-  settings.hlcvs_cleanup_interval_h = cleanupInterval;
-
+  var payload = {cpu:cpu, autostart:autostart};
+  if (!backtestEditorAdapter.metadataDriven) {
+    Object.assign(payload, {use_pbgui_market_data:usePbguiMarketData,
+      hlcvs_cleanup_enabled:cleanupEnabled, hlcvs_cleanup_days:cleanupDays,
+      hlcvs_cleanup_interval_h:cleanupInterval});
+  }
   apiFetch('/settings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      cpu: cpu,
-      autostart: autostart,
-      use_pbgui_market_data: usePbguiMarketData,
-      hlcvs_cleanup_enabled: cleanupEnabled,
-      hlcvs_cleanup_days: cleanupDays,
-      hlcvs_cleanup_interval_h: cleanupInterval
-    })
+    method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(payload)
   }).then(function() {
+    Object.assign(settings,payload);
     toast('Settings saved', 'ok');
     closeModal();
   }).catch(function(e) {
@@ -2248,10 +2244,11 @@ function showEditorSidebar() {
     btnConvertV8.disabled = !isExisting;
   }
   backtestShell.setEditorMode(true);
+  if (_ohlcvPreflightController) _ohlcvPreflightController.restore();
 }
 
 function hideEditorSidebar() {
-  if (_ohlcvPreflightController) _ohlcvPreflightController.close();
+  if (_ohlcvPreflightController) _ohlcvPreflightController.close(false);
   backtestShell.setEditorMode(false);
 }
 
@@ -2977,6 +2974,7 @@ async function initializeBacktestPageFromUrl(arrivalUrl) {
 
 function getManagedBacktestBaseDir(name) {
   var safeName = String(name || '').trim();
+  if (backtestEditorAdapter.metadataDriven) return 'data/bt_v9_results/' + (safeName || '{config-name}') + '/{job-id}';
   return safeName ? 'backtests/pbgui/' + safeName : 'backtests/pbgui/{config-name}';
 }
 
@@ -2987,9 +2985,12 @@ function syncManagedBacktestBaseDirField() {
   el.value = getManagedBacktestBaseDir(nameEl ? nameEl.value : '');
 }
 
-function buildExtraBtExpanderHtml(bt, configName) {
+function buildExtraBtExpanderHtml(bt, configName, options) {
+  options = options || {};
+  var known = options.knownKeys || KNOWN_BT_PARAMS;
   var extraBtKeys = Object.keys(bt || {}).filter(function(k) {
-    if (KNOWN_BT_PARAMS.has(k)) return false;
+    if (known.has(k)) return false;
+    if (options.knownKeys) return true;
     return !(backtestEditorAdapter.isV8 && PB8_ADVANCED_BT_PARAMS.has(k));
   }).sort();
   var html = '';
@@ -3009,11 +3010,11 @@ function buildExtraBtExpanderHtml(bt, configName) {
     extraBtKeys.forEach(function(k) {
       var v = bt[k];
       var t = typeof v;
-      var meta = EXTRA_BT_META[k] || {};
+      var meta = options.fieldMeta ? options.fieldMeta[k] || {} : EXTRA_BT_META[k] || {};
       var lbl = meta.tip ? '<span data-tip="' + escAttr(meta.tip) + '">' + esc(k) + '</span>' : esc(k);
       var hint = meta.fmt ? '<div style="font-size:var(--fs-xs);color:var(--text-dim);margin-top:2px">' + esc(meta.fmt) + '</div>' : '';
       var fld = '';
-      if (Array.isArray(meta.options)) {
+      if (Array.isArray(meta.options) && v !== null && v !== undefined) {
         var optionValues = meta.options.slice();
         if (v !== null && v !== undefined && optionValues.indexOf(String(v)) < 0) optionValues.unshift(String(v));
         fld = '<div class="form-group"><label>' + lbl + '</label><select id="extra-bt-' + escAttr(k) + '" data-extra-bt-type="string">' +
@@ -3040,12 +3041,30 @@ function buildExtraBtExpanderHtml(bt, configName) {
       html += fld;
     });
     html +=     '</div>' +
-      buildResultMetricsHtml() +
+      (options.resultMetrics === false ? '' : buildResultMetricsHtml()) +
       '</div>' +
     '</div>';
   }
 
   return { html: html, keys: extraBtKeys };
+}
+
+function collectExtraBtParams(target, keys) {
+  (keys || []).forEach(function(k) {
+    var el = document.getElementById('extra-bt-' + k);
+    if (!el) return;
+    var type = el.getAttribute('data-extra-bt-type'), value;
+    if (type === 'boolean') value = el.checked;
+    else if (type === 'number') {var number=parseFloat(el.value);value=isNaN(number) ? el.value : number;}
+    else if (type === 'json') {try {value=JSON.parse(el.value);} catch(error) {value=el.value;}}
+    else if (type === 'null') {
+      var raw=el.value.trim();
+      if (raw === '' || raw === 'null') value=null;
+      else {try {value=JSON.parse(raw);} catch(error) {value=raw;}}
+    } else value=el.value;
+    Object.defineProperty(target,k,{value:value,enumerable:true,writable:true,configurable:true});
+  });
+  return target;
 }
 
 function setCfgBotParamStatus(paramStatus) {
@@ -3110,7 +3129,7 @@ function marketSettingsRowHtml(row, index) {
 }
 
 function buildMarketSettingsHtml() {
-  if (!backtestEditorAdapter.isV8) return '';
+  if (!backtestEditorAdapter.isV8 && !backtestEditorAdapter.metadataDriven) return '';
   var rows = _marketSettingsRows.map(marketSettingsRowHtml).join('');
   return '<div class="expander" id="exp-market-settings">' +
     '<div class="expander-header" onclick="toggleExpander(\'exp-market-settings\')">' +
@@ -3184,11 +3203,11 @@ function marketSettingsCollect() {
     });
     return next;
   });
-  return window.PBGuiBacktestAdvancedFields.serializeMarketSettings(rows, _marketSettingsRootExtras, backtestEditorAdapter.isV8);
+  return window.PBGuiBacktestAdvancedFields.serializeMarketSettings(rows, _marketSettingsRootExtras, backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven);
 }
 
 function marketSettingsValidate() {
-  if (!backtestEditorAdapter.isV8) return '';
+  if (!backtestEditorAdapter.isV8 && !backtestEditorAdapter.metadataDriven) return '';
   if (_marketSettingsLoadError) return 'Market Settings is invalid: ' + _marketSettingsLoadError + '.';
   var seen = new Set();
   var positiveFields = new Set(['qty_step', 'price_step', 'min_qty', 'c_mult']);
@@ -3365,6 +3384,123 @@ function pb8AdvancedFieldsValidate() {
   return false;
 }
 
+function buildBacktestSourcesHtml(bt, exchanges) {
+  var html = '';
+  var exchangeOptionsHtml = exchanges.map(function(exchange) { return '<option>' + esc(exchange) + '</option>'; }).join('');
+  /* ── coin_sources (chip editor) ── */
+  var cs = bt.coin_sources || {};
+  var csKeys = Object.keys(cs).sort();
+  html += '<div class="expander" id="exp-coin-sources">' +
+    '<div class="expander-header" onclick="toggleExpander(\'exp-coin-sources\')">' +
+      '<span class="arrow">▶</span> coin_sources (' + csKeys.length + ' configured)' +
+    '</div>' +
+    '<div class="expander-body">' +
+      '<div style="display:flex;align-items:center;justify-content:flex-end;min-height:18px;margin-bottom:4px">' +
+        '<span class="ms-clear-btn" onclick="kvClearAll(\'kv-cs\')" title="Clear all">\u00d7 all</span>' +
+      '</div>' +
+      '<div class="kv-chips" id="kv-cs"></div>' +
+      '<div style="display:flex;gap:var(--sp-sm);align-items:end;margin-top:var(--sp-xs)">' +
+        '<div class="form-group" style="width:140px"><label>Exchange</label>' +
+          '<select id="kv-cs-exchange" class="form-input" onchange="kvLoadCoins(\'kv-cs\')">' +
+            exchangeOptionsHtml +
+          '</select></div>' +
+        '<div class="form-group" style="flex:1"><label>Coin</label>' +
+          '<div class="ms-wrap" id="kv-cs-coin">' +
+            '<input class="ms-input" id="kv-cs-coin-input" placeholder="Type to search..." autocomplete="off">' +
+            '<div class="ms-dropdown" id="kv-cs-coin-dd"></div>' +
+          '</div></div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+
+  /* ── market_settings_sources (chip editor) ── */
+  var mss = bt.market_settings_sources || {};
+  var mssKeys = Object.keys(mss).sort();
+  html += '<div class="expander" id="exp-mss">' +
+    '<div class="expander-header" onclick="toggleExpander(\'exp-mss\')">' +
+      '<span class="arrow">▶</span> market_settings_sources (' + mssKeys.length + ' configured)' +
+    '</div>' +
+    '<div class="expander-body">' +
+      '<div style="display:flex;align-items:center;justify-content:flex-end;min-height:18px;margin-bottom:4px">' +
+        '<span class="ms-clear-btn" onclick="kvClearAll(\'kv-mss\')" title="Clear all">\u00d7 all</span>' +
+      '</div>' +
+      '<div class="kv-chips" id="kv-mss"></div>' +
+      '<div style="display:flex;gap:var(--sp-sm);align-items:end;margin-top:var(--sp-xs)">' +
+        '<div class="form-group" style="width:140px"><label>Exchange</label>' +
+          '<select id="kv-mss-exchange" class="form-input" onchange="kvLoadCoins(\'kv-mss\')">' +
+            exchangeOptionsHtml +
+          '</select></div>' +
+        '<div class="form-group" style="flex:1"><label>Coin</label>' +
+          '<div class="ms-wrap" id="kv-mss-coin">' +
+            '<input class="ms-input" id="kv-mss-coin-input" placeholder="Type to search..." autocomplete="off">' +
+            '<div class="ms-dropdown" id="kv-mss-coin-dd"></div>' +
+          '</div></div>' +
+      '</div>' +
+    '</div>' +
+  '</div>';
+  html += buildMarketSettingsHtml();
+
+  return html;
+}
+
+function buildBacktestCoinFiltersHtml(pbgui) {
+  var html = '';
+  /* ── Coins & Filters ── */
+  html += '<div class="section-title">Coins &amp; Filters</div>';
+  html += '<div class="form-row cols-8" style="align-items:end">';
+  html += fieldNumber2('cfg-market-cap', 'market_cap (min M$)', pbgui.market_cap !== undefined ? pbgui.market_cap : 0, 50, 'Minimum market capitalisation in millions USD.\nCoins below this threshold are excluded.\n0 = no filter.', 2);
+  html += fieldNumber2('cfg-vol-mcap', 'vol/mcap', pbgui.vol_mcap !== undefined ? pbgui.vol_mcap : 10, 0.05, 'Maximum 24h volume-to-market-cap ratio.\nVery high ratios often indicate low-quality or manipulated coins.', 2);
+  /* tags multiselect - span 2 */
+  html += '<div class="form-group" style="grid-column:span 2"><label><span data-tip="Filter by CoinMarketCap category tags.\nOnly coins with at least one matching tag are shown.\nLeave empty to include all tags.">tags</span></label>' +
+    '<div class="ms-wrap" id="ms-cfg-tags">' +
+      '<input class="ms-input" id="ms-cfg-tags-input" placeholder="Select tags..." autocomplete="off">' +
+      '<div class="ms-dropdown" id="ms-cfg-tags-dd"></div>' +
+    '</div></div>';
+  html += '<div class="form-group" style="justify-content:flex-end">' +
+    '<div class="chk-row"><input type="checkbox" id="cfg-only-cpt"' + (pbgui.only_cpt ? ' checked' : '') + '>' +
+    '<label for="cfg-only-cpt"><span data-tip="Only include copy-trading eligible coins.\nRequires copy-trading data to be refreshed on the Coin Data page.">only_cpt</span></label></div></div>';
+  html += '<div class="form-group" style="justify-content:flex-end">' +
+    '<div class="chk-row"><input type="checkbox" id="cfg-notices-ignore"' + (pbgui.notices_ignore ? ' checked' : '') + '>' +
+    '<label for="cfg-notices-ignore"><span data-tip="Exclude coins that have active CoinMarketCap notices\n(e.g. ongoing investigation, insolvency, unverified team).">notices_ignore</span></label></div></div>';
+  html += '</div>';
+  /* approved coins row */
+  html += '<div class="form-row cols-2">';
+  html += '<div class="form-group"><label><span data-tip="Coins approved for trading.">approved_coins_long</span> ' +
+    '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-app-long\')" title="Select all">all</span> ' +
+    '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-app-long\')" title="Clear all">\u00d7</span></label>' +
+    '<div class="ms-wrap" id="ms-cfg-app-long">' +
+      '<input class="ms-input" id="ms-cfg-app-long-input" placeholder="Type to search..." autocomplete="off">' +
+      '<div class="ms-dropdown" id="ms-cfg-app-long-dd"></div>' +
+    '</div></div>';
+  html += '<div class="form-group"><label><span data-tip="Coins approved for trading.">approved_coins_short</span> ' +
+    '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-app-short\')" title="Select all">all</span> ' +
+    '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-app-short\')" title="Clear all">\u00d7</span></label>' +
+    '<div class="ms-wrap" id="ms-cfg-app-short">' +
+      '<input class="ms-input" id="ms-cfg-app-short-input" placeholder="Type to search..." autocomplete="off">' +
+      '<div class="ms-dropdown" id="ms-cfg-app-short-dd"></div>' +
+    '</div></div>';
+  html += '</div>';
+  /* ignored coins row */
+  html += '<div class="form-row cols-2">';
+  html += '<div class="form-group"><label><span data-tip="Coins the bot will not trade.">ignored_coins_long</span> ' +
+    '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-ign-long\')" title="Select all">all</span> ' +
+    '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-ign-long\')" title="Clear all">\u00d7</span></label>' +
+    '<div class="ms-wrap" id="ms-cfg-ign-long">' +
+      '<input class="ms-input" id="ms-cfg-ign-long-input" placeholder="Type to search..." autocomplete="off">' +
+      '<div class="ms-dropdown" id="ms-cfg-ign-long-dd"></div>' +
+    '</div></div>';
+  html += '<div class="form-group"><label><span data-tip="Coins the bot will not trade.">ignored_coins_short</span> ' +
+    '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-ign-short\')" title="Select all">all</span> ' +
+    '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-ign-short\')" title="Clear all">\u00d7</span></label>' +
+    '<div class="ms-wrap" id="ms-cfg-ign-short">' +
+      '<input class="ms-input" id="ms-cfg-ign-short-input" placeholder="Type to search..." autocomplete="off">' +
+      '<div class="ms-dropdown" id="ms-cfg-ign-short-dd"></div>' +
+    '</div></div>';
+  html += '</div>';
+
+  return html;
+}
+
 function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
   if (backtestEditorAdapter.metadataDriven) return window.PBGuiBacktestV9.render(name, cfg);
   if (currentPanel !== 'configs') return;
@@ -3499,111 +3635,9 @@ function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
     '</div>';
   html += '</div>';
 
-  /* ── coin_sources (chip editor) ── */
-  var cs = bt.coin_sources || {};
-  var csKeys = Object.keys(cs).sort();
-  html += '<div class="expander" id="exp-coin-sources">' +
-    '<div class="expander-header" onclick="toggleExpander(\'exp-coin-sources\')">' +
-      '<span class="arrow">▶</span> coin_sources (' + csKeys.length + ' configured)' +
-    '</div>' +
-    '<div class="expander-body">' +
-      '<div style="display:flex;align-items:center;justify-content:flex-end;min-height:18px;margin-bottom:4px">' +
-        '<span class="ms-clear-btn" onclick="kvClearAll(\'kv-cs\')" title="Clear all">\u00d7 all</span>' +
-      '</div>' +
-      '<div class="kv-chips" id="kv-cs"></div>' +
-      '<div style="display:flex;gap:var(--sp-sm);align-items:end;margin-top:var(--sp-xs)">' +
-        '<div class="form-group" style="width:140px"><label>Exchange</label>' +
-          '<select id="kv-cs-exchange" class="form-input" onchange="kvLoadCoins(\'kv-cs\')">' +
-            exchangeOptionsHtml +
-          '</select></div>' +
-        '<div class="form-group" style="flex:1"><label>Coin</label>' +
-          '<div class="ms-wrap" id="kv-cs-coin">' +
-            '<input class="ms-input" id="kv-cs-coin-input" placeholder="Type to search..." autocomplete="off">' +
-            '<div class="ms-dropdown" id="kv-cs-coin-dd"></div>' +
-          '</div></div>' +
-      '</div>' +
-    '</div>' +
-  '</div>';
-
-  /* ── market_settings_sources (chip editor) ── */
-  var mss = bt.market_settings_sources || {};
-  var mssKeys = Object.keys(mss).sort();
-  html += '<div class="expander" id="exp-mss">' +
-    '<div class="expander-header" onclick="toggleExpander(\'exp-mss\')">' +
-      '<span class="arrow">▶</span> market_settings_sources (' + mssKeys.length + ' configured)' +
-    '</div>' +
-    '<div class="expander-body">' +
-      '<div style="display:flex;align-items:center;justify-content:flex-end;min-height:18px;margin-bottom:4px">' +
-        '<span class="ms-clear-btn" onclick="kvClearAll(\'kv-mss\')" title="Clear all">\u00d7 all</span>' +
-      '</div>' +
-      '<div class="kv-chips" id="kv-mss"></div>' +
-      '<div style="display:flex;gap:var(--sp-sm);align-items:end;margin-top:var(--sp-xs)">' +
-        '<div class="form-group" style="width:140px"><label>Exchange</label>' +
-          '<select id="kv-mss-exchange" class="form-input" onchange="kvLoadCoins(\'kv-mss\')">' +
-            exchangeOptionsHtml +
-          '</select></div>' +
-        '<div class="form-group" style="flex:1"><label>Coin</label>' +
-          '<div class="ms-wrap" id="kv-mss-coin">' +
-            '<input class="ms-input" id="kv-mss-coin-input" placeholder="Type to search..." autocomplete="off">' +
-            '<div class="ms-dropdown" id="kv-mss-coin-dd"></div>' +
-          '</div></div>' +
-      '</div>' +
-    '</div>' +
-  '</div>';
-  html += buildMarketSettingsHtml();
-
-  /* ── Coins & Filters ── */
-  html += '<div class="section-title">Coins &amp; Filters</div>';
-  html += '<div class="form-row cols-8" style="align-items:end">';
-  html += fieldNumber2('cfg-market-cap', 'market_cap (min M$)', pbgui.market_cap !== undefined ? pbgui.market_cap : 0, 50, 'Minimum market capitalisation in millions USD.\nCoins below this threshold are excluded.\n0 = no filter.', 2);
-  html += fieldNumber2('cfg-vol-mcap', 'vol/mcap', pbgui.vol_mcap !== undefined ? pbgui.vol_mcap : 10, 0.05, 'Maximum 24h volume-to-market-cap ratio.\nVery high ratios often indicate low-quality or manipulated coins.', 2);
-  /* tags multiselect - span 2 */
-  html += '<div class="form-group" style="grid-column:span 2"><label><span data-tip="Filter by CoinMarketCap category tags.\nOnly coins with at least one matching tag are shown.\nLeave empty to include all tags.">tags</span></label>' +
-    '<div class="ms-wrap" id="ms-cfg-tags">' +
-      '<input class="ms-input" id="ms-cfg-tags-input" placeholder="Select tags..." autocomplete="off">' +
-      '<div class="ms-dropdown" id="ms-cfg-tags-dd"></div>' +
-    '</div></div>';
-  html += '<div class="form-group" style="justify-content:flex-end">' +
-    '<div class="chk-row"><input type="checkbox" id="cfg-only-cpt"' + (pbgui.only_cpt ? ' checked' : '') + '>' +
-    '<label for="cfg-only-cpt"><span data-tip="Only include copy-trading eligible coins.\nRequires copy-trading data to be refreshed on the Coin Data page.">only_cpt</span></label></div></div>';
-  html += '<div class="form-group" style="justify-content:flex-end">' +
-    '<div class="chk-row"><input type="checkbox" id="cfg-notices-ignore"' + (pbgui.notices_ignore ? ' checked' : '') + '>' +
-    '<label for="cfg-notices-ignore"><span data-tip="Exclude coins that have active CoinMarketCap notices\n(e.g. ongoing investigation, insolvency, unverified team).">notices_ignore</span></label></div></div>';
-  html += '</div>';
-  /* approved coins row */
-  html += '<div class="form-row cols-2">';
-  html += '<div class="form-group"><label><span data-tip="Coins approved for trading.">approved_coins_long</span> ' +
-    '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-app-long\')" title="Select all">all</span> ' +
-    '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-app-long\')" title="Clear all">\u00d7</span></label>' +
-    '<div class="ms-wrap" id="ms-cfg-app-long">' +
-      '<input class="ms-input" id="ms-cfg-app-long-input" placeholder="Type to search..." autocomplete="off">' +
-      '<div class="ms-dropdown" id="ms-cfg-app-long-dd"></div>' +
-    '</div></div>';
-  html += '<div class="form-group"><label><span data-tip="Coins approved for trading.">approved_coins_short</span> ' +
-    '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-app-short\')" title="Select all">all</span> ' +
-    '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-app-short\')" title="Clear all">\u00d7</span></label>' +
-    '<div class="ms-wrap" id="ms-cfg-app-short">' +
-      '<input class="ms-input" id="ms-cfg-app-short-input" placeholder="Type to search..." autocomplete="off">' +
-      '<div class="ms-dropdown" id="ms-cfg-app-short-dd"></div>' +
-    '</div></div>';
-  html += '</div>';
-  /* ignored coins row */
-  html += '<div class="form-row cols-2">';
-  html += '<div class="form-group"><label><span data-tip="Coins the bot will not trade.">ignored_coins_long</span> ' +
-    '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-ign-long\')" title="Select all">all</span> ' +
-    '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-ign-long\')" title="Clear all">\u00d7</span></label>' +
-    '<div class="ms-wrap" id="ms-cfg-ign-long">' +
-      '<input class="ms-input" id="ms-cfg-ign-long-input" placeholder="Type to search..." autocomplete="off">' +
-      '<div class="ms-dropdown" id="ms-cfg-ign-long-dd"></div>' +
-    '</div></div>';
-  html += '<div class="form-group"><label><span data-tip="Coins the bot will not trade.">ignored_coins_short</span> ' +
-    '<span class="ms-all-btn" onclick="cfgSelectAllMs(\'ms-cfg-ign-short\')" title="Select all">all</span> ' +
-    '<span class="ms-clear-btn" onclick="cfgClearMs(\'ms-cfg-ign-short\')" title="Clear all">\u00d7</span></label>' +
-    '<div class="ms-wrap" id="ms-cfg-ign-short">' +
-      '<input class="ms-input" id="ms-cfg-ign-short-input" placeholder="Type to search..." autocomplete="off">' +
-      '<div class="ms-dropdown" id="ms-cfg-ign-short-dd"></div>' +
-    '</div></div>';
-  html += '</div>';
+  html += buildBacktestSourcesHtml(bt, exAll);
+  var cs = bt.coin_sources || {}, mss = bt.market_settings_sources || {};
+  html += buildBacktestCoinFiltersHtml(pbgui);
 
   /* ── Coin Overrides ── */
   html += '<div id="coin-overrides-container"></div>';
@@ -4598,11 +4632,11 @@ async function loadCfgSymbols(cfg) {
     _marketSettingsCoins = symbols.slice();
     var allTags = Array.from(tagSet).sort();
     var loadedAnchor = cfgCaptureRawAnchor();
-    cfgRebuildMs('ms-cfg-app-long',  ['all'].concat(symbols), appLong2);
-    cfgRebuildMs('ms-cfg-app-short', ['all'].concat(symbols), appShort2);
-    cfgRebuildMs('ms-cfg-ign-long',  symbols, ignLong2);
-    cfgRebuildMs('ms-cfg-ign-short', symbols, ignShort2);
-    cfgRebuildMs('ms-cfg-tags', allTags, cfgTags);
+    cfgRebuildMs('ms-cfg-app-long',  ['all'].concat(symbols), cfgGetMs('ms-cfg-app-long'));
+    cfgRebuildMs('ms-cfg-app-short', ['all'].concat(symbols), cfgGetMs('ms-cfg-app-short'));
+    cfgRebuildMs('ms-cfg-ign-long',  symbols, cfgGetMs('ms-cfg-ign-long'));
+    cfgRebuildMs('ms-cfg-ign-short', symbols, cfgGetMs('ms-cfg-ign-short'));
+    cfgRebuildMs('ms-cfg-tags', allTags, cfgGetMs('ms-cfg-tags'));
     coinOvSetCoins(symbols, _cfgMarketLabels);
     marketSettingsRender();
     cfgRestoreRawAnchor(loadedAnchor);
@@ -4873,6 +4907,7 @@ async function cfgApplyFilters() {
   var unresolvedSuffix = allUnresolved.size ? '; ' + allUnresolved.size + ' unavailable PB8 symbols skipped' : '';
   toast('Filters applied: ' + appArr.length + ' approved, ' + ignArr.length + ' ignored' + unresolvedSuffix,
     allUnresolved.size ? 'info' : 'ok');
+  if (backtestEditorAdapter.metadataDriven) scheduleStructuredEditorSync();
 }
 
 
@@ -5148,7 +5183,7 @@ function fieldText2(id, label, value, editable, placeholder, tip, span) {
 }();
 
 var _backtestStartDateController = PBGuiOhlcvStartDates.create({
-  isV8:function() { return backtestEditorAdapter.isV8; },
+  enabled:function() { return backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven; },
   visible:function() { var editor=document.getElementById('configs-editor'); return !!editor && editor.style.display !== 'none'; },
   fetch:function(path, options) { return apiFetch(path, options); },
   collect:collectBacktestStartLookupConfig, signature:backtestStartLookupSignature,
@@ -5334,7 +5369,7 @@ function fieldNumber2(id, label, value, step, tip, span) {
   return fmtGroupSpan(id, label,
     '<div class="num-stepper">' +
     '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'' + id + '\');i.value=+(+i.value-' + step + ').toFixed(10)">−</button>' +
-    '<input type="number" id="' + id + '" value="' + value + '" step="' + step + '">' +
+    '<input type="number" id="' + id + '" value="' + escAttr(String(value)) + '" step="' + step + '">' +
     '<button type="button" class="stepper-btn" onclick="var i=document.getElementById(\'' + id + '\');i.value=+(+i.value+' + step + ').toFixed(10)">+</button>' +
     '</div>', tip, span || 1);
 }
@@ -5721,26 +5756,8 @@ function collectConfig() {
     delete cfg.coin_overrides;
   }
 
-  // Additional (extra) backtest parameters not handled by the GUI
-  _extraBtKeys.forEach(function(k) {
-    var el = document.getElementById('extra-bt-' + k);
-    if (!el) return;
-    var type = el.getAttribute('data-extra-bt-type');
-    if (type === 'boolean') {
-      cfg.backtest[k] = el.checked;
-    } else if (type === 'number') {
-      var n = parseFloat(el.value);
-      cfg.backtest[k] = isNaN(n) ? el.value : n;
-    } else if (type === 'json') {
-      try { cfg.backtest[k] = JSON.parse(el.value); } catch(e) { cfg.backtest[k] = el.value; }
-    } else if (type === 'null') {
-      var raw = el.value.trim();
-      if (raw === '' || raw === 'null') { cfg.backtest[k] = null; }
-      else { try { cfg.backtest[k] = JSON.parse(raw); } catch(e) { cfg.backtest[k] = raw; } }
-    } else {
-      cfg.backtest[k] = el.value;
-    }
-  });
+  // Shared typed fallback for parameters not mapped to dedicated GUI controls.
+  collectExtraBtParams(cfg.backtest, _extraBtKeys);
 
   return cfg;
 }
@@ -11691,7 +11708,7 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
 </script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=2">
 <script src="/app/js/scenario_visual_editor.js?v=24"></script>
-<script src="/app/js/suite_editor.js?v=43"></script>
+<script src="/app/js/suite_editor.js?v=45"></script>
 <script src="/app/js/coin_overrides_editor.js?v=27"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */
@@ -11987,7 +12004,8 @@ window.PBGuiSidebarResize.init();
 
   window._openBacktestHelp = function() {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-    window.PBGuiSharedHelp.open('backtest');
+    var topic = backtestEditorAdapter.metadataDriven ? '54_pbv9_backtest' : backtestEditorAdapter.isV8 ? '42_pbv8_backtest' : '35_pbv7_backtest';
+    window.PBGuiSharedHelp.open(topic);
   };
   window.PBGUI_HELP_OPENER = window._openBacktestHelp;
 }());

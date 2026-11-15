@@ -125,6 +125,23 @@ def test_native_form_preserves_sparse_sides_on_note_save(editor):
     assert editor.unexpected == []
 
 
+def test_additional_parameters_discover_unregistered_native_fields(editor):
+    """New native fields stay editable before PBGui adds a dedicated control."""
+    editor.metadata['prototype']['live']['future_default'] = 7.5
+    editor.config['live']['future_source'] = {'threshold': 2}
+    page = editor.page; page.reload()
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    page.locator('#exp-v9-advanced > .expander-header').click()
+    page.locator('#run-meta-section-additional > .expander-header').click()
+    expect(page.locator('[data-config-path="live.future_default"]')).to_have_value('7.5')
+    page.locator('[data-config-path="live.future_source.threshold"]').fill('3.25')
+    page.locator('#btn-save').click()
+    page.wait_for_function('document.getElementById("f-version").value === "1"')
+    assert editor.saved[-1]['config']['live']['future_source'] == {'threshold': 3.25}
+    assert 'future_default' not in editor.saved[-1]['config']['live']
+    assert editor.errors == editor.unexpected == []
+
+
 def test_v9_run_menu_uses_shared_list_and_add_editor(editor):
     """The actual PBv9 menu opens Run and its Add action returns to the form."""
     page = editor.page
@@ -180,7 +197,7 @@ def test_automatic_return_update_preserves_edits_and_reload_context(editor):
     expected = section.get_attribute('class')
     page.reload()
     expect(page.locator('#f-note')).to_have_value('new remote note')
-    assert page.locator('#' + section_id).get_attribute('class') == expected
+    expect(page.locator('#' + section_id)).to_have_class(expected)
     assert 'name=fixture' in page.url
     assert editor.errors == []
 
@@ -296,6 +313,7 @@ def test_global_edit_updates_side_projection_without_authored_overrides(editor):
     page = editor.page
     expect(page.locator('#f-user')).to_have_value('fixture')
     field = page.locator('[data-config-path="bot.global.risk.max_positions"]')
+    expect(field).to_have_count(1)
     field.evaluate('(el) => el.closest(".expander").classList.add("open")')
     field.fill('6')
     page.locator('#f-note').fill('inherit six')

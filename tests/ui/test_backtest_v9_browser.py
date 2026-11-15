@@ -22,7 +22,10 @@ def backtest():
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width': 1440, 'height': 1000})
         page.set_default_timeout(5000)
-        state = SimpleNamespace(page=page, config=config, saved=[], queued=[], errors=[], unexpected=[], metadata=metadata)
+        state = SimpleNamespace(page=page, config=config, saved=[], queued=[], run_drafts=[], balance_requests=[], errors=[], unexpected=[], metadata=metadata, hold_symbols=False, pending_symbols=[], queue_fail_once=False,
+                                preflight_requests=[], hold_preflight=False, pending_preflight=[], lookups=[], lookup_stops=[], hold_lookup=False,
+                                preload_supported=False,preload_status='running',preload_gets=0,
+                                settings={'exchange_options':['binance','bybit'],'cpu':1,'cpu_max':4,'autostart':False}, settings_saved=[])
         page.on('pageerror', lambda error: state.errors.append(str(error)))
 
         def respond(route):
@@ -45,8 +48,56 @@ def backtest():
                 route.fulfill(body=asset.read_bytes() if asset.is_file() else b'', content_type=mimetypes.guess_type(asset)[0] or 'text/plain')
             elif path.endswith('/editor/metadata'):
                 route.fulfill(json=metadata)
+            elif path == '/api/v9/symbols':
+                if state.hold_symbols:
+                    state.pending_symbols.append(route)
+                else:
+                    route.fulfill(json={'symbols':['BTC','HYPE']})
+            elif path == '/api/v9/tags':
+                route.fulfill(json={'tags':['defi']})
+            elif path == '/api/v9/coins/filter':
+                route.fulfill(json={'approved':['HYPE'],'ignored':['BTC']})
+            elif path == '/api/v9/draft':
+                state.run_drafts.append(route.request.post_data_json)
+                route.fulfill(json={'draft_id':'native-run-draft'})
+            elif path == '/api/balance-calc/calculate':
+                state.balance_requests.append(route.request.post_data_json)
+                route.fulfill(json={'balance_long':[{'coin':'HYPE','balance':123}], 'balance_short':[]})
+            elif path == '/api/backtest-v9/ohlcv-preflight':
+                state.preflight_requests.append(route.request.post_data_json)
+                payload={'runtime':'pb9','summary':{'overall_status':'legacy','headline':'Configured source ready','detail':'Local candles available','counts':{'legacy_importable':1},'preload_supported':state.preload_supported},
+                         'request':{'source_dir':str(ROOT/'data/ohlcv')},'universe':{'coin_count':1},'exchanges':[],'notes':[]}
+                if state.hold_preflight:
+                    state.pending_preflight.append((route,payload))
+                else:
+                    route.fulfill(json=payload)
+            elif path == '/api/backtest-v9/ohlcv-preload':
+                # Synthetic preload capability exercises the shared PB7/PB8
+                # controller; the real PB9 report always keeps this disabled.
+                route.fulfill(json={'job_id':'preload-fixture','status':'running'})
+            elif path == '/api/backtest-v9/ohlcv-preload/preload-fixture':
+                state.preload_gets+=1
+                route.fulfill(json={'job_id':'preload-fixture','status':state.preload_status})
+            elif path == '/api/backtest-v9/ohlcv-start-dates':
+                state.lookups.append(route.request.post_data_json)
+                route.fulfill(json={'job_id':'0123456789ab','status':'queued','progress':{'percent':0}})
+            elif path == '/api/backtest-v9/ohlcv-start-dates/0123456789ab':
+                if route.request.method == 'DELETE':
+                    state.lookup_stops.append(path)
+                    route.fulfill(json={'job_id':'0123456789ab','status':'stopped'})
+                elif state.hold_lookup:
+                    route.fulfill(json={'job_id':'0123456789ab','status':'running','progress':{'percent':50,'message':'Resolving HYPE'}})
+                else:
+                    route.fulfill(json={'job_id':'0123456789ab','status':'completed','result':{'start_date_options':{
+                        'earliest':{'available':True,'start_date':'2025-01-05'},'all_markets':{'available':True,'start_date':'2025-02-01'},'pair_count':1,'known_pair_count':1}}})
             elif path.endswith('/settings'):
-                route.fulfill(json={'exchange_options':['binance','bybit'],'cpu':1,'autostart':False})
+                if route.request.method == 'POST':
+                    payload=route.request.post_data_json
+                    state.settings_saved.append(payload)
+                    state.settings.update(payload)
+                    route.fulfill(json={'ok':True})
+                else:
+                    route.fulfill(json=state.settings)
             elif path.endswith('/optimize-draft/fixture-draft'):
                 route.fulfill(json={'config':copy.deepcopy(config),'param_status':{}})
             elif path.endswith('/configs/prepare'):
@@ -60,6 +111,10 @@ def backtest():
                 route.fulfill(json={'config':state.saved[-1]['config'] if state.saved else config, 'name':path.rsplit('/',1)[1]})
             elif path.endswith('/queue') and route.request.method == 'POST':
                 state.queued.append(route.request.post_data_json)
+                if state.queue_fail_once:
+                    state.queue_fail_once=False
+                    route.fulfill(status=503,json={'detail':'Synthetic lost enqueue response'})
+                    return
                 route.fulfill(json={'ok':True,'filename':'11111111-1111-4111-8111-111111111111'})
             elif path.endswith('/queue'):
                 route.fulfill(json={'queue':[],'items':[]})
@@ -68,9 +123,12 @@ def backtest():
             elif '/api/backtest-v7/' in path or '/api/backtest-v8/' in path or '/api/v7/' in path or '/api/v8/' in path:
                 state.unexpected.append(path); route.abort()
             elif path == '/api/help/index':
-                route.fulfill(json=[{'file':'54_pbv9_backtest','title':'PB9 Backtest'}])
+                route.fulfill(json=[{'file':'35_pbv7_backtest','title':'PB7 Backtest'},
+                                    {'file':'42_pbv8_backtest','title':'PB8 Backtest'},
+                                    {'file':'54_pbv9_backtest','title':'PB9 Backtest'}])
             elif path == '/api/help/content':
-                route.fulfill(json={'content':'# PB9 Backtest\nNative isolated test guide.'})
+                title = 'PB9 Backtest' if parse_qs(url.query).get('file') == ['54_pbv9_backtest'] else 'Wrong version guide'
+                route.fulfill(json={'content':'# '+title+'\nNative isolated test guide.'})
             else:
                 route.fulfill(json={})
 
@@ -104,6 +162,282 @@ def test_native_handoff_roundtrip_and_queue(backtest):
     assert backtest.unexpected == []
 
 
+def test_queue_retry_reuses_operation_id_and_double_click_is_single_flight(backtest):
+    """An uncertain enqueue response may be retried without duplicating execution."""
+    backtest.queue_fail_once=True
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.evaluate('saveAndQueue();saveAndQueue();')
+    page.wait_for_function('document.body.textContent.includes("Synthetic lost enqueue response")')
+    assert len(backtest.saved)==len(backtest.queued)==1
+    page.locator('#sidebar-editor button[onclick="saveAndQueue()"]').click()
+    page.wait_for_function('currentPanel === "queue"')
+    assert len(backtest.queued)==2
+    assert backtest.queued[0]['operation_id']==backtest.queued[1]['operation_id']
+    assert backtest.errors==backtest.unexpected==[]
+
+
+def test_additional_parameters_preserve_types_defaults_and_managed_path(backtest):
+    """The existing PB8 fallback edits future PB9 fields without pinning defaults."""
+    page=backtest.page
+    future={'future_number':0.125,'future_bool':False,'future_text':'<svg onload="bad()">',
+            'future_null':None,'future_list':[1,'two'],'future_object':{'nested':True}}
+    backtest.config['backtest'].update(future)
+    backtest.metadata['prototype']['backtest']['future_default']=42
+    backtest.metadata['fields'].append({'path':['backtest','future_registered'],'types':['float'],'default':3.5,'nullable':False})
+    page.reload()
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#exp-extra-bt > .expander-header').click()
+    for width in [700,1440]:
+        page.set_viewport_size({'width':width,'height':1000})
+        assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+    expect(page.locator('#extra-bt-future_default')).to_have_value('42')
+    expect(page.locator('#extra-bt-future_registered')).to_have_value('3.5')
+    expect(page.locator('#extra-bt-future_text')).to_have_value(future['future_text'])
+    assert page.locator('#exp-extra-bt svg').count() == 0
+    assert page.locator('#managed-bt-base_dir').get_attribute('readonly') is not None
+    page.locator('#cfg-name').fill('renamed')
+    expect(page.locator('#managed-bt-base_dir')).to_have_value('data/bt_v9_results/renamed/{job-id}')
+    page.locator('#extra-bt-future_number').fill('2.75')
+    page.locator('#extra-bt-future_bool').check()
+    page.locator('#extra-bt-future_null').fill('false')
+    page.locator('#extra-bt-future_list').fill('[3,"new"]')
+    page.locator('#sidebar-editor button[onclick="saveAndQueue()"]' ).click()
+    page.wait_for_function('currentPanel === "queue"')
+    saved=backtest.saved[-1]['config']['backtest']
+    assert saved['future_number']==2.75 and saved['future_bool'] is True
+    assert saved['future_null'] is False and saved['future_list']==[3,'new']
+    assert saved['future_object']==future['future_object'] and saved['future_text']==future['future_text']
+    assert 'future_default' not in saved and 'future_registered' not in saved
+    assert saved==backtest.queued[-1]['config']['backtest']
+    assert backtest.errors==[], '\n'.join(backtest.errors)
+
+
+def test_additional_json_errors_block_save_and_future_bot_field_is_visible(backtest):
+    """Invalid fallback JSON stays editable; newly discovered bot leaves are usable."""
+    page=backtest.page
+    backtest.config['backtest']['future_object']={'value':1}
+    backtest.config['bot']['long']['future_policy']={'threshold':0.25}
+    backtest.config['bot']['future_namespace']={'mode':'preview'}
+    page.reload()
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#bt9-field-section-advanced > .expander-header').click()
+    expect(page.locator('[data-config-path="bot.long.future_policy"]')).to_be_visible()
+    expect(page.locator('[data-config-path="bot.future_namespace"]')).to_be_visible()
+    page.locator('#exp-extra-bt > .expander-header').click()
+    page.locator('#extra-bt-future_object').fill('{')
+    page.locator('#sidebar-editor button[onclick="saveAndQueue()"]' ).click()
+    assert backtest.saved==backtest.queued==[]
+    expect(page.locator('#extra-bt-future_object')).to_have_value('{')
+    assert backtest.errors==[]
+
+
+def test_source_only_bot_override_can_return_to_inheritance(backtest):
+    """Discovery never invents an inherited default from the user's own override."""
+    page=backtest.page
+    backtest.config['bot']['long']['future_policy']={'threshold':0.25}
+    page.reload()
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#bt9-field-section-advanced > .expander-header').click()
+    field=page.locator('[data-meta-path="bot.long.future_policy"]')
+    field.locator('.meta-explicit').uncheck()
+    expect(field.locator('[data-config-path]')).to_have_value('')
+    page.locator('#sidebar-editor button[onclick="saveAndQueue()"]' ).click()
+    page.wait_for_function('currentPanel === "queue"')
+    assert 'future_policy' not in backtest.saved[-1]['config']['bot']['long']
+    assert backtest.errors==[]
+
+
+def test_raw_json_adds_and_removes_fallback_controls(backtest):
+    """Future keys follow raw edits automatically and cannot survive their removal."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#exp-raw > .expander-header').click()
+    raw=page.locator('#cfg-raw-json')
+    config=json.loads(raw.input_value())
+    config['backtest']['raw_future']=1.5
+    raw.fill(json.dumps(config))
+    expect(page.locator('#extra-bt-raw_future')).to_have_value('1.5')
+    del config['backtest']['raw_future']
+    raw.fill(json.dumps(config))
+    expect(page.locator('#extra-bt-raw_future')).to_have_count(0)
+    page.locator('#sidebar-editor button[onclick="saveAndQueue()"]' ).click()
+    page.wait_for_function('currentPanel === "queue"')
+    assert 'raw_future' not in backtest.saved[-1]['config']['backtest']
+    assert backtest.errors==[], '\n'.join(backtest.errors)
+
+
+def test_future_market_setting_survives_changes_to_known_rows(backtest):
+    """A newly discovered root field is not overwritten by the shared row editor."""
+    page=backtest.page
+    backtest.config['backtest']['market_settings']={'future_policy':1.25,'overrides':{'HYPE':{'min_cost':5}}}
+    page.reload()
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#bt9-field-section-advanced > .expander-header').click()
+    page.locator('[data-config-path="backtest.market_settings.future_policy"]').fill('2.5')
+    page.locator('#exp-market-settings > .expander-header').click()
+    page.locator('#exp-market-settings input[oninput*="min_cost"]').fill('6')
+    page.locator('#sidebar-editor button[onclick="saveAndQueue()"]' ).click()
+    page.wait_for_function('currentPanel === "queue"')
+    saved=backtest.saved[-1]['config']['backtest']['market_settings']
+    assert saved['future_policy']==2.5
+    assert saved['overrides']['HYPE']['min_cost']==6
+    assert backtest.errors==[]
+
+
+def test_native_editor_run_handoff_keeps_edits_and_gui_metadata(backtest):
+    """Run receives current native form values and filters through its own draft API."""
+    page=backtest.page
+    backtest.config['pbgui']={'note':'keep note','tags':['defi'],'market_cap':100}
+    page.goto('http://backtest9.test/api/backtest-v9/main_page?config=fixture#configs')
+    expect(page.locator('#cfg-starting-balance')).to_have_value(str(backtest.config['backtest']['starting_balance']))
+    page.locator('#cfg-starting-balance').fill('3500')
+    page.locator('#sb-btn-add-to-run').click()
+    page.wait_for_url('**/api/v9/edit_page?new=1&draft_id=native-run-draft')
+    sent=backtest.run_drafts[-1]['config']
+    assert sent['backtest']['starting_balance']==3500
+    assert sent['pbgui']=={'note':'keep note','tags':['defi'],'market_cap':100,'runtime':'pb9','enabled_on':'disabled'}
+    assert backtest.saved==backtest.queued==[]
+    assert backtest.unexpected==[]
+
+
+def test_unsupported_editor_tools_do_not_forward_to_legacy_runtimes(backtest):
+    """Only connected native capabilities are actionable in the editor sidebar."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    for action in ['goStrategyExplorer()']:
+        expect(page.locator('#sidebar-editor button[onclick="'+action+'"]')).to_be_hidden()
+    for action in ['goBalanceCalc()','goCalcBalance()']:
+        expect(page.locator('#sidebar-editor button[onclick="'+action+'"]')).to_be_visible()
+    expect(page.locator('#sb-btn-ohlcv-preflight')).to_be_visible()
+    assert backtest.unexpected==[]
+
+
+def test_native_ohlcv_readiness_updates_and_restores_without_manual_refresh(backtest):
+    """Readiness follows current native edits and retains the open panel on reload."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#sb-btn-ohlcv-preflight').click()
+    expect(page.locator('#ohlcv-panel-body')).to_contain_text('Configured source ready')
+    assert 'legacy importable' not in page.locator('#ohlcv-panel-body').inner_text()
+    assert len(backtest.preflight_requests)==1
+    assert backtest.preflight_requests[0]['config']['config_version']=='v9.0.0'
+    expect(page.locator('#ohlcv-panel-body [data-action="refresh"]')).to_have_count(0)
+    expect(page.locator('#ohlcv-panel-body [data-action="preload"]')).to_be_disabled()
+    page.locator('#cfg-starting-balance').fill('3500')
+    page.wait_for_function('!document.getElementById("ohlcv-panel-body").textContent.includes("Updating OHLCV")')
+    assert backtest.preflight_requests[-1]['config']['backtest']['starting_balance']==3500
+    page.reload()
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    expect(page.locator('#ohlcv-panel')).to_be_visible()
+    expect(page.locator('#ohlcv-panel-body')).to_contain_text('Configured source ready')
+    assert backtest.saved==backtest.queued==[]
+    assert backtest.errors==backtest.unexpected==[]
+
+
+def test_readiness_ignores_response_from_older_native_inputs(backtest):
+    """A late reply cannot label newer editor values as already checked."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    backtest.hold_preflight=True
+    page.locator('#sb-btn-ohlcv-preflight').click()
+    page.wait_for_function('document.getElementById("ohlcv-panel-body").textContent.includes("Checking OHLCV")')
+    page.locator('#cfg-starting-balance').fill('4800')
+    assert len(backtest.pending_preflight)==1
+    route,payload=backtest.pending_preflight.pop()
+    payload['summary']['headline']='OBSOLETE RESPONSE'
+    backtest.hold_preflight=False;route.fulfill(json=payload)
+    expect(page.locator('#ohlcv-panel-body')).to_contain_text('Configured source ready')
+    assert 'OBSOLETE RESPONSE' not in page.locator('#ohlcv-panel-body').inner_text()
+    assert backtest.preflight_requests[-1]['config']['backtest']['starting_balance']==4800
+
+
+def test_native_first_and_all_use_current_config_and_keep_sparse_sides(backtest):
+    """The existing date controls call PB9, never a PB8 planning endpoint."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('[aria-label="Set earliest OHLCV start date"]').click()
+    expect(page.locator('#cfg-start-date')).to_have_value('2025-01-05')
+    page.locator('[aria-label="Set common OHLCV start date"]').click()
+    expect(page.locator('#cfg-start-date')).to_have_value('2025-02-01')
+    assert len(backtest.lookups)==2
+    assert backtest.lookups[0]['config']['bot']['long']=={'enabled':True}
+    assert backtest.lookups[0]['config']['config_version']=='v9.0.0'
+    for width in (700,1440):
+        page.set_viewport_size({'width':width,'height':1000})
+        assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+    assert backtest.saved==backtest.queued==[]
+    assert backtest.errors==backtest.unexpected==[]
+
+
+def test_native_date_lookup_stop_and_changed_input_guard(backtest):
+    """Stop and stale-result protection are the same shared workflow as PB8."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    backtest.hold_lookup=True
+    page.locator('[aria-label="Set earliest OHLCV start date"]').click()
+    expect(page.locator('#cfg-ohlcv-start-progress')).to_be_visible()
+    original=page.locator('#cfg-start-date').input_value()
+    page.locator('#cfg-starting-balance').fill('5200')
+    backtest.hold_lookup=False
+    expect(page.locator('#cfg-ohlcv-start-status')).to_contain_text('inputs changed')
+    assert page.locator('#cfg-start-date').input_value()==original
+    backtest.hold_lookup=True
+    page.locator('[aria-label="Set earliest OHLCV start date"]').click()
+    expect(page.locator('#cfg-ohlcv-start-progress')).to_be_visible()
+    page.locator('#cfg-ohlcv-start-stop').click()
+    expect(page.locator('#cfg-ohlcv-start-status')).to_contain_text('Lookup stopped')
+    assert len(backtest.lookup_stops)==1
+    assert backtest.errors==backtest.unexpected==[]
+
+
+@pytest.mark.parametrize('terminal',['completed','stopped'])
+def test_shared_preload_terminal_status_rechecks_once_and_stops_polling(backtest,terminal):
+    """Existing preload-capable runtimes need no Refresh and no terminal poll loop."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    backtest.preload_supported=True
+    page.locator('#sb-btn-ohlcv-preflight').click()
+    expect(page.locator('#ohlcv-panel-body')).to_contain_text('Configured source ready')
+    page.locator('#ohlcv-panel-body [data-action="preload"]').click()
+    backtest.preload_status=terminal
+    expect(page.locator('#ohlcv-panel-body')).to_contain_text('Completed' if terminal=='completed' else 'Stopped')
+    page.wait_for_timeout(1800)
+    assert len(backtest.preflight_requests)==2
+    assert backtest.preload_gets==2
+    assert backtest.errors==backtest.unexpected==[]
+
+
+def test_native_balance_tool_reuses_shared_calculator_without_saving(backtest):
+    """Native side inheritance is projected only into calculator analysis inputs."""
+    backtest.config['bot']['global']['risk']={'max_positions':3,'total_wallet_exposure_limit_ratio':2}
+    backtest.config['bot']['global']['universe']['approved_coins']=['HYPE']
+    page=backtest.page;page.reload()
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#sidebar-editor button[onclick="goCalcBalance()"]').click()
+    expect(page.locator('#bcalc-res')).to_contain_text('123.00')
+    payload=backtest.balance_requests[-1]
+    assert payload['config']['bot']['long']['risk']=={'n_positions':3,'total_wallet_exposure_limit':2}
+    assert payload['config']['live']['approved_coins']['long']==['HYPE']
+    assert payload['config']['bot']['short']['risk']['n_positions']==0
+    assert backtest.saved==backtest.queued==[]
+    assert backtest.errors==backtest.unexpected==[]
+
+
+def test_nested_registered_fields_have_one_author_and_preserve_siblings(backtest):
+    """The additional root JSON cannot overwrite an edited registry child."""
+    backtest.config['backtest']['future_object']={'threshold':2,'other':4}
+    backtest.metadata['fields'].append({'path':['backtest','future_object','threshold'],'types':['float'],'default':1})
+    page=backtest.page;page.reload()
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    expect(page.locator('#extra-bt-future_object')).to_have_count(0)
+    page.locator('#bt9-field-section-advanced > .expander-header').click()
+    page.locator('[data-config-path="backtest.future_object.threshold"]').fill('3.5')
+    page.locator('#sidebar-editor button[onclick="saveEditor()"]').click()
+    page.wait_for_function('window.editingConfig === "fixture"')
+    assert backtest.saved[-1]['config']['backtest']['future_object']=={'threshold':3.5,'other':4}
+
+
 def test_native_editor_reload_retains_owned_draft_and_invalid_json(backtest):
     """Reload returns to the draft; invalid JSON never saves or silently disappears."""
     page = backtest.page
@@ -116,6 +450,140 @@ def test_native_editor_reload_retains_owned_draft_and_invalid_json(backtest):
     assert backtest.saved == []
     expect(page.locator('#cfg-bot-long')).to_have_value('{')
     assert backtest.errors == [], "\n".join(backtest.errors)
+
+
+@pytest.mark.parametrize('entry', ['draft', 'saved'])
+def test_native_registry_maps_and_compact_override_controls(backtest, entry):
+    """Real registry-shaped maps stay editable without literal wildcard fields."""
+    state = backtest
+    state.metadata['fields'].extend([
+        {'path':['backtest','balance_sample_divider'], 'types':['integer']},
+        {'path':['backtest','compress_cache'], 'types':['boolean']},
+        {'path':['backtest','scenarios'], 'types':['array']},
+        {'path':['backtest','coin_sources'], 'types':['object']},
+        {'path':['backtest','reducer','*'], 'types':['string'],
+         'domain':{'choices':['mean','max']}},
+        {'path':['backtest','coin_sources','*'], 'types':['string']},
+        {'path':['backtest','scenarios','*','coin_sources','*'], 'types':['string']},
+        {'path':['backtest','scenarios','*','start_date'], 'types':['string']},
+    ])
+    state.config['backtest']['coin_sources'] = {'HYPE':'bybit'}
+    state.config['backtest']['reducer']['custom_metric'] = 'mean'
+    state.config['backtest']['scenarios'] = [{'label':'sample','start_date':'2025-01-01'}]
+    page = state.page
+    if entry == 'saved':
+        page.goto('http://backtest9.test/api/backtest-v9/main_page?config=fixture#configs')
+    else:
+        page.reload()
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    assert page.locator('[data-meta-path*="*"]').count() == 0
+    expect(page.locator('#kv-cs')).to_contain_text('HYPE')
+    page.locator('#exp-suite > .expander-header').click()
+    page.locator('#suite-enabled').check()
+    page.locator('#exp-suite-agg > .expander-header').click()
+    reducer = page.locator('#suite-agg-default')
+    expect(reducer).to_have_value('mean')
+    for toggle in page.locator('#bt9-native-fields .meta-explicit').all():
+        if toggle.is_visible():
+            box = toggle.bounding_box()
+            assert box['width'] == box['height'] == 14
+    reducer.select_option('max')
+    boolean = page.locator('[data-config-path="backtest.compress_cache"]').bounding_box()
+    assert boolean['width'] == boolean['height'] == 16
+    page.locator('[data-config-path="backtest.compress_cache"]').uncheck()
+    page.locator('#sidebar-editor button[onclick="saveAndQueue()"]').click()
+    page.wait_for_function('currentPanel === "queue"')
+    saved = state.saved[0]['config']['backtest']
+    assert saved['reducer'] == {'default':'max','custom_metric':'mean'}
+    assert saved['coin_sources'] == state.config['backtest']['coin_sources']
+    assert saved['scenarios'] == state.config['backtest']['scenarios']
+    assert saved['compress_cache'] is False
+    assert saved == state.queued[0]['config']['backtest']
+    assert '*' not in json.dumps(saved)
+    assert state.errors == [], '\n'.join(state.errors)
+    assert state.unexpected == []
+
+
+def test_pb9_layout_primary_fields_coins_and_sparse_full_json(backtest):
+    """The PB8-shaped editor shares controls while preserving native inheritance."""
+    page = backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    for selector in ['#cfg-starting-balance','#cfg-maker-fee','#cfg-compress',
+                     '#ms-cfg-app-long','#ms-cfg-app-short','#cfg-twe-long',
+                     '#cfg-npos-short','#cfg-bot-long','#cfg-bot-short']:
+        expect(page.locator(selector)).to_be_visible()
+    assert not page.locator('#bt9-field-section-advanced').get_attribute('class').endswith('open')
+    assert page.locator('#bt9-balance-fields .meta-explicit').count() == 0
+    assert page.locator('#bt9-long-fields .num-stepper').count() == 2
+    before=json.loads(page.locator('#cfg-bot-long').input_value())
+    before['risk']['max_positions']=6
+    page.locator('#cfg-bot-long').fill(json.dumps(before))
+    page.locator('#cfg-bot-long').dispatch_event('change')
+    expect(page.locator('#cfg-npos-long')).to_have_value('6')
+    # Applying the shared filter picker writes native side-owned universes.
+    page.locator('#sidebar-editor button[onclick="cfgApplyFilters()"]' ).click()
+    expect(page.locator('#ms-cfg-app-long')).to_contain_text('HYPE')
+    page.locator('#sidebar-editor button[onclick="saveAndQueue()"]' ).click()
+    page.wait_for_function('currentPanel === "queue"')
+    saved=backtest.saved[0]['config']
+    assert saved['bot']['long']['risk'] == {'max_positions':6}
+    assert saved['bot']['long']['universe']['approved_coins'] == ['HYPE']
+    assert saved['bot']['short']['universe']['ignored_coins'] == ['BTC']
+    assert 'approved_coins' not in saved.get('live',{})
+    assert 'strategy' not in saved['bot']['long']
+    assert saved == backtest.queued[0]['config']
+    assert backtest.errors == [], '\n'.join(backtest.errors)
+
+
+def test_pb9_editor_sections_and_json_view_survive_reload(backtest):
+    """Editor navigation is restored independently from authored config values."""
+    page=backtest.page
+    expect(page.locator('#cfg-bot-long-view')).to_have_value('effective')
+    page.locator('#bt9-field-section-advanced > .expander-header').click()
+    page.locator('#cfg-bot-long-view').select_option('overrides')
+    page.reload()
+    expect(page.locator('#cfg-bot-long-view')).to_have_value('overrides')
+    expect(page.locator('#bt9-field-section-advanced')).to_have_class('expander open')
+    expect(page.locator('#cfg-bot-long')).to_have_value(json.dumps({'enabled':True},indent=2))
+    assert 'opt_draft_id=fixture-draft' in page.url
+    assert backtest.saved == backtest.queued == []
+    assert backtest.errors == []
+
+
+def test_catalog_response_preserves_new_coin_selection(backtest):
+    """A late shared-catalog response cannot resurrect a removed approved coin."""
+    import time
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.wait_for_function('_marketSettingsCoins.includes("BTC")')
+    backtest.config['bot']['long']['universe']={'approved_coins':['HYPE']}
+    backtest.hold_symbols=True
+    page.reload()
+    expect(page.locator('#ms-cfg-app-long')).to_contain_text('HYPE')
+    deadline=time.monotonic()+5
+    while not backtest.pending_symbols:
+        assert time.monotonic()<deadline
+        page.wait_for_timeout(20)
+    page.locator('#ms-cfg-app-long .ms-x').click()
+    backtest.hold_symbols=False
+    for route in backtest.pending_symbols:
+        route.fulfill(json={'symbols':['BTC','HYPE']})
+    page.wait_for_function('_marketSettingsCoins.includes("BTC")')
+    page.locator('#sidebar-editor button[onclick="saveEditor()"]' ).click()
+    page.wait_for_function('editingConfig !== "__new__"')
+    assert backtest.saved[-1]['config']['bot']['long']['universe']['approved_coins'] == []
+    assert backtest.errors == []
+
+
+def test_shared_filter_numbers_do_not_render_metadata_as_html(backtest):
+    """Imported GUI filter metadata is escaped before the shared form is built."""
+    page=backtest.page
+    backtest.config['pbgui']={'market_cap':'"><img src=x onerror="window.layoutInjection=1">'}
+    page.reload()
+    expect(page.locator('#cfg-market-cap')).to_be_visible()
+    assert page.locator('#configs-editor img').count() == 0
+    assert page.evaluate('window.layoutInjection || 0') == 0
+    assert backtest.errors == []
 
 
 def test_native_menu_and_results_stay_v9(backtest):
@@ -253,7 +721,8 @@ def test_native_source_control_reuses_pbgui_path_and_preserves_explicit_opt_out(
     page=backtest.page
     page.route('**/api/backtest-v9/pbgui_data_path',lambda route:route.fulfill(json={'path':'/shared/pbgui/ohlcv'}))
     expect(page.locator('#cfg-ohlcv-dir')).to_be_visible()
-    expect(page.locator('#bt9-field-section-backtest')).to_have_class('expander open')
+    expect(page.locator('#cfg-candle-interval')).to_be_visible()
+    expect(page.locator('#cfg-gap-tol')).to_be_visible()
     page.locator('button[onclick="fillPbguiDataPath()"]').click()
     expect(page.locator('#cfg-ohlcv-dir')).to_have_value('/shared/pbgui/ohlcv')
     page.locator('#sidebar-editor button[onclick="saveEditor()"]').click()
@@ -374,3 +843,29 @@ def test_manual_compare_includes_existing_unlinked_pb8_and_pb9_results(backtest)
     expect(page.locator('#results-version-filter')).to_have_value('both')
     expect(page.locator('#compare-chart-div .legendtext')).to_have_count(4)
     assert backtest.errors==[] and backtest.unexpected==[]
+
+
+def test_queue_settings_reuses_pb8_dialog_and_preserves_dirty_edits(backtest):
+    """PB9 exposes CPU/autostart, saves only native controls and restores the Queue view."""
+    page = backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#sidebar-editor button[onclick="closeEditor()"]').click()
+    page.locator('#sidebar [data-panel="queue"]').click()
+    page.locator('button[onclick="openSettingsModal()"]').click()
+    expect(page.locator('#set-cpu-val')).to_have_value('1')
+    expect(page.locator('#set-autostart')).not_to_be_checked()
+    expect(page.locator('#legacy-queue-settings')).to_be_hidden()
+    page.locator('button[onclick="settingsAdjustCpu(1)"]').click()
+    page.locator('#set-autostart').check()
+    page.evaluate("settings.cpu=4; settings.autostart=false; syncOpenSettingsModal()")
+    expect(page.locator('#set-cpu-val')).to_have_value('2')
+    expect(page.locator('#set-autostart')).to_be_checked()
+    page.locator('.modal-btn-primary').filter(has_text='Save').click()
+    expect(page.locator('#set-cpu-val')).to_be_hidden()
+    assert backtest.settings_saved == [{'cpu': 2, 'autostart': True}]
+    page.reload()
+    expect(page.locator('#sidebar button[data-panel="queue"]')).to_have_class(__import__('re').compile('active'))
+    page.locator('button[onclick="openSettingsModal()"]').click()
+    expect(page.locator('#set-cpu-val')).to_have_value('2')
+    expect(page.locator('#set-autostart')).to_be_checked()
+    assert backtest.errors == backtest.unexpected == []

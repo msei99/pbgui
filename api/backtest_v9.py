@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+from contextlib import contextmanager
 import csv
 import datetime as dt
 import hashlib
@@ -30,7 +31,7 @@ from api.pb9_migration import (carry_comparison_reference, config_comparison_ref
 from api.page_templates import render_page_urls, script_json
 from api.v9_instances import _NoStoreRoute, _run, _paths, _native_http_error
 from backtest_result_index import load_indexed_results, invalidate_result
-from backtest_autostart import claim_backtest_slot, publish_backtest_process, release_backtest_slot
+from backtest_autostart import BacktestQueueWorker, claim_backtest_slot, publish_backtest_process, release_backtest_slot
 from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
 from pb9_config import PB9ConfigError, PB9CancelSignal, get_pb9_editor_metadata, validate_pb9_backtest_config
@@ -39,13 +40,15 @@ from pb9_backtest_runtime import launch_environment, source_identity, prepare_ma
 from pb9_runtime import inspect_pb9_runtime
 from pb7_config import load_pb7_config, save_pb7_config
 from pb9_config_storage import PB9FileContext
-from pbgui_purefunc import PBGDIR, PBGUI_VERSION, PBGUI_SERIAL
+from pbgui_purefunc import PBGDIR, PBGUI_VERSION, PBGUI_SERIAL, load_ini_section, save_ini_section
 from secure_files import atomic_write_private_text, ensure_private_directory
 
 SERVICE = "BacktestV9"
 router = APIRouter(route_class=_NoStoreRoute)
 _LOCK = threading.RLock()
 _drafts = {}
+_POLICY_LOCK = threading.RLock()
+_QUEUE_SETTINGS_SECTION = "backtest_v9"
 
 
 def _root(kind: str) -> Path:
@@ -182,12 +185,25 @@ def _working_dir(job):
     return _safe(_root('queue'), 'workspaces', job)
 
 
-def _job_lock(job):
+def _job_lock(job, *, blocking=True):
     """Serialize each job across processes with a bounded set of 64 lock stripes."""
     _job_path(job)
     root = _safe(_root('queue'), 'locks')
     ensure_private_directory(root)
-    return advisory_file_lock(root / str(int(uuid.UUID(job)) % 64))
+    return advisory_file_lock(root / str(int(uuid.UUID(job)) % 64), blocking=blocking)
+
+
+def _remove_job_files(job):
+    """Remove only a stopped job's private artifacts, never linked market data."""
+    import shutil
+    if _job_status(job)[0] == 'running':
+        raise HTTPException(409, 'Stop the PB9 job before deleting it')
+    workspace = _working_dir(job)
+    if workspace.exists():
+        shutil.rmtree(workspace)
+    for suffix in ('.json', '.config.json', '.pid.json', '.state.json', '.ready'):
+        _job_path(job, suffix).unlink(missing_ok=True)
+    release_backtest_slot('v9', job)
 
 
 def _job_status(job):
@@ -209,6 +225,8 @@ def _job_status(job):
     state_path = _job_path(job, '.state.json')
     if state_path.exists():
         state = _read(state_path)
+        if state.get('stopped') is True:
+            return 'stopped', None
         return ('complete' if state.get('returncode') == 0 else 'error'), None
     item = _read(_job_path(job))
     if item.get('started_at'):
@@ -229,7 +247,7 @@ def _queue():
             items.append({key: value for key, value in item.items() if key != 'config_snapshot'})
             items[-1].update(status=status, pid=process['pid'] if process else None,
                              created=dt.datetime.fromtimestamp(item['created_at']).isoformat())
-    return items
+    return sorted(items, key=lambda item: (item['created_at'], item['filename']))
 
 
 def _enqueue(body, cancel):
@@ -253,6 +271,13 @@ def _enqueue(body, cancel):
                    'exchange': source['backtest'].get('exchanges', []), 'config_snapshot': source,
                    'operation_id': operation, 'runtime': 'pb9', 'schema': source['config_version'],
                    'commit': status['commit'], 'package_version': status.get('package_version')}
+        from pb9_gui_preferences import backtest_preferences
+        try:
+            preferences = backtest_preferences(config)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        if preferences:
+            payload['gui_preferences'] = preferences
         if reference:
             payload['comparison_reference'] = reference
         if cancel.is_set():
@@ -294,8 +319,10 @@ def _stop(job):
                 pass
             # A natural completion between verification and signal keeps its result.
             if _job_status(job)[0] in {'complete', 'error'} and _job_path(job, '.state.json').exists():
-                release_backtest_slot('v9', job)
-                return {'ok': True}
+                exit_code = _read(_job_path(job, '.state.json')).get('returncode')
+                if type(exit_code) is int and exit_code >= 0:
+                    release_backtest_slot('v9', job)
+                    return {'ok': True}
         item = _read(_job_path(job))
         item['status_override'] = 'stopped'
         _write(_job_path(job), item)
@@ -304,9 +331,9 @@ def _stop(job):
         return {'ok': True}
 
 
-def _start(job, cancel):
+def _start(job, cancel, automatic=False):
     """Start one detached native job, or adopt it if it is already running."""
-    with _job_lock(job):
+    with _job_lock(job, blocking=not automatic):
         item = _read(_job_path(job))
         status, existing = _job_status(job)
         if status == 'running':
@@ -327,45 +354,52 @@ def _start(job, cancel):
         except (OSError, ValueError) as exc:
             _log(SERVICE, 'PB9 offline metadata preflight failed', level='WARNING')
             raise HTTPException(409, str(exc)) from None
-        if not claim_backtest_slot('v9', job, max(1, (os.cpu_count() or 1) // 2)):
-            raise HTTPException(409, "All shared backtest slots are occupied")
-        runner = Path(__file__).resolve().parents[1] / 'pb9_backtest_runner.py'
-        state, pid, ready = [_job_path(job, ext) for ext in ('.state.json', '.pid.json', '.ready')]
-        log_root = Path(PBGDIR) / 'data/logs/backtests_v9'
-        ensure_private_directory(log_root)
-        log = _safe(log_root, job + '.log')
-        command = [paths['pb9venv'], '-I', '-B', str(runner), 'backtest', str(state), str(pid), str(ready),
-                   str(runtime['cli_file']), paths['pb9dir'], str(snapshot)]
-        item['started_at'] = time.time()
-        item['status_override'] = 'running'
-        item['launch_command'] = command
-        _write(_job_path(job), item)
         process = None
         unit_started = False
+        claimed = False
+        state = _job_path(job, '.state.json')
         try:
-            # A transient user unit survives an API service restart. The existing PB8
-            # launcher is deliberately not used: its environment is unfiltered.
-            env = launch_environment(paths['pb9venv'])
-            from shutil import which
-            systemd_socket = Path(f'/run/user/{os.getuid()}/systemd/private')
-            if which('systemd-run') and systemd_socket.exists():
-                unit_started = True  # submission can succeed even if its client times out
-                result = subprocess.run([which('systemd-run'), '--user', '--quiet', '--collect',
-                    '--unit=pbgui-pb9-backtest-' + job, '--property=Type=exec', '--property=UMask=0077',
-                    f'--property=WorkingDirectory={work}',
-                    f'--property=StandardOutput=append:{log}', f'--property=StandardError=append:{log}',
-                    '--', '/usr/bin/env', '-i', *[f'{key}={value}' for key, value in env.items()], *command],
-                    env={**env, 'XDG_RUNTIME_DIR': str(systemd_socket.parents[1])},
-                    capture_output=True, timeout=15)
-                if result.returncode:
-                    raise RuntimeError('Could not launch the persistent PB9 backtest unit')
-                unit_started = True
-            else:
-                descriptor = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-                with os.fdopen(descriptor, 'ab') as output:
-                    process = subprocess.Popen(command, cwd=work, env=env,
-                                               stdin=subprocess.DEVNULL, stdout=output, stderr=output,
-                                               start_new_session=True, close_fds=True)
+            with _queue_policy_lock():
+                policy = _queue_settings()
+                if cancel.is_set() or automatic and not policy['autostart']:
+                    raise HTTPException(409, "PB9 automatic queue is paused")
+                runner = Path(__file__).resolve().parents[1] / 'pb9_backtest_runner.py'
+                if not claim_backtest_slot('v9', job, policy['cpu'], command_markers=[str(runner), str(snapshot)]):
+                    raise _QueueCapacityUnavailable(409, "All shared backtest slots are occupied")
+                claimed = True
+                state, pid, ready = [_job_path(job, ext) for ext in ('.state.json', '.pid.json', '.ready')]
+                log_root = Path(PBGDIR) / 'data/logs/backtests_v9'
+                ensure_private_directory(log_root)
+                log = _safe(log_root, job + '.log')
+                command = [paths['pb9venv'], '-I', '-B', str(runner), 'backtest', str(state), str(pid), str(ready),
+                           str(runtime['cli_file']), paths['pb9dir'], str(snapshot)]
+                item['started_at'] = time.time()
+                item['status_override'] = 'running'
+                item['launch_command'] = command
+                _write(_job_path(job), item)
+                # A transient user unit survives an API service restart. The existing PB8
+                # launcher is deliberately not used: its environment is unfiltered.
+                env = launch_environment(paths['pb9venv'])
+                from shutil import which
+                systemd_socket = Path(f'/run/user/{os.getuid()}/systemd/private')
+                if which('systemd-run') and systemd_socket.exists():
+                    unit_started = True  # submission can succeed even if its client times out
+                    result = subprocess.run([which('systemd-run'), '--user', '--quiet', '--collect',
+                        '--unit=pbgui-pb9-backtest-' + job, '--property=Type=exec', '--property=UMask=0077',
+                        f'--property=WorkingDirectory={work}',
+                        f'--property=StandardOutput=append:{log}', f'--property=StandardError=append:{log}',
+                        '--', '/usr/bin/env', '-i', *[f'{key}={value}' for key, value in env.items()], *command],
+                        env={**env, 'XDG_RUNTIME_DIR': str(systemd_socket.parents[1])},
+                        capture_output=True, timeout=15)
+                    if result.returncode:
+                        raise RuntimeError('Could not launch the persistent PB9 backtest unit')
+                    unit_started = True
+                else:
+                    descriptor = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+                    with os.fdopen(descriptor, 'ab') as output:
+                        process = subprocess.Popen(command, cwd=work, env=env,
+                                                   stdin=subprocess.DEVNULL, stdout=output, stderr=output,
+                                                   start_new_session=True, close_fds=True)
             deadline = time.monotonic() + 75
             while time.monotonic() < deadline:
                 if cancel.is_set():
@@ -398,9 +432,17 @@ def _start(job, cancel):
                 except subprocess.SubprocessError:
                     cleanup_confirmed = False
                     _log(SERVICE, 'Could not confirm cleanup of the owned PB9 backtest unit', level='ERROR')
-            if not state.exists() and _job_status(job)[0] != 'running':
+            if claimed and cancel.is_set() and cleanup_confirmed and not state.exists():
+                # An unpublished, cancelled preparation can safely be retried after
+                # API restart. Never discard a real completion/error from the runner.
+                for key in ('started_at', 'status_override', 'launch_command'):
+                    item.pop(key, None)
+                _write(_job_path(job), item)
+                for path in (pid, ready):
+                    path.unlink(missing_ok=True)
+            elif claimed and not state.exists() and _job_status(job)[0] != 'running':
                 _write(state, {'returncode': 1, 'error': 'PB9 launch failed; inspect the job log', 'completed_at': time.time()})
-            if cleanup_confirmed:
+            if claimed and cleanup_confirmed:
                 release_backtest_slot('v9', job)
             raise
 
@@ -511,6 +553,22 @@ def _side_risk(config, side):
     return {**bot.get('global', {}).get('risk', {}), **bot.get(side, {}).get('risk', {})}
 
 
+def _configured_coins_count(config):
+    """Count distinct native side lists, retaining explicit empty and all policies."""
+    bot = config.get('bot', {})
+    shared = bot.get('global', {}).get('universe', {}).get('approved_coins', [])
+    coins = set()
+    for side in ('long', 'short'):
+        selected = bot.get(side, {}).get('universe', {}).get('approved_coins')
+        if selected is None:
+            selected = shared
+        if selected == 'all' or isinstance(selected, list) and 'all' in selected:
+            return 'all'
+        if isinstance(selected, list):
+            coins.update(coin for coin in selected if isinstance(coin, str) and coin)
+    return len(coins)
+
+
 def _operation(operation, cancel, payload=None):
     """Use the existing bounded PB9 request owner for all native/transactional work."""
     from api.pb9 import _request_envelope
@@ -521,6 +579,26 @@ def _operation(operation, cancel, payload=None):
     try:
         if cancel.is_set():
             raise PB9ConfigError('helper_cancelled')
+        if operation in {'bt9_ohlcv_preflight', 'bt9_ohlcv_start'}:
+            from api import pb9_ohlcv_tools as ohlcv
+            config = body.get('config')
+            if not isinstance(config, dict):
+                raise HTTPException(422, 'config must be an object')
+            if operation == 'bt9_ohlcv_preflight':
+                return ohlcv.preflight(config, cancel)
+            # Reject non-native/external documents before admitting a background job.
+            candidate = copy.deepcopy(config); candidate.pop('pbgui', None)
+            try:
+                check_inline_config(candidate, allow_inline_overrides=True)
+            except RuntimeError as exc:
+                raise PB9ConfigError(str(exc)) from None
+            try:
+                return ohlcv.start(candidate, args['owner'])
+            except Exception as exc:
+                from api.pb8_ohlcv_tools import PB8OhlcvBusyError
+                if isinstance(exc, PB8OhlcvBusyError):
+                    raise HTTPException(503, 'OHLCV lookup capacity is busy') from None
+                raise
         if operation == 'bt9_migrate_preview':
             from api.pb9_migration import preview
             return preview(body, args['owner'], _paths(), cancel)
@@ -529,8 +607,9 @@ def _operation(operation, cancel, payload=None):
             status, _ = _runtime(cancel)
             review = reviewed(body, args['owner'], status)
             source, _ = _native(review['config'], cancel)
+            carry_comparison_reference(source, review['config'])
             if review.get('comparison_reference'):
-                source['pbgui'] = {'comparison_reference': review['comparison_reference']}
+                source.setdefault('pbgui', {})['comparison_reference'] = review['comparison_reference']
             with _LOCK:
                 for key, value in list(_drafts.items()):
                     if time.monotonic() - value['created'] > 600:
@@ -588,10 +667,11 @@ def _operation(operation, cancel, payload=None):
                     config = _read(_cfg_path(path.parent.name))
                     bt, bot = config.get('backtest', {}), config.get('bot', {})
                     results.append({'name': path.parent.name, 'exchanges': bt.get('exchanges', []),
-                        'strategy': bot.get('portfolio', {}).get('strategy_kind', ''), 'coins': 0,
+                        'strategy': bot.get('portfolio', {}).get('strategy_kind', ''), 'coins': _configured_coins_count(config),
                         'twe_long': _side_risk(config, 'long').get('total_wallet_exposure_limit_ratio', 0),
                         'twe_short': _side_risk(config, 'short').get('total_wallet_exposure_limit_ratio', 0), 'start_date': bt.get('start_date'), 'end_date': bt.get('end_date'),
-                        'modified': path.stat().st_mtime, 'results': len(list(_safe(_root('results'), path.parent.name).glob('**/analysis.json')))})
+                        'modified': dt.datetime.fromtimestamp(path.stat().st_mtime, dt.timezone.utc).isoformat(),
+                        'results': len(list(_safe(_root('results'), path.parent.name).glob('**/analysis.json')))})
             return {'configs': results}
         if operation == 'bt9_load':
             loaded = _load_source(_cfg_path(args['name']), cancel, revision=True)
@@ -615,22 +695,43 @@ def _operation(operation, cancel, payload=None):
                 revision = hashlib.sha256(path.read_bytes()).hexdigest()
             return {'ok': True, 'name': args['name'], 'revision': revision}
         if operation == 'bt9_delete_config':
-            import shutil
+            from contextlib import ExitStack
             with _LOCK, _storage_lock():
-                if any(item['name'] == args['name'] and item['status'] == 'running' for item in _queue()):
-                    raise HTTPException(409, 'Stop this config backtest before deleting it')
-                directory = _cfg_path(args['name']).parent
-                if not directory.is_dir():
-                    raise HTTPException(404, 'PB9 config not found')
-                trash = _root('configs') / '.trash'
-                ensure_private_directory(trash)
-                os.replace(directory, _safe(trash, args['name'] + '-' + uuid.uuid4().hex))
+                with ExitStack() as locks:
+                    jobs = sorted(item['filename'] for item in _queue() if item['name'] == args['name'])
+                    # Acquire each stripe once; launches use these same locks.
+                    stripes = {int(uuid.UUID(job)) % 64: job for job in jobs}
+                    for stripe in sorted(stripes):
+                        locks.enter_context(_job_lock(stripes[stripe]))
+                    if any(_job_status(job)[0] == 'running' or
+                           (_job_status(job)[0] == 'queued' and _read(_job_path(job)).get('started_at'))
+                           for job in jobs):
+                        raise HTTPException(409, 'Stop this config backtest before deleting it')
+                    directory = _cfg_path(args['name']).parent
+                    if not directory.is_dir():
+                        raise HTTPException(404, 'PB9 config not found')
+                    trash = _root('trash')
+                    ensure_private_directory(trash)
+                    moved = []
+                    try:
+                        targets = [directory]
+                        result_root = _safe(_root('results'), _name(args['name']))
+                        if args.get('remove_results') and result_root.exists():
+                            targets.append(result_root)
+                        for target in targets:
+                            destination = _safe(trash, 'config-' + uuid.uuid4().hex)
+                            os.replace(target, destination)
+                            moved.append((target, destination))
+                    except Exception:
+                        for target, destination in reversed(moved):
+                            os.replace(destination, target)
+                        raise
             return {'ok': True}
         if operation == 'bt9_enqueue':
             return _enqueue(body, cancel)
         if operation == 'bt9_queue':
             items = _queue()
-            return {'queue': items, 'items': items}
+            return {'queue': items, 'items': items, 'settings': _queue_settings()}
         if operation == 'bt9_start':
             return _start(args['id'], cancel)
         if operation in {'bt9_stop', 'bt9_restart', 'bt9_delete_job'}:
@@ -639,16 +740,24 @@ def _operation(operation, cancel, payload=None):
                     _stop(args['id'])
                 if operation == 'bt9_restart':
                     item = _read(_job_path(args['id']))
-                    item.pop('started_at', None); item.pop('status_override', None)
-                    _write(_job_path(args['id']), item)
-                    _job_path(args['id'], '.state.json').unlink(missing_ok=True)
+                    runtime, _ = _runtime(cancel)
+                    if runtime['commit'] != item['commit'] or runtime['config_schema'] != item['schema']:
+                        raise HTTPException(409, 'PB9 source changed; enqueue a new snapshot')
+                    snapshot = _job_path(args['id'], '.config.json')
+                    if hashlib.sha256(snapshot.read_bytes()).hexdigest() != item['snapshot_sha256']:
+                        raise HTTPException(409, 'PB9 queue snapshot changed')
+                    config = _read(snapshot)
+                    config['pbgui'] = copy.deepcopy(item.get('gui_preferences', {}))
+                    if item.get('comparison_reference'):
+                        config['pbgui']['comparison_reference'] = item['comparison_reference']
                 elif operation == 'bt9_delete_job':
-                    for suffix in ('.json', '.config.json', '.pid.json', '.state.json', '.ready'):
-                        _job_path(args['id'], suffix).unlink(missing_ok=True)
+                    _remove_job_files(args['id'])
                     return {'ok': True}
                 else:
                     return {'ok': True}
-            return _start(args['id'], cancel)
+            # New output ownership preserves the previous run and its provenance.
+            queued = _enqueue({'name': item['name'], 'config': config}, cancel)
+            return {**_start(queued['filename'], cancel), 'filename': queued['filename']}
         if operation == 'bt9_results':
             root = _root('results')
             paths = []
@@ -703,7 +812,7 @@ def _operation(operation, cancel, payload=None):
             source = _read(original if original.exists() else _safe(directory, 'config.json'))
             reference = _result_reference(directory)
             if reference:
-                source['pbgui'] = {'comparison_reference': reference}
+                source.setdefault('pbgui', {})['comparison_reference'] = reference
             return source
         if operation == 'bt9_delete_result':
             with _LOCK, _storage_lock():
@@ -728,9 +837,7 @@ def _operation(operation, cancel, payload=None):
                     with _job_lock(item['filename']):
                         if _job_status(item['filename'])[0] not in {'complete', 'error', 'stopped'}:
                             continue
-                        for suffix in ('.json', '.config.json', '.pid.json', '.state.json', '.ready'):
-                            _job_path(item['filename'], suffix).unlink(missing_ok=True)
-                        release_backtest_slot('v9', item['filename'])
+                        _remove_job_files(item['filename'])
                         count += 1
             return {'ok': True, 'removed': count}
         if operation == 'bt9_files':
@@ -770,11 +877,133 @@ def main_page(request: Request, session: SessionToken = Depends(require_auth)):
     return HTMLResponse(html, headers={'Cache-Control': 'no-store'})
 
 
+@contextmanager
+def _queue_policy_lock():
+    """Serialize policy acknowledgement with final launch admission across APIs."""
+    with _POLICY_LOCK, advisory_file_lock(Path(PBGDIR) / 'data/locks/backtest-v9-policy'):
+        yield
+
+
+def _queue_settings():
+    """Load only PB9's separate queue policy, defaulting to manual execution."""
+    values = load_ini_section(_QUEUE_SETTINGS_SECTION)
+    maximum = max(1, os.cpu_count() or 1)
+    try:
+        cpu = int(values.get('cpu', '1'))
+    except (TypeError, ValueError):
+        cpu = 1
+    return {'autostart': str(values.get('autostart', 'False')).lower() == 'true',
+            'cpu': max(1, min(cpu, maximum)), 'cpu_max': maximum, 'exchange_options': [],
+            'capabilities': {'local': True, 'native_schema': 'v9', 'optimizer': False,
+                             'archive': False, 'autostart': True}}
+
+
 @router.get('/settings')
 def settings(session: SessionToken = Depends(require_auth)):
-    """Expose capabilities rather than silently forwarding unsupported v8 features."""
-    return {'autostart': False, 'cpu': 1, 'exchange_options': [],
-            'capabilities': {'local': True, 'native_schema': 'v9', 'optimizer': False, 'archive': False, 'autostart': False}}
+    """Expose native queue settings through the existing PB8 dialog contract."""
+    return _queue_settings()
+
+
+@router.post('/settings')
+def update_settings(body: dict, session: SessionToken = Depends(require_auth)):
+    """Save queue policy atomically without changing PB7/PB8 or running jobs."""
+    if set(body) - {'cpu', 'autostart'}:
+        raise HTTPException(422, 'Unsupported PB9 queue setting')
+    if 'cpu' in body and type(body['cpu']) is not int:
+        raise HTTPException(422, 'cpu must be an integer')
+    if 'autostart' in body and type(body['autostart']) is not bool:
+        raise HTTPException(422, 'autostart must be a boolean')
+    values = {key: str(value) for key, value in body.items()}
+    if 'cpu' in body:
+        values['cpu'] = str(max(1, min(body['cpu'], max(1, os.cpu_count() or 1))))
+    with _queue_policy_lock():
+        save_ini_section(_QUEUE_SETTINGS_SECTION, values)
+    return {'ok': True}
+
+
+class _QueueCapacityUnavailable(HTTPException):
+    """Distinguish shared capacity from jobs requiring individual intervention."""
+
+
+class BacktestV9Worker(BacktestQueueWorker):
+    """Use the PB8 controller lifecycle and shared slots with PB9's native launcher."""
+
+    def __init__(self):
+        super().__init__('backtest-v9-worker')
+        self._cancel = PB9CancelSignal()
+        self._deferred = {}
+
+    def start(self):
+        """Create a fresh cancellation owner only for a new controller."""
+        if self._task is None or self._task.done():
+            self._cancel = PB9CancelSignal()
+        super().start()
+
+    async def stop(self):
+        """Cancel unpublished launch preparation, then drain its owned work."""
+        self._cancel.set()
+        await super().stop()
+        self._deferred.clear()
+
+    def _dispatch(self, job):
+        """Native start rechecks policy under the same gate used by settings writes."""
+        return _start(job, self._cancel, automatic=True)
+
+    async def _cycle(self):
+        """Inspect fresh queue state without blocking the API event loop."""
+        policy = await self.run_sync(_queue_settings)
+        if not policy['autostart']:
+            return
+        items = await self.run_sync(_queue)
+        live = {item['filename'] for item in items}
+        self._deferred = {key: value for key, value in self._deferred.items() if key in live}
+        running = sum(item['status'] == 'running' for item in items)
+        for item in items:
+            if not self._running or self._cancel.is_set():
+                return
+            policy = await self.run_sync(_queue_settings)
+            if not policy['autostart'] or running >= policy['cpu']:
+                return
+            if item['status'] != 'queued':
+                continue
+            try:
+                await self.run_sync(self._dispatch, item['filename'])
+                running += 1
+                self._deferred.pop(item['filename'], None)
+            except (_QueueCapacityUnavailable, BlockingIOError):
+                return
+            except HTTPException as exc:
+                # Retain actionable jobs but avoid flooding the daemon log every poll.
+                signature = (exc.status_code, str(exc.detail))
+                if self._deferred.get(item['filename']) != signature:
+                    _log(SERVICE, f"Queued PB9 {item['filename']} launch deferred: {exc.detail}", level='INFO' if exc.status_code == 409 else 'ERROR')
+                    if len(self._deferred) < 1024:
+                        self._deferred[item['filename']] = signature
+            except PB9ConfigError:
+                if not self._cancel.is_set():
+                    _log(SERVICE, 'Queued PB9 runtime preparation failed', level='ERROR')
+            except Exception as exc:
+                _log(SERVICE, f"Queued PB9 launch failed: {exc}", level='ERROR')
+
+    async def _loop(self):
+        """Retry transient controller failures while retaining durable queue state."""
+        try:
+            while self._running:
+                try:
+                    await self._cycle()
+                except Exception as exc:
+                    _log(SERVICE, f"PB9 queue scan failed: {exc}", level='ERROR')
+                await asyncio.sleep(5)
+        except asyncio.CancelledError:
+            pass
+
+
+_worker = BacktestV9Worker()
+
+
+def startup():
+    """Reconstruct only the API-owned scheduler; the default policy is disabled."""
+    _worker.start()
 
 
 def _pbgui_data_path():
@@ -840,8 +1069,6 @@ async def new_config(request: Request, session: SessionToken = Depends(require_a
 @router.delete('/configs/{name}')
 async def delete_config(name: str, request: Request, remove_results: bool = False, session: SessionToken = Depends(require_auth)):
     """Move a stopped config into its private recoverable trash."""
-    if remove_results:
-        raise HTTPException(422, 'Delete PB9 results separately from their result view')
     return await _call(request, 'delete_config', {'name': _name(name), 'remove_results': remove_results})
 
 
@@ -861,6 +1088,49 @@ async def save_config(name: str, request: Request, session: SessionToken = Depen
 async def queue(request: Request, session: SessionToken = Depends(require_auth)):
     """Read and adopt persisted native process ownership."""
     return await _call(request, 'queue')
+
+
+@router.post('/ohlcv-preflight')
+async def ohlcv_preflight(request: Request, session: SessionToken = Depends(require_auth)):
+    """Use the shared readiness panel with only native PB9 planning modules."""
+    return await _call(request, 'ohlcv_preflight', body=True)
+
+
+@router.post('/ohlcv-start-dates')
+async def start_ohlcv_lookup(request: Request, session: SessionToken = Depends(require_auth)):
+    """Start a bounded login-owned native inception lookup."""
+    return await _call(request, 'ohlcv_start', {'owner': session.user_id}, body=True)
+
+
+def _lookup_id(job_id):
+    """Validate the transient controller identifier before looking it up."""
+    if not isinstance(job_id, str) or not re.fullmatch(r'[a-f0-9]{12}', job_id):
+        raise HTTPException(404, 'OHLCV lookup not found')
+    return job_id
+
+
+@router.get('/ohlcv-start-dates/{job_id}')
+def get_ohlcv_lookup(job_id: str, request: Request, session: SessionToken = Depends(require_auth)):
+    """Return progress for this login and runtime only."""
+    from api.pb9_ohlcv_tools import get
+    from api.v9_instances import _check_query
+    _check_query(request)
+    result = get(_lookup_id(job_id), session.user_id)
+    if result is None:
+        raise HTTPException(404, 'OHLCV lookup not found')
+    return result
+
+
+@router.delete('/ohlcv-start-dates/{job_id}')
+def stop_ohlcv_lookup(job_id: str, request: Request, session: SessionToken = Depends(require_auth)):
+    """Cancel one exact API-owned helper without controlling a native backtest."""
+    from api.pb9_ohlcv_tools import stop
+    from api.v9_instances import _check_query
+    _check_query(request)
+    result = stop(_lookup_id(job_id), session.user_id)
+    if result is None:
+        raise HTTPException(404, 'OHLCV lookup not found')
+    return result
 
 
 @router.post('/queue')
@@ -998,7 +1268,7 @@ async def websocket(websocket: WebSocket):
             data = await owner.run('bt9_queue')
             signature = json.dumps(data, sort_keys=True)
             if signature != previous:
-                await ws.send_json({'type': 'queue_update', 'items': data['queue']})
+                await ws.send_json({'type': 'queue_update', 'items': data['queue'], 'settings': data['settings']})
                 previous = signature
             await asyncio.sleep(2)
     except (WebSocketDisconnect, RuntimeError, HTTPException):
@@ -1007,7 +1277,10 @@ async def websocket(websocket: WebSocket):
 
 async def shutdown():
     """Release only API-owned batch/controller state; native jobs remain independent."""
+    await _worker.stop()
     with _LOCK:
         _drafts.clear()
     from api.pb9_migration import shutdown as clear_reviews
     clear_reviews()
+    from api.pb9_ohlcv_tools import shutdown as stop_lookups
+    await asyncio.to_thread(stop_lookups)

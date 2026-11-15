@@ -234,28 +234,12 @@ def _checked_sidecar(raw: Any) -> dict[str, Any]:
 
 
 def _filter_preferences(raw: dict) -> dict:
-    """Keep shared editor filters in the GUI sidecar, outside native source."""
-    result = {}
-    for key in ("market_cap", "vol_mcap"):
-        if key not in raw:
-            continue
-        value = raw[key]
-        if type(value) not in (int, float) or not 0 <= value <= 10**12 or not math.isfinite(value):
-            raise _BundleError("Invalid PB9 editor filter value")
-        result[key] = value
-    for key in ("only_cpt", "notices_ignore"):
-        if key in raw:
-            if type(raw[key]) is not bool:
-                raise _BundleError("Invalid PB9 editor filter flag")
-            result[key] = raw[key]
-    if "tags" in raw:
-        tags = raw["tags"]
-        if (not isinstance(tags, list) or len(tags) > 200
-                or any(not isinstance(tag, str) or not tag or len(tag) > 128
-                       or any(ord(c) < 32 or ord(c) == 127 for c in tag) for tag in tags)):
-            raise _BundleError("Invalid PB9 editor filter tags")
-        result["tags"] = list(tags)
-    return result
+    """Keep Run and Backtest filter validation identical."""
+    from pb9_gui_preferences import filter_preferences
+    try:
+        return filter_preferences(raw)
+    except ValueError as exc:
+        raise _BundleError(str(exc)) from None
 
 
 def _read_bundle(directory: Path) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -399,6 +383,9 @@ def _native_http_error(exc: PB9ConfigError) -> HTTPException:
     from api import pb9 as pb9_api
 
     code = exc.error_codes[0]
+    from pb9_ohlcv_probe import PROBE_ERROR_MESSAGES
+    if code in PROBE_ERROR_MESSAGES:
+        return pb9_api._error(422, code, PROBE_ERROR_MESSAGES[code])
     if code in pb9_api._VALIDATION_ERRORS:
         return pb9_api._error(422, code, f"PB9 rejected this config ({code})")
     if code == "helper_cancelled":

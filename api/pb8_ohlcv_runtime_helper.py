@@ -475,7 +475,8 @@ async def _build(payload: dict[str, Any], modules=None, diagnostic=None) -> dict
     _set_start_date_stage(diagnostic, "configuration")
     effective_start_ts = max(0, requested_start_ts - warmup_minutes * 60_000)
     effective_start_ts = (effective_start_ts // 60_000) * 60_000
-    minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
+    minimum_coin_age_days = float(modules["minimum_coin_age_days"](config) if "minimum_coin_age_days" in modules
+                                  else require_live_value(config, "minimum_coin_age_days"))
     min_coin_age_ms = int(max(0.0, minimum_coin_age_days) * 86_400_000)
     source_value = str(backtest.get("ohlcv_source_dir") or "").strip()
     source_dir = Path(source_value) if source_value else None
@@ -492,13 +493,14 @@ async def _build(payload: dict[str, Any], modules=None, diagnostic=None) -> dict
         else None
     )
 
-    uses_all_coins = _uses_all_coins(live.get("approved_coins"))
+    approved_sources = modules.get("approved_sources", lambda cfg: cfg.get("live", {}).get("approved_coins"))
+    uses_all_coins = _uses_all_coins(approved_sources(config))
     if include_start_date_options:
         _emit_progress(phase="resolving_universe", completed=0, total=0, message="Resolving approved coins")
     _set_start_date_stage(diagnostic, "market_resolution")
     await modules["format_approved_ignored_coins"](config, exchanges)
     _set_start_date_stage(diagnostic, "configuration")
-    approved = require_live_value(config, "approved_coins")
+    approved = approved_sources(config) if "approved_sources" in modules else require_live_value(config, "approved_coins")
     coin_sides = _collect_coin_sides(approved)
     coins = sorted(coin_sides)
     coins_mode = "all" if uses_all_coins else "explicit"
@@ -537,6 +539,7 @@ async def _build(payload: dict[str, Any], modules=None, diagnostic=None) -> dict
     }
     if not coins:
         return {
+            "runtime": "pb8",
             "summary": _summary(_counts(), 0, explicit_source=bool(source_dir)),
             "request": request,
             "universe": universe,
@@ -624,7 +627,9 @@ async def _build(payload: dict[str, Any], modules=None, diagnostic=None) -> dict
                     age_anchor = market_start_ts or (int(float(first_ts_guess)) if first_ts_guess else None)
                     adjusted_start_ts = max(
                         effective_start_ts,
-                        (age_anchor + min_coin_age_ms) if age_anchor is not None else effective_start_ts,
+                        (age_anchor + (modules["coin_minimum_age_ms"](config, coin_sides.get(coin, []))
+                                       if "coin_minimum_age_ms" in modules else min_coin_age_ms))
+                        if age_anchor is not None else effective_start_ts,
                     )
                     entry["symbol"] = symbol
                     entry["effective_start_date"] = modules["ts_to_date"](adjusted_start_ts)
@@ -785,6 +790,7 @@ async def _build(payload: dict[str, Any], modules=None, diagnostic=None) -> dict
             preload_detail="The current single PB8 download command does not include scenario-only exchanges; preload each required dataset explicitly.",
         )
     result = {
+        "runtime": "pb8",
         "summary": summary,
         "request": request,
         "universe": universe,

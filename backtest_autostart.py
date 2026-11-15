@@ -1,7 +1,8 @@
-"""Cross-version slot arbitration for automatic PB7/PB8 backtest launches."""
+"""Cross-version slot arbitration for PB7/PB8/PB9 backtest launches."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import time
@@ -97,12 +98,19 @@ def _managed_processes() -> dict[int, float]:
 def _active_state() -> tuple[list[dict], int]:
     claims = [claim for claim in _read_claims() if _claim_is_active(claim)]
     tracked_pids = {int(claim["pid"]) for claim in claims if claim.get("state") == "running" and claim.get("pid")}
-    untracked_processes = [pid for pid in _managed_processes() if pid not in tracked_pids]
+    untracked_processes = {pid: created for pid, created in _managed_processes().items() if pid not in tracked_pids}
+    for claim in claims:
+        if claim.get('state') != 'pending' or not claim.get('command_markers'):
+            continue
+        for pid, created in list(untracked_processes.items()):
+            if _process_matches({**claim, 'pid': pid, 'create_time': created}):
+                del untracked_processes[pid]
+                break
     return claims, len(claims) + len(untracked_processes)
 
 
-def claim_backtest_slot(version: str, job_id: str, limit: int) -> bool:
-    """Reserve one shared automatic backtest slot across PB7 and PB8."""
+def claim_backtest_slot(version: str, job_id: str, limit: int, *, command_markers: list[str] | None = None) -> bool:
+    """Reserve one shared automatic backtest slot across PB7, PB8 and PB9."""
     ensure_private_directory(_state_root())
     with advisory_file_lock(_lock_target()):
         claims, active_count = _active_state()
@@ -116,6 +124,7 @@ def claim_backtest_slot(version: str, job_id: str, limit: int) -> bool:
                 "version": str(version),
                 "job_id": str(job_id),
                 "claimed_at": time.time(),
+                "command_markers": list(command_markers or []),
                 "owner_pid": os.getpid(),
                 "owner_create_time": owner.create_time(),
             }
@@ -173,3 +182,39 @@ def release_backtest_slot(version: str, job_id: str) -> None:
             if not (claim.get("version") == version and claim.get("job_id") == job_id)
         ]
         _write_claims(claims)
+
+
+class BacktestQueueWorker:
+    """Share API-controller lifecycle while native launchers own independent jobs."""
+
+    def __init__(self, name):
+        self._name = name
+        self._task = None
+        self._running = False
+
+    def start(self):
+        """Start at most one controller in the current API event loop."""
+        if self._task is None or self._task.done():
+            self._running = True
+            self._task = asyncio.create_task(self._loop(), name=self._name)
+
+    async def stop(self):
+        """Drain owned scans/launch preparation without stopping published jobs."""
+        self._running = False
+        task = self._task
+        if task is None:
+            return
+        if not task.done() and not task.cancelling():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        if self._task is task:
+            self._task = None
+
+    async def run_sync(self, function, *args):
+        """Join a started executor job even if the controller is cancelled."""
+        task = asyncio.create_task(asyncio.to_thread(function, *args), name=self._name + '-operation')
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            await asyncio.gather(task, return_exceptions=True)
+            raise

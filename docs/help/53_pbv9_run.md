@@ -16,6 +16,8 @@ The catalog uses the native venue's default settlement quote: USDT for standard 
 
 Save creates a new config version. Existing instances require the version you opened; conflicting saves are rejected. PBGui stores its runtime, version, note and host assignment in a private sidecar; the native config contains only Passivbot fields. Raw JSON is available for advanced editing.
 
+Unregistered fields from the installed prototype/template or loaded config appear under **Advanced Settings → Additional Parameters** until a dedicated control is available. Unedited defaults remain inherited; editing and removing an explicit value preserve native types and inheritance.
+
 ## Local operation
 
 **Enabled on → disabled** saves without scheduling trading. Selecting this PBGui host schedules the instance for the PBRun daemon. A working separately installed PB9 runtime, current Rust extension, available account credentials and running PBRun service are required. A conflicting PB7/PB8/PB9 assignment for the same account blocks activation. Saving a config never bypasses these start checks.

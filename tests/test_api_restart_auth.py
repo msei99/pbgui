@@ -323,7 +323,7 @@ def isolated_monitor_lifespan(monkeypatch, tmp_path):
     for name in (
         "harden_sensitive_paths", "_setup_api_logging", "bootstrap_local_legacy_credentials",
         "run_credential_migration", "persist_credential_migration_error", "db_tools_init",
-        "bt7_startup", "bt8_startup", "opt7_startup", "opt8_startup", "coin_data_startup",
+        "bt7_startup", "bt8_startup", "bt9_startup", "opt7_startup", "opt8_startup", "coin_data_startup",
         "ohlcv_preload_startup", "vps_manager_startup", "vast_startup", "market_data_startup",
         "strategy_explorer_v8_startup", "profit_sweep_startup", "loop8_startup",
     ):
@@ -337,7 +337,7 @@ def isolated_monitor_lifespan(monkeypatch, tmp_path):
         "dashboard_shutdown", "heatmap_shutdown", "pareto_explorer_shutdown",
         "strategy_explorer_v8_shutdown", "coin_data_shutdown", "market_data_shutdown",
         "profit_sweep_shutdown", "vps_manager_shutdown", "vast_shutdown", "cluster_shutdown",
-        "db_tools_shutdown", "bt7_shutdown", "bt8_shutdown", "opt7_shutdown", "opt8_shutdown",
+        "db_tools_shutdown", "bt7_shutdown", "bt8_shutdown", "bt9_shutdown", "opt7_shutdown", "opt8_shutdown",
     ):
         monkeypatch.setattr(PBApiServer, name, AsyncMock())
     for module in (api.vps, api.v7_instances, api.v8_instances):

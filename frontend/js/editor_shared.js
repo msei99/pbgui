@@ -682,11 +682,32 @@
       .replace(/\/api\/v9$/, '/api/balance-calc')
       .replace(/\/api\/backtest-v7$/, '/api/balance-calc')
       .replace(/\/api\/backtest-v8$/, '/api/balance-calc')
+      .replace(/\/api\/backtest-v9$/, '/api/balance-calc')
       .replace(/\/v7$/, '/balance-calc')
       .replace(/\/v8$/, '/balance-calc')
       .replace(/\/v9$/, '/balance-calc')
       .replace(/\/backtest-v7$/, '/balance-calc')
-      .replace(/\/backtest-v8$/, '/balance-calc');
+      .replace(/\/backtest-v8$/, '/balance-calc')
+      .replace(/\/backtest-v9$/, '/balance-calc');
+  }
+
+  function nativeV9BalanceConfig(source, resolver) {
+    // Analysis-only inputs for the existing calculator; never a saved bot config.
+    function value(path) {return resolver(path);}
+    var kind=value(['bot','portfolio','strategy_kind']), result={live:{user:value(['live','account','user']) || '',strategy_kind:kind,approved_coins:{},ignored_coins:{}},bot:{},pbgui:{}};
+    ['market_cap','vol_mcap','tags','only_cpt','notices_ignore'].forEach(function(key) {if (source.pbgui && Object.prototype.hasOwnProperty.call(source.pbgui,key)) result.pbgui[key]=source.pbgui[key];});
+    ['long','short'].forEach(function(side) {
+      var enabled=value(['bot',side,'enabled']) === true;
+      ['approved_coins','ignored_coins'].forEach(function(key) {
+        var selected=value(['bot',side,'universe',key]);
+        if (selected == null) selected=value(['bot','global','universe',key]);
+        result.live[key][side]=!enabled ? [] : selected === 'all' ? 'all' : Array.isArray(selected) ? selected.slice() : [];
+      });
+      var quantity=[['entry','initial_qty_fraction'],['entry','initial_qty_pct'],['base_qty_fraction'],['base_qty_pct']].map(function(path){var raw=value(['bot',side,'strategy',kind].concat(path));return raw == null ? NaN : Number(raw);}).filter(Number.isFinite)[0] || 0;
+      result.bot[side]={risk:{n_positions:enabled ? Number(value(['bot',side,'risk','max_positions'])) || 0 : 0,total_wallet_exposure_limit:enabled ? Number(value(['bot',side,'risk','total_wallet_exposure_limit_ratio'])) || 0 : 0},strategy:{}};
+      result.bot[side].strategy[kind || 'strategy']={entry:{initial_qty_pct:quantity}};
+    });
+    return result;
   }
 
   async function createBalanceCalcDraft(opts) {
@@ -1202,14 +1223,14 @@
     }
   }
 
-  function renderOhlcvPreflightCountPills(counts) {
+  function renderOhlcvPreflightCountPills(counts, labels) {
     var html = '';
     var data = counts && typeof counts === 'object' ? counts : {};
     _ohlcvPreflightStatusOrder.forEach(function(status) {
       var count = Number(data[status] || 0);
       if (!count) return;
       html += '<span class="sb-preview-pill ' + getOhlcvPreflightTone(status) + '">' +
-        '<span class="sb-preview-pill-label">' + escapeHtml(status.replace(/_/g, ' ')) + '</span>' +
+        '<span class="sb-preview-pill-label">' + escapeHtml(labels && labels[status] || status.replace(/_/g, ' ')) + '</span>' +
         '<span class="sb-preview-pill-value">' + escapeHtml(String(count)) + '</span>' +
       '</span>';
     });
@@ -1312,15 +1333,19 @@
     var bestSamples = payload.best_samples || {};
     var exchanges = Array.isArray(payload.exchanges) ? payload.exchanges : [];
     var notes = Array.isArray(payload.notes) ? payload.notes.slice() : [];
+    var labels=payload.runtime === 'pb9' ? {legacy_importable:'source ready'} : {};
+    function statusLabel(status,entries) {
+      return labels[status] || (entries[0] && entries[0].status_label) || status.replace(/_/g,' ');
+    }
+
     if (model.clientNote) notes.unshift(String(model.clientNote));
-    if (model.stale) notes.unshift('Editor values changed. Refresh the OHLCV check to re-run the PB7 planner.');
+    if (model.stale) notes.unshift('Updating OHLCV readiness for the current editor values…');
 
     var job = model.job || null;
     var jobRunning = job && (job.status === 'queued' || job.status === 'running');
     var preloadDisabled = !summary.preload_supported || jobRunning;
-    var refreshBtnClass = model.stale ? 'sb-btn accent' : 'sb-btn';
     var preloadBtnClass = jobRunning ? 'sb-btn info' : 'sb-btn info';
-    var sourceLabel = request.source_dir || 'PB7 default caches/ohlcv';
+    var sourceLabel = request.source_dir || ((payload.runtime === 'pb9' ? 'PB9' : payload.runtime === 'pb8' ? 'PB8' : 'PB7') + ' native OHLCV store');
     var chipKind = getOhlcvPreflightChipKind(summary.overall_status);
 
     var html = '';
@@ -1335,11 +1360,10 @@
     html += '<div class="sb-preview-section">';
     html += '<div class="sb-preview-section-title">Summary</div>';
     html += '<div class="sb-preview-note">' + escapeHtml(summary.detail || '') + '</div>';
-    html += '<div class="sb-preview-pill-row">' + renderOhlcvPreflightCountPills(summary.counts || {}) + '</div>';
+    html += '<div class="sb-preview-pill-row">' + renderOhlcvPreflightCountPills(summary.counts || {},labels) + '</div>';
     html += '</div>';
 
     html += '<div class="sb-preview-actions">';
-    html += '<button type="button" class="' + refreshBtnClass + '" data-action="refresh">↻ Refresh Check</button>';
     html += '<button type="button" class="' + preloadBtnClass + '" data-action="preload"' + (preloadDisabled ? ' disabled' : '') + '>' +
       escapeHtml(jobRunning ? '⏳ Preload running...' : (summary.preload_label || 'Preload OHLCV Data')) +
     '</button>';
@@ -1373,7 +1397,7 @@
       var entries = bestSamples[status];
       if (!Array.isArray(entries) || !entries.length) return;
       html += '<div class="sb-preview-section">';
-      html += '<div class="sb-preview-section-title">Best Per Coin: ' + escapeHtml((entries[0] && entries[0].status_label) || status.replace(/_/g, ' ')) + '</div>';
+      html += '<div class="sb-preview-section-title">Best Per Coin: ' + escapeHtml(statusLabel(status,entries)) + '</div>';
       html += renderOhlcvPreflightEntries(entries);
       html += '</div>';
     });
@@ -1383,14 +1407,14 @@
       if (!exchangeName) return;
       html += '<div class="sb-preview-section">';
       html += '<div class="sb-preview-section-title">Exchange: ' + escapeHtml(exchangeName) + '</div>';
-      html += '<div class="sb-preview-pill-row">' + renderOhlcvPreflightCountPills((exchangePayload && exchangePayload.counts) || {}) + '</div>';
+      html += '<div class="sb-preview-pill-row">' + renderOhlcvPreflightCountPills((exchangePayload && exchangePayload.counts) || {},labels) + '</div>';
       var exchangeSamples = exchangePayload && exchangePayload.samples && typeof exchangePayload.samples === 'object'
         ? exchangePayload.samples
         : {};
       ['missing_local', 'legacy_importable', 'blocked_by_persistent_gap'].forEach(function(status) {
         var entries = exchangeSamples[status];
         if (!Array.isArray(entries) || !entries.length) return;
-        html += '<div class="sb-preview-mini-title" style="margin-top:var(--sp-sm)">' + escapeHtml((entries[0] && entries[0].status_label) || status.replace(/_/g, ' ')) + '</div>';
+        html += '<div class="sb-preview-mini-title" style="margin-top:var(--sp-sm)">' + escapeHtml(statusLabel(status,entries)) + '</div>';
         html += renderOhlcvPreflightEntries(entries);
       });
       html += '</div>';
@@ -1688,6 +1712,16 @@
     var currentJobId = '';
     var pollTimerId = null;
     var pendingScrollTarget = '';
+    var autoTimer=null, checkGeneration=0, checking=false, checkAgain=false, jobGeneration=0;
+
+    function navigationKey() {
+      var params=new URLSearchParams(window.location.search);
+      return 'pbgui:ohlcv-panel:'+apiBase+':'+(params.get('config') || params.get('draft_id') || params.get('opt_draft_id') || 'new');
+    }
+
+    function rememberOpen(open) {
+      try {sessionStorage.setItem(navigationKey(),open ? '1' : '0');} catch(error) {}
+    }
 
     function captureRenderState() {
       if (!panel) return null;
@@ -1735,7 +1769,7 @@
         panel.style.display = isOpen ? 'block' : 'none';
         panel.classList.toggle('open', isOpen);
       }
-      if (!isOpen) stopPolling();
+      if (!isOpen) {stopPolling();clearTimeout(autoTimer);autoTimer=null;checkGeneration++;jobGeneration++;}
     }
 
     function renderMessage(kind, title, message) {
@@ -1810,61 +1844,74 @@
       }, Math.max(500, Number(delayMs) || 1500));
     }
 
+    function scheduleCheck(delay) {
+      clearTimeout(autoTimer);
+      if (!isOpen) return;
+      autoTimer=setTimeout(function() {api.refresh().catch(function() {});},delay);
+    }
+
     var api = {
       isOpen: function() {
         return isOpen;
       },
       open: function() {
+        rememberOpen(true);
         setOpen(true);
         return api.refresh();
       },
-      close: function() {
+      close: function(remember) {
+        if (remember !== false) rememberOpen(false);
         setOpen(false);
+      },
+      restore: function() {
+        var open=false;
+        try {open=sessionStorage.getItem(navigationKey()) === '1';} catch(error) {}
+        if (open) return api.open();
+        setOpen(false);return Promise.resolve(null);
       },
       markStale: function() {
         if (!isOpen) return;
         isStale = true;
-        renderPanel();
+        checkGeneration++;checkAgain=true;renderPanel();scheduleCheck(500);
       },
       refresh: async function() {
-        if (!panel) return null;
-        stopPolling();
-        currentJob = null;
-        currentJobId = '';
-        pendingScrollTarget = '';
-        renderMessage('loading', 'OHLCV Readiness', 'Running PB7 OHLCV preflight...');
+        if (!panel || !isOpen) return null;
+        if (checking) {checkAgain=true;return null;}
+        checking=true;checkAgain=false;
+        var mine=++checkGeneration;
+        if (!cachedPayload) renderMessage('loading','OHLCV Readiness','Checking OHLCV data…');
         try {
-          var normalized = normalizeLoadedConfig(await Promise.resolve(loadConfig()));
-          isStale = false;
-          cachedClientNote = normalized.note;
-          cachedPayload = await requestJson('/ohlcv-preflight', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ config: normalized.config })
-          });
-          renderPanel();
-          if (currentJobId) {
-            api.refreshJob(false).catch(function() {});
-          }
+          var normalized=normalizeLoadedConfig(await Promise.resolve(loadConfig()));
+          if (!isOpen || mine !== checkGeneration) return null;
+          var payload=await requestJson('/ohlcv-preflight',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:normalized.config})});
+          if (!isOpen || mine !== checkGeneration) return null;
+          isStale=false;cachedClientNote=normalized.note;cachedPayload=payload;renderPanel();
+          if (currentJobId) api.refreshJob(false).catch(function() {});
           return cachedPayload;
-        } catch (error) {
-          renderMessage('error', 'OHLCV Readiness', error && error.message ? error.message : String(error || 'OHLCV preflight failed'));
+        } catch(error) {
+          if (isOpen && mine === checkGeneration) renderMessage('error','OHLCV Readiness',error && error.message || 'OHLCV check failed');
           return null;
+        } finally {
+          checking=false;scheduleCheck(checkAgain ? 100 : 30000);
         }
       },
       refreshJob: async function(refreshAfterDone) {
         if (!currentJobId) return null;
+        var mine=++jobGeneration, jobId=currentJobId;
         try {
-          currentJob = await requestJson('/ohlcv-preload/' + encodeURIComponent(currentJobId));
+          var job = await requestJson('/ohlcv-preload/' + encodeURIComponent(jobId));
+          if (!isOpen || mine !== jobGeneration || jobId !== currentJobId) return null;
+          currentJob=job;
           renderPanel();
-          if (currentJob && (currentJob.status === 'queued' || currentJob.status === 'running')) {
+          if (currentJob && ['queued','running','stopping'].indexOf(currentJob.status)>=0) {
             schedulePoll(1500);
-          } else if (refreshAfterDone !== false && currentJob && currentJob.status === 'stopped') {
-            schedulePoll(1200);
+          } else {
+            stopPolling();
+            if (refreshAfterDone !== false && currentJob) api.markStale();
           }
           return currentJob;
         } catch (error) {
-          renderMessage('error', 'OHLCV Readiness', error && error.message ? error.message : String(error || 'Could not load preload job status'));
+          if (isOpen && mine === jobGeneration) renderMessage('error', 'OHLCV Readiness', error && error.message ? error.message : String(error || 'Could not load preload job status'));
           return null;
         }
       },
@@ -1929,10 +1976,7 @@
         var target = event.target && event.target.closest ? event.target.closest('[data-action]') : null;
         if (!target) return;
         var action = target.getAttribute('data-action');
-        if (action === 'refresh') {
-          event.preventDefault();
-          api.refresh().catch(function() {});
-        } else if (action === 'preload' && !target.disabled) {
+        if (action === 'preload' && !target.disabled) {
           event.preventDefault();
           api.startPreload().catch(function() {});
         } else if (action === 'stop') {
@@ -1948,6 +1992,8 @@
       syncRoot.addEventListener('change', function() { api.markStale(); });
     }
 
+    window.addEventListener('focus',function() {if (isOpen) api.markStale();});
+    window.addEventListener('pagehide',function() {api.close(false);});
     setOpen(false);
     return api;
   }
@@ -2823,6 +2869,27 @@
     return true;
   }
 
+  function mergeConfigObjects(target, patch) {
+    Object.keys(isPlainObject(patch) ? patch : {}).forEach(function(key) {
+      if (['__proto__', 'constructor', 'prototype'].indexOf(key) >= 0) return;
+      if (isPlainObject(patch[key])) target[key] = mergeConfigObjects(isPlainObject(target[key]) ? target[key] : {}, patch[key]);
+      else target[key] = JSON.parse(JSON.stringify(patch[key]));
+    });
+    return target;
+  }
+
+  function applyConfigDelta(target, before, after, prefix) {
+    Object.keys(before).forEach(function(key) {
+      if (!Object.prototype.hasOwnProperty.call(after, key)) removeConfigPath(target, prefix.concat(key), 2);
+    });
+    Object.keys(after).forEach(function(key) {
+      if (['__proto__', 'constructor', 'prototype'].indexOf(key) >= 0 || JSON.stringify(before[key]) === JSON.stringify(after[key])) return;
+      var path = prefix.concat(key);
+      if (isPlainObject(before[key]) && isPlainObject(after[key])) applyConfigDelta(target, before[key], after[key], path);
+      else setConfigPath(target, path, JSON.parse(JSON.stringify(after[key])));
+    });
+  }
+
   var METADATA_NULL_OPTION = '__null__';
 
   function metadataControlKind(field) {
@@ -2997,7 +3064,8 @@
         entry.options.forEach(function(choice, index) {
           var option = document.createElement('option');
           option.value = String(index);
-          option.textContent = typeof choice === 'string' ? choice : JSON.stringify(choice);
+          var choiceLabel = typeof opts.choiceLabel === 'function' ? opts.choiceLabel(field,choice) : null;
+          option.textContent = choiceLabel != null ? choiceLabel : typeof choice === 'string' ? choice : JSON.stringify(choice);
           control.appendChild(option);
         });
       } else if (entry.kind === 'json') {
@@ -3032,9 +3100,10 @@
         error: '',
         options: []
       };
-      var id = idPrefix + '-' + field.path.join('__');
+      var id = item.id || idPrefix + '-' + field.path.join('__');
       var group = document.createElement('div');
       group.className = 'form-group meta-field' + (entry.kind === 'json' ? ' span-4' : '');
+      if (item.span) group.style.gridColumn = 'span ' + item.span;
       group.dataset.metaPath = entry.key;
       var label = document.createElement('label');
       label.htmlFor = id;
@@ -3045,7 +3114,7 @@
         text.tabIndex = 0;
       }
       label.appendChild(text);
-      if (field.unit) {
+      if (field.unit && !item.hideUnit) {
         var unit = document.createElement('span');
         unit.className = 'meta-unit';
         unit.textContent = '[' + field.unit + ']';
@@ -3068,7 +3137,29 @@
       } else {
         if (item.showExplicit !== false) label.appendChild(toggle);
         group.appendChild(label);
-        group.appendChild(control);
+        if (entry.kind === 'number' && opts.steppers) {
+          var stepper = document.createElement('div');
+          stepper.className = 'num-stepper';
+          var step = item.step || (control.step === 'any' ? 0.01 : 1);
+          control.step = String(step);
+          [-1, 1].forEach(function(direction) {
+            var button = document.createElement('button');
+            button.type = 'button'; button.className = 'stepper-btn';
+            button.textContent = direction < 0 ? '−' : '+';
+            button.setAttribute('aria-label', (direction < 0 ? 'Decrease ' : 'Increase ') + entry.key);
+            button.addEventListener('click', function() {
+              var value = Number(control.value || 0) + direction * step;
+              if (control.min !== '') value = Math.max(Number(control.min), value);
+              if (control.max !== '') value = Math.min(Number(control.max), value);
+              control.value = String(Number(value.toFixed(10)));
+              control.dispatchEvent(new Event('input', {bubbles:true}));
+              control.dispatchEvent(new Event('change', {bubbles:true}));
+            });
+            stepper.appendChild(button);
+          });
+          stepper.insertBefore(control, stepper.lastChild);
+          group.appendChild(stepper);
+        } else group.appendChild(control);
       }
       var status = document.createElement('div');
       status.className = 'meta-error';
@@ -3157,7 +3248,7 @@
             if (body === host) section.nodes.push(heading);
           }
           var row = document.createElement('div');
-          row.className = 'form-row cols-8';
+          row.className = 'form-row cols-' + (group.columns || 8);
           (group.fields || []).forEach(function(item) {
             var entry = buildField(item);
             section.entries.push(entry);
@@ -3225,7 +3316,7 @@
   }
 
   global.PBGuiEditorShared = {
-    configPath: { has: hasConfigPath, get: getConfigPath, set: setConfigPath, remove: removeConfigPath },
+    configPath: { has: hasConfigPath, get: getConfigPath, set: setConfigPath, remove: removeConfigPath, merge: mergeConfigObjects, applyDelta: applyConfigDelta },
     createMetadataFieldRenderer: createMetadataFieldRenderer,
     checkMetadataValue: checkMetadataValue,
     applyConfigMigrationMarkers: applyConfigMigrationMarkers,
@@ -3256,6 +3347,7 @@
     normalizeEditorConfigPayload: normalizeEditorConfigPayload,
     resolveEditorConfigPayload: resolveEditorConfigPayload,
     getBalanceCalcApiBase: getBalanceCalcApiBase,
+    nativeV9BalanceConfig: nativeV9BalanceConfig,
     createBalanceCalcDraft: createBalanceCalcDraft,
     openBalanceCalcPage: openBalanceCalcPage,
     requestBalanceCalculation: requestBalanceCalculation,

@@ -312,8 +312,11 @@ def _cleanup_start_date_jobs_locked() -> None:
         )
     )
     stale = {job_id for finished_at, job_id in terminal if finished_at < cutoff}
-    excess = max(0, len(_START_DATE_JOBS) - _MAX_START_DATE_JOBS)
-    stale.update(job_id for _finished_at, job_id in terminal[:excess])
+    for generation in ("v8", "v9"):
+        owned = [job_id for job_id, job in _START_DATE_JOBS.items() if job.get("_runtime", "v8") == generation]
+        excess = max(0, len(owned) - _MAX_START_DATE_JOBS)
+        candidates = [job_id for _finished_at, job_id in terminal if job_id in owned]
+        stale.update(candidates[:excess])
     for job_id in stale:
         _START_DATE_JOBS.pop(job_id, None)
 
@@ -476,10 +479,26 @@ def _collect_start_date_output(
             thread.join()
 
 
-def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
+class _StartDateCancel:
+    """Expose Stop/deadline to an adapter's bounded native preparation."""
+
+    def __init__(self, job_id, deadline):
+        """Bind cancellation to one registered lookup, never a native backtest."""
+        self.job_id, self.deadline = job_id, deadline
+
+    def is_set(self):
+        """Allow native subprocess clients to observe Stop during preparation."""
+        with _START_DATE_LOCK:
+            job = _START_DATE_JOBS.get(self.job_id)
+            return not job or bool(job.get("stop_requested")) or time.monotonic() >= self.deadline
+
+
+def _run_start_date_job(job_id: str, raw_config: dict[str, Any], adapter=None) -> None:
     """Run one PB8 start-date helper and publish its streamed pair progress."""
     runtime_lease = None
     process = None
+    cleanup = None
+    plan = None
     error_stage, error_category = "runtime", None
     with _START_DATE_LOCK:
         deadline = (_START_DATE_JOBS.get(job_id) or {}).get(
@@ -487,15 +506,18 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
         )
     try:
         runtime_lease = _acquire_runtime_lease()
-        status = _runtime()
-        error_stage = "configuration"
-        config, _source_dir, _catalog = resolve_pb8_ohlcv_paths(raw_config, status)
-        helper = Path(__file__).resolve().with_name("pb8_ohlcv_runtime_helper.py")
-        request = {
-            "pb8_dir": status["pb8dir"],
-            "config": config,
-            "include_start_date_options": True,
-        }
+        if adapter is None:
+            status = _runtime()
+            error_stage = "configuration"
+            config, _source_dir, _catalog = resolve_pb8_ohlcv_paths(raw_config, status)
+            helper = Path(__file__).resolve().with_name("pb8_ohlcv_runtime_helper.py")
+            request = {"pb8_dir": status["pb8dir"], "config": config, "include_start_date_options": True}
+            command, cwd, environment = [status["pb8venv"], "-I", str(helper)], status["pb8dir"], {}
+        else:
+            plan = adapter(raw_config, _StartDateCancel(job_id, deadline))
+            cleanup = plan.get("cleanup")
+            request = plan["request"]
+            command, cwd, environment = plan["command"], plan["cwd"], {"env": plan["env"]}
         error_stage = "helper"
         with _START_DATE_LOCK:
             job = _START_DATE_JOBS.get(job_id)
@@ -507,25 +529,38 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
             if time.monotonic() >= deadline:
                 raise PB8OhlcvUnavailableError("PB8 OHLCV start-date lookup timed out before helper launch")
             job.update(status="running", started_at=_utc_ms())
-        process = subprocess.Popen(
-            [status["pb8venv"], "-I", str(helper)],
-            cwd=status["pb8dir"],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
-            start_new_session=platform.system() != "Windows",
-        )
-        process._pbgui_owned_group = platform.system() != "Windows"
-        process._pbgui_termination_lock = threading.Lock()
-        with _START_DATE_LOCK:
-            _START_DATE_PROCESSES[job_id] = process
-            should_stop = bool((_START_DATE_JOBS.get(job_id) or {}).get("stop_requested"))
-        if should_stop:
-            _terminate_start_date_process(process)
-        if process.stdin is None or process.stdout is None or process.stderr is None:
-            raise PB8OhlcvUnavailableError("PB8 OHLCV start-date helper pipes are unavailable")
-        stdout, returncode = _collect_start_date_output(process, job_id, request, deadline)
+        if adapter is not None and plan.get("run"):
+            def progress(line):
+                """Publish only bounded progress records from the native transport."""
+                update = _parse_start_date_progress_line(line)
+                if update:
+                    with _START_DATE_LOCK:
+                        current = _START_DATE_JOBS.get(job_id)
+                        if current and not current.get("stop_requested"):
+                            current["progress"] = update
+            stdout = plan["run"](progress)
+            returncode = 0
+        else:
+            process = subprocess.Popen(
+                command,
+                cwd=cwd,
+                **environment,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                bufsize=0,
+                start_new_session=platform.system() != "Windows",
+            )
+            process._pbgui_owned_group = platform.system() != "Windows"
+            process._pbgui_termination_lock = threading.Lock()
+            with _START_DATE_LOCK:
+                _START_DATE_PROCESSES[job_id] = process
+                should_stop = bool((_START_DATE_JOBS.get(job_id) or {}).get("stop_requested"))
+            if should_stop:
+                _terminate_start_date_process(process)
+            if process.stdin is None or process.stdout is None or process.stderr is None:
+                raise PB8OhlcvUnavailableError("PB8 OHLCV start-date helper pipes are unavailable")
+            stdout, returncode = _collect_start_date_output(process, job_id, request, deadline)
         with _START_DATE_LOCK:
             stopped = bool((_START_DATE_JOBS.get(job_id) or {}).get("stop_requested"))
         if stopped:
@@ -538,12 +573,16 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
             response = json.loads(stdout)
         except json.JSONDecodeError as exc:
             raise PB8OhlcvError("PB8 OHLCV start-date helper returned an invalid response") from exc
-        if returncode != 0 or not response.get("ok"):
-            error_stage, error_category = _start_date_error_context(
-                response.get("error_stage"), response.get("error_category"), PB8OhlcvError()
-            )
-            raise PB8OhlcvError(str(response.get("detail") or "PB8 OHLCV start-date lookup failed")[:1000])
-        result = response.get("result")
+        if adapter is not None and plan.get("validate_response"):
+            result = plan["validate_response"](stdout)
+        else:
+            if returncode != 0 or not response.get("ok"):
+                error_stage, error_category = _start_date_error_context(
+                    response.get("error_stage"), response.get("error_category"), PB8OhlcvError()
+                )
+                detail = response.get("detail") or ("PB9 OHLCV lookup failed; check the selected coins, cached metadata and data source" if adapter else "PB8 OHLCV start-date lookup failed")
+                raise PB8OhlcvError(str(detail)[:1000])
+            result = response.get("result")
         if not isinstance(result, dict) or not isinstance(result.get("start_date_options"), dict):
             raise PB8OhlcvError("PB8 OHLCV start-date helper returned no recommendations")
         with _START_DATE_LOCK:
@@ -563,8 +602,11 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
                 )
     except Exception as exc:
         error_stage, error_category = _start_date_error_context(error_stage, error_category, exc)
-        detail = (f"[{error_stage}/{error_category}] {safe_start_date_error(exc)} "
+        safe_detail = (plan.get("error_detail", lambda error: None)(exc) if plan else None) or safe_start_date_error(exc)
+        detail = (f"[{error_stage}/{error_category}] {safe_detail} "
                   + _START_DATE_ERROR_STAGES[error_stage])
+        if adapter is not None:
+            detail = detail.replace("PB8", "PB9")
         _log(SERVICE, f"PB8 OHLCV start-date job failed: {detail}", level="WARNING")
         with _START_DATE_LOCK:
             job = _START_DATE_JOBS.get(job_id)
@@ -587,24 +629,33 @@ def _run_start_date_job(job_id: str, raw_config: dict[str, Any]) -> None:
                     pass
         if runtime_lease is not None:
             runtime_lease.release()
+        if cleanup is not None:
+            try:
+                cleanup()
+            except OSError:
+                _log(SERVICE, "Cannot remove OHLCV lookup workspace", level="WARNING")
         with _START_DATE_LOCK:
             _START_DATE_PROCESSES.pop(job_id, None)
             _START_DATE_THREADS.pop(job_id, None)
 
 
-def start_pb8_ohlcv_start_date_job(raw_config: dict[str, Any]) -> dict[str, Any]:
+def start_pb8_ohlcv_start_date_job(raw_config: dict[str, Any], *, runtime="v8", owner=None, adapter=None) -> dict[str, Any]:
     """Start one bounded transient PB8 OHLCV inception lookup."""
     if not isinstance(raw_config, dict):
         raise PB8OhlcvError("config must be an object")
+    if runtime not in {"v8", "v9"} or runtime == "v9" and (adapter is None or owner is None):
+        raise PB8OhlcvError("Invalid OHLCV lookup runtime")
     with _START_DATE_LOCK:
         _cleanup_start_date_jobs_locked()
         active = sum(
-            1 for job in _START_DATE_JOBS.values() if job.get("status") in {"queued", "running", "stopping"}
+            1 for job in _START_DATE_JOBS.values() if job.get("status") in {"queued", "running", "stopping"} and job.get("_runtime", "v8") == runtime
         )
         if active >= _MAX_ACTIVE_START_DATE_JOBS:
             raise PB8OhlcvBusyError("PB8 OHLCV start-date lookup capacity is busy")
         job_id = uuid.uuid4().hex[:12]
         job = {
+            "_runtime": runtime,
+            "_owner": owner,
             "job_id": job_id,
             "status": "queued",
             "created_at": _utc_ms(),
@@ -628,8 +679,8 @@ def start_pb8_ohlcv_start_date_job(raw_config: dict[str, Any]) -> dict[str, Any]
         }
         thread = threading.Thread(
             target=_run_start_date_job,
-            args=(job_id, copy.deepcopy(raw_config)),
-            name=f"pb8-ohlcv-start-{job_id}",
+            args=(job_id, copy.deepcopy(raw_config)) if adapter is None else (job_id, copy.deepcopy(raw_config), adapter),
+            name=f"pb{runtime[1:]}-ohlcv-start-{job_id}",
             daemon=True,
         )
         _START_DATE_JOBS[job_id] = job
@@ -638,19 +689,19 @@ def start_pb8_ohlcv_start_date_job(raw_config: dict[str, Any]) -> dict[str, Any]
         return _public_start_date_job(job)
 
 
-def get_pb8_ohlcv_start_date_job(job_id: str) -> dict[str, Any] | None:
+def get_pb8_ohlcv_start_date_job(job_id: str, *, runtime="v8", owner=None) -> dict[str, Any] | None:
     """Return one transient inception lookup job."""
     with _START_DATE_LOCK:
         _cleanup_start_date_jobs_locked()
         job = _START_DATE_JOBS.get(str(job_id or ""))
-        return _public_start_date_job(job) if job else None
+        return _public_start_date_job(job) if job and job.get("_runtime", "v8") == runtime and job.get("_owner") == owner else None
 
 
-def stop_pb8_ohlcv_start_date_job(job_id: str) -> dict[str, Any] | None:
+def stop_pb8_ohlcv_start_date_job(job_id: str, *, runtime="v8", owner=None) -> dict[str, Any] | None:
     """Stop only the registered helper process owned by one inception lookup."""
     with _START_DATE_LOCK:
         job = _START_DATE_JOBS.get(str(job_id or ""))
-        if not job:
+        if not job or job.get("_runtime", "v8") != runtime or job.get("_owner") != owner:
             return None
         if job.get("status") in {"completed", "error", "stopped"}:
             return _public_start_date_job(job)
@@ -663,21 +714,27 @@ def stop_pb8_ohlcv_start_date_job(job_id: str) -> dict[str, Any] | None:
         return _public_start_date_job(job) if job else None
 
 
-def shutdown_pb8_ohlcv_start_date_jobs() -> None:
+def shutdown_pb8_ohlcv_start_date_jobs(*, runtime=None) -> None:
     """Stop and join every API-owned inception lookup during shutdown."""
     with _START_DATE_LOCK:
         active_ids = [
             job_id
             for job_id, job in _START_DATE_JOBS.items()
-            if job.get("status") in {"queued", "running", "stopping"}
+            if job.get("status") in {"queued", "running", "stopping"} and (runtime is None or job.get("_runtime", "v8") == runtime)
         ]
     for job_id in active_ids:
-        stop_pb8_ohlcv_start_date_job(job_id)
+        with _START_DATE_LOCK:
+            job = _START_DATE_JOBS.get(job_id, {})
+        stop_pb8_ohlcv_start_date_job(job_id, runtime=job.get("_runtime", "v8"), owner=job.get("_owner"))
     with _START_DATE_LOCK:
-        threads = list(_START_DATE_THREADS.values())
-    for thread in threads:
+        threads = [(thread, _START_DATE_JOBS.get(job_id, {}).get("_runtime", "v8"))
+                   for job_id, thread in _START_DATE_THREADS.items()
+                   if runtime is None or _START_DATE_JOBS.get(job_id, {}).get("_runtime", "v8") == runtime]
+    for thread, generation in threads:
         if thread is not threading.current_thread():
-            thread.join(timeout=5)
+            # PB9 preparation and transport observe Stop under bounded deadlines.
+            # Do not drop their owner while source inspection is still draining.
+            thread.join(timeout=None if generation == "v9" else 5)
 
 
 def _work_dir() -> Path:

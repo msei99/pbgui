@@ -264,7 +264,7 @@ def test_pb8_run_editor_exposes_cookie_authenticated_strategy_handoff() -> None:
 
     assert "supportsStrategyExplorer: true" in adapter
     assert 'data-v7-only onclick="goStrategyExplorer()"' not in page
-    assert '/app/js/run_editor_adapter.js?v=14' in page
+    assert '/app/js/run_editor_adapter.js?v=17' in page
     assert "'/api/strategy-explorer-v8'" in page
     assert "coinOvSnapshotAllFiles()" in handoff
     assert "override_configs: overrideConfigs || {}" in handoff

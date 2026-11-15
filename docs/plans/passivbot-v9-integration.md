@@ -1,11 +1,25 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
-Stand: 15. November 2026. Grundlagen, Schutz der PB7/PB8-Slots, native
-Konfigurationsanbindung und Datei-API sind committed. Der erste testbare
-PB9-JSON-Editor ist umgesetzt, unabhängig geprüft und mit fokussierten
-Offline- und Browserprüfungen abgenommen.
-Wir sind in Schritt 3 (Konfiguration/Editor); strukturierte Parameterformulare,
-Migration und die Backtest-Anbindung sind noch nicht umgesetzt.
+Stand: 15. November 2026. Native PB9 Run- und Backtest-Editoren verwenden
+inzwischen die gemeinsamen PB8-Seiten und Bedienelemente. Lokaler Run,
+Backtest-Queue mit optionalem Autostart, PB8-Migration, Ergebnisse und versionsübergreifendes
+Compare sind angebunden. Additional Parameters ergänzt unbekannte Felder;
+die Balance-Werkzeuge verwenden denselben Rechner wie PB8.
+
+Ein begrenztes Read-only-Review mit Fable 5.2 / medium hat Filterverlust,
+Stop-Status, Ergebnis-Löschoption, Restart-Provenienz, doppelte Feldautoren,
+Doppel-Enqueue und nicht entfernte Workspaces identifiziert. Diese Befunde
+werden mit isolierten API-/Browserprüfungen korrigiert. Der gemeldete fehlende
+Runner war ein Fehler des Review-Abzugs; die Datei ist vorhanden und versioniert.
+
+OHLCV Readiness und 1st/All verwenden nun die gemeinsame Oberfläche und
+den Lookup-Controller mit einem nativen PB9-Adapter. Prüfungen laufen mit
+privaten Metadaten-Workspaces, direkter Candle-Quelle und PB9-Transport.
+
+Bewusst noch offen: native PB9-Anbindung für Strategy Explorer, außerdem Optimizer-, Archiv- und Remote-Abläufe.
+Diese Funktionen dürfen nicht durch die PB7/PB8-Ausführungsengine als PB9
+angeboten werden. Die restliche historische Schrittfolge unten dokumentiert
+die bisherige Einführung und ist keine Aussage über den aktuellen UI-Umfang.
 
 ## Vorgehen
 
@@ -830,3 +844,7 @@ Legacy-Abfragen behalten ihre bisherige Zweiergrenze. Neue Evidenz:
 60 fokussierte Workflow-Regressionen und 140 API-/Owner-/Browser-Tests grün.
 Testtab und temporärer QA-Server wurden anschließend geschlossen. Der
 produktive API-/PBRun-Dienst wurde bei diesem QA-Lauf nicht neu gestartet.
+
+### PB9 queue policy
+
+PB9 now reuses the Backtest Settings dialog and PB8 controller lifecycle with a separate `[backtest_v9]` policy (autostart disabled, one slot by default). Automatic dispatch is oldest-first, rechecks policy at final admission and uses the existing cross-version slots. Shutdown drains owned preparation without terminating published native jobs. Strategy Explorer remains last; native optimizer/archive integration is still pending.

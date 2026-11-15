@@ -234,3 +234,57 @@ def test_directory_lock_wait_can_timeout_or_stop(tmp_path, cancel):
             pass
     finally:
         os.close(descriptor)
+
+
+def _file_lock_competitor(target, sender):
+    """Attempt nonblocking admission from a fresh process with no inherited owner."""
+    try:
+        with advisory_file_lock(Path(target), blocking=False):
+            sender.send('acquired')
+    except BlockingIOError:
+        sender.send('busy')
+    finally:
+        sender.close()
+
+
+def test_nonblocking_file_lock_preserves_nested_owner_and_rejects_other_threads(tmp_path):
+    """A refused optional admission never unlocks or weakens the blocking owner."""
+    target = tmp_path / 'transaction'
+    outcomes = []
+    def compete():
+        """Try the same lock on another thread, without waiting for the owner."""
+        try:
+            with advisory_file_lock(target, blocking=False):
+                outcomes.append('acquired')
+        except BlockingIOError:
+            outcomes.append('busy')
+    with advisory_file_lock(target):
+        with advisory_file_lock(target, blocking=False):
+            worker = threading.Thread(target=compete); worker.start(); worker.join(2)
+            assert not worker.is_alive()
+        worker = threading.Thread(target=compete); worker.start(); worker.join(2)
+        assert not worker.is_alive()
+    assert outcomes == ['busy', 'busy']
+    with advisory_file_lock(target, blocking=False):
+        pass
+
+
+def test_nonblocking_file_lock_rejects_other_process_without_releasing_owner(tmp_path):
+    """LOCK_NB is cross-process and a failed flock leaves the existing transaction held."""
+    context = multiprocessing.get_context('spawn')
+    target = tmp_path / 'transaction'
+    with advisory_file_lock(target):
+        for _ in range(2):
+            receiver, sender = context.Pipe(duplex=False)
+            process = context.Process(target=_file_lock_competitor, args=(target, sender))
+            process.start(); sender.close()
+            try:
+                assert receiver.poll(5)
+                assert receiver.recv() == 'busy'
+            finally:
+                process.join(5); receiver.close()
+                if process.is_alive():
+                    process.kill(); process.join()
+            assert process.exitcode == 0
+    with advisory_file_lock(target, blocking=False):
+        pass
