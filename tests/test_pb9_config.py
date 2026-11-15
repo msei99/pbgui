@@ -730,3 +730,115 @@ def test_revision_update_roundtrip_uses_isolated_native_validation(validation_ru
         save_pb7_config(document, "example.json", pb9_context=context, pb9_expected_revision=loaded["revision"])
     assert caught.value.error_codes == ("config_revision_conflict",)
     assert load_pb7_config("example.json", pb9_context=context) == edited
+
+
+def test_api_template_uses_server_selected_isolated_runtime(runtime, monkeypatch):
+    """The authenticated API returns an actual fixture-helper template without paths from clients."""
+    import asyncio
+    import configparser
+    import httpx
+    from fastapi import FastAPI
+    from api import auth, pb9
+
+    parser = configparser.ConfigParser()
+    parser.read_dict({"main": {"pb9dir": str(runtime.root), "pb9venv": str(runtime.python)}})
+    monkeypatch.setattr(pb9, "load_ini_snapshot", lambda: parser)
+    monkeypatch.setattr(auth, "validate_token", lambda token: SimpleNamespace(user_id="fixture")
+                        if token == "fixture-auth" else None)
+
+    async def exercise():
+        app = FastAPI()
+        app.add_middleware(auth.BrowserOriginMiddleware)
+        app.include_router(pb9.router, prefix="/api/pb9")
+        pb9.startup(app)
+        try:
+            async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
+                response = await client.post("/api/pb9/template", json={},
+                                             headers={"Authorization": "Bearer fixture-auth"})
+            assert response.status_code == 200
+            assert response.headers["cache-control"] == "no-store"
+            assert response.json()["config"]["bot"]["long"] == {}
+            assert response.json()["source"]["repo_dir"] == str(runtime.root)
+            assert app.state.pb9_requests.active == 0
+        finally:
+            await pb9.shutdown(app)
+
+    asyncio.run(exercise())
+
+
+def test_api_cancelled_template_drains_and_reaps_native_helper(runtime, tmp_path, monkeypatch):
+    """Cancellation retains ownership until the real fixture subprocess times out and is reaped."""
+    import asyncio
+    import configparser
+    import httpx
+    from fastapi import FastAPI
+    from api import auth, pb9
+
+    pid_file = tmp_path / "api-helper.pid"
+    with runtime.schema.open("a", encoding="utf-8") as stream:
+        stream.write('import time, os\nfrom pathlib import Path\n'
+                     f'def get_template_config():\n    Path({str(pid_file)!r}).write_text(str(os.getpid()))\n'
+                     '    time.sleep(60)\n')
+    parser = configparser.ConfigParser()
+    parser.read_dict({"main": {"pb9dir": str(runtime.root), "pb9venv": str(runtime.python)}})
+    monkeypatch.setattr(pb9, "load_ini_snapshot", lambda: parser)
+    original_template = pb9.load_pb9_template
+    monkeypatch.setattr(pb9, "load_pb9_template", lambda *args, **kwargs: original_template(*args, timeout=3, **kwargs))
+    monkeypatch.setattr(auth, "validate_token", lambda token: SimpleNamespace(user_id="fixture")
+                        if token == "fixture-auth" else None)
+
+    async def exercise():
+        app = FastAPI()
+        app.add_middleware(auth.BrowserOriginMiddleware)
+        app.include_router(pb9.router, prefix="/api/pb9")
+        pb9.startup(app)
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://fixture") as client:
+            request = asyncio.create_task(client.post("/api/pb9/template", json={},
+                                          headers={"Authorization": "Bearer fixture-auth"}))
+            try:
+                deadline = asyncio.get_running_loop().time() + 5
+                while not pid_file.exists():
+                    assert not request.done(), "fixture helper failed before starting"
+                    assert asyncio.get_running_loop().time() < deadline
+                    await asyncio.sleep(0.01)
+                request.cancel()
+                await asyncio.sleep(0.01)
+                assert not request.done()
+                assert app.state.pb9_requests.active == 1
+                assert pb9.restart_block_reason(app)
+            finally:
+                request.cancel()
+                outcome = await asyncio.gather(request, return_exceptions=True)
+                await pb9.shutdown(app)
+            assert isinstance(outcome[0], asyncio.CancelledError)
+            assert app.state.pb9_requests.active == 0
+            with pytest.raises(ProcessLookupError):
+                os.kill(int(pid_file.read_text()), 0)
+
+    asyncio.run(exercise())
+
+
+@pytest.mark.parametrize("during_preflight", [False, True])
+def test_cancelled_template_never_launches_a_late_helper(runtime, monkeypatch, during_preflight):
+    """A stop request before or during static checks prevents a later native spawn."""
+    cancel = pb9_config.PB9CancelSignal()
+    status = pb9_config.inspect_pb9_runtime(runtime.root, runtime.python)
+
+    def inspect(*args, **kwargs):
+        """Stop while inspection is completing, before the transport can start."""
+        cancel.set()
+        return status
+
+    def forbidden(*args, **kwargs):
+        """The native process must not start after its owner has stopped admission."""
+        pytest.fail("cancelled template started a native process")
+
+    if during_preflight:
+        monkeypatch.setattr(pb9_config, "inspect_pb9_runtime", inspect)
+    else:
+        cancel.set()
+        monkeypatch.setattr(pb9_config, "inspect_pb9_runtime", forbidden)
+    monkeypatch.setattr(subprocess, "Popen", forbidden)
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config.load_pb9_template(runtime.root, runtime.python, cancel_event=cancel)
+    assert caught.value.error_codes == ("helper_cancelled",)

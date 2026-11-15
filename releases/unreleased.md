@@ -2,6 +2,20 @@
 
 ## Development
 
+- Expose authenticated, read-only PB9 runtime inspection and authored-template
+  retrieval through the API. Use one allowlisted settings snapshot per request,
+  retain at most two explicitly owned workers, and drain them on cancellation
+  and shutdown. Active inspections participate in the coordinator restart gate;
+  requests cannot supply runtime paths or mutate config files. Responses are
+  uncached, and template POSTs reuse the shared browser-origin protection.
+  Early SIGTERM/SIGINT handling cancels native helper groups before Uvicorn
+  drains HTTP requests; shutdown then joins their owners. Coordinator restarts
+  wait for active inspections, while an explicit stop aborts those read-only
+  operations without extending existing service stop deadlines. Static Git
+  preflight also gates each new command on the stop flag and uses a one-second
+  per-command timeout for API-owned inspections. On slow disks, commit metadata
+  may therefore be unavailable with a warning while static detection succeeds.
+
 - Add opt-in SHA-256 revisions to PB9 config reads and guarded updates to the
   shared save entry point. Recheck exact source bytes under a reentrant,
   descriptor-bound directory lock before private atomic replacement, reject

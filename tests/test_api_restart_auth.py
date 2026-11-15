@@ -29,6 +29,76 @@ def test_server_restart_uses_shared_auth_dependency() -> None:
     assert any(dependency.call is require_auth for dependency in route.dependant.dependencies)
 
 
+def test_pb9_routes_are_mounted_with_shared_auth() -> None:
+    """The actual server exposes only the authenticated PB9 read-only entry points."""
+    import httpx
+
+    expected = {("/api/pb9/runtime", "GET"), ("/api/pb9/template", "POST")}
+    found = set()
+    # FastAPI can defer included-router expansion in app.routes. Check auth at
+    # the owning router, then exercise actual prefixed dispatch without startup.
+    for route in PBApiServer.pb9_router.routes:
+        assert any(dependency.call is require_auth for dependency in route.dependant.dependencies)
+        found.update(("/api/pb9" + route.path, method) for method in route.methods)
+    assert found == expected
+
+    async def exercise():
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=PBApiServer.app),
+                                     base_url="http://fixture") as client:
+            for path, method in expected:
+                response = await client.request(method, path)
+                assert response.status_code == 401
+                assert response.headers["cache-control"] == "no-store"
+
+    asyncio.run(exercise())
+
+
+def test_pb9_worker_participates_in_real_restart_inspection(monkeypatch) -> None:
+    """A live worker blocks the coordinator, without reading any other runtime registry."""
+    import time
+    import vast_guard_migration
+    from api import pb9, cluster, coin_data, dashboard, db_tools, pareto_explorer, vps_manager, loop_optimizer_v8
+
+    for module in (cluster, coin_data, dashboard, db_tools, pareto_explorer, vps_manager, loop_optimizer_v8):
+        monkeypatch.setattr(module, "restart_block_reason", lambda: "")
+    monkeypatch.setattr(vast_guard_migration, "restart_block_reason", lambda: "")
+    for name in ("profit_sweep_restart_block_reason", "ai_restart_block_reason", "credential_migration_restart_block_reason"):
+        monkeypatch.setattr(PBApiServer, name, lambda *args: "")
+    release, entered = threading.Event(), threading.Event()
+
+    def hold(operation, cancel_event=None):
+        """Hold only a fixture worker, with no actual settings or native imports."""
+        entered.set()
+        assert release.wait(5)
+        return {}
+
+    monkeypatch.setattr(pb9, "_operation", hold)
+    owner = pb9.PB9RequestOwner(lambda: PBApiServer._api_restart_lease is not None)
+    monkeypatch.setattr(PBApiServer.app.state, "pb9_requests", owner, raising=False)
+    monkeypatch.setattr(PBApiServer, "_api_restart_lease", None)
+
+    async def exercise():
+        request = asyncio.create_task(owner.run("runtime"))
+        try:
+            deadline = time.monotonic() + 3
+            while not entered.is_set():
+                assert time.monotonic() < deadline
+                await asyncio.sleep(0.01)
+            blocked, reason = await PBApiServer._restart_block_state()
+            assert blocked and "PB9 inspection" in reason
+            monkeypatch.setattr(PBApiServer, "_api_restart_lease", object())
+            with pytest.raises(HTTPException) as caught:
+                await owner.run("runtime")
+            assert caught.value.status_code == 409
+        finally:
+            release.set()
+            await asyncio.gather(request, return_exceptions=True)
+            await owner.shutdown()
+        assert owner.active == 0
+
+    asyncio.run(exercise())
+
+
 def test_shared_nav_does_not_send_an_undefined_bearer_token() -> None:
     """Cookie-only pages must not manufacture a Bearer undefined header."""
     source = Path("frontend/pbgui_nav.js").read_text(encoding="utf-8")

@@ -10,6 +10,7 @@ import selectors
 import signal
 import subprocess
 import sys
+import threading
 import time
 
 from logging_helpers import human_log as _log
@@ -38,7 +39,28 @@ class PB9ConfigError(RuntimeError):
         super().__init__("PB9 config request failed: " + code)
 
 
-def _run_helper(status: dict, timeout: float, *, operation: str = "template", config: dict | None = None) -> bytes:
+class PB9CancelSignal:
+    """A poll-only stop flag whose setter never waits on an Event condition lock.
+
+    The API's process signal handler only stores this boolean. Worker threads
+    poll it, so cancellation does not depend on a responsive ASGI event loop.
+    """
+
+    def __init__(self):
+        """Start with admission and native execution allowed."""
+        self._requested = False
+
+    def set(self) -> None:
+        """Request cancellation without blocking or allocating synchronization state."""
+        self._requested = True
+
+    def is_set(self) -> bool:
+        """Return the current cancellation request for bounded transport polling."""
+        return self._requested
+
+
+def _run_helper(status: dict, timeout: float, *, operation: str = "template", config: dict | None = None,
+                 cancel_event: threading.Event | PB9CancelSignal | None = None) -> bytes:
     """Own one process group and nonblocking pipes under a single deadline.
 
     Requires normal SIGCHLD handling: no SIG_IGN or external child reaper.
@@ -56,6 +78,8 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
     env = {key: value for key, value in os.environ.items() if key.upper() in _ENV_KEYS}
     env["PATH"] = os.pathsep.join((str(Path(status["pb9venv"]).parent), os.defpath))
     output = bytearray()
+    if cancel_event is not None and cancel_event.is_set():
+        raise PB9ConfigError("helper_cancelled")
     proc = subprocess.Popen(
         [status["pb9venv"], "-I", "-B", str(_HELPER_PATH)], cwd=status["pb9dir"], env=env,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0,
@@ -84,6 +108,8 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
         remaining_input = memoryview(request)
         group_stopped = False
         while selector.get_map():
+            if cancel_event is not None and cancel_event.is_set():
+                raise PB9ConfigError("helper_cancelled")
             remaining_time = deadline - time.monotonic()
             if remaining_time <= 0:
                 raise PB9ConfigError("helper_timeout")
@@ -111,6 +137,8 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
                 except BlockingIOError:
                     continue
         while not exited_without_reaping():
+            if cancel_event is not None and cancel_event.is_set():
+                raise PB9ConfigError("helper_cancelled")
             remaining_time = deadline - time.monotonic()
             if remaining_time <= 0:
                 raise PB9ConfigError("helper_timeout")
@@ -176,7 +204,8 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
 
 
 def load_pb9_template(pb9dir: str | Path | None, pb9venv: str | Path | None,
-                      other_slots: dict | None = None, *, timeout: float = 60) -> dict:
+                      other_slots: dict | None = None, *, timeout: float = 60,
+                      cancel_event: threading.Event | PB9CancelSignal | None = None) -> dict:
     """Load one native authored template, without preparation, validation or saving.
 
     No INI, PB8 client, persistent process or cache is used. The synchronous call
@@ -184,7 +213,7 @@ def load_pb9_template(pb9dir: str | Path | None, pb9venv: str | Path | None,
     offload this call and register in-flight ownership with shutdown handling.
     Commit metadata describes the inspected declarations, not full-tree cleanliness.
     """
-    return _config_operation("template", pb9dir, pb9venv, other_slots, timeout=timeout)
+    return _config_operation("template", pb9dir, pb9venv, other_slots, timeout=timeout, cancel_event=cancel_event)
 
 
 def validate_pb9_config(config: dict, pb9dir: str | Path | None, pb9venv: str | Path | None,
@@ -235,21 +264,32 @@ def validate_pb9_document(document: dict, pb9dir: str | Path | None, pb9venv: st
     return {"config": snapshot, "pbgui": metadata, "source": validation["source"]}
 
 
-def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: float, config=None) -> dict:
+def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: float, config=None,
+                      cancel_event: threading.Event | PB9CancelSignal | None = None) -> dict:
     """Apply shared preflight, isolation and sanitized failure mapping."""
     try:
+        if cancel_event is not None:
+            if not isinstance(cancel_event, (threading.Event, PB9CancelSignal)):
+                raise PB9ConfigError("invalid_request")
+            if cancel_event.is_set():
+                raise PB9ConfigError("helper_cancelled")
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 120 or not math.isfinite(timeout):
             raise PB9ConfigError("invalid_timeout")
         if not _SUPPORTED_PLATFORM:
             raise PB9ConfigError("unsupported_platform")
         if operation == "validate":
             check_inline_config(config)
-        status = inspect_pb9_runtime(pb9dir, pb9venv, other_slots)
+        status = (inspect_pb9_runtime(pb9dir, pb9venv, other_slots, cancel_event=cancel_event)
+                  if cancel_event is not None else inspect_pb9_runtime(pb9dir, pb9venv, other_slots))
+        if cancel_event is not None and cancel_event.is_set():
+            raise PB9ConfigError("helper_cancelled")
         if not status["detected"]:
             raise PB9ConfigError("runtime_not_detected")
         if operation == "validate":
             check_inline_config(config, status["config_schema"])
             raw = _run_helper(status, timeout, operation=operation, config=config)
+        elif cancel_event is not None:
+            raw = _run_helper(status, timeout, cancel_event=cancel_event)
         else:
             raw = _run_helper(status, timeout)
         return _checked_response(raw, status, operation=operation)

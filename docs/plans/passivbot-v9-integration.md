@@ -2,8 +2,8 @@
 
 Stand: 15. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung,
 Vorlagenadapter, Inline-Validierung und Dokumentgrenze committed; der explizite
-v9-Dateiladepfad und sichere Neuerstellung sind committed; der Revisionsschutz
-für Updates ist fokussiert getestet und unabhängig geprüft. Commit ist freigegeben.
+v9-Dateiladepfad, sichere Neuerstellung und Revisionsschutz sind committed;
+die ersten authentifizierten Read-only-API-Routen sind umgesetzt und werden geprüft.
 
 ## Vorgehen
 
@@ -399,7 +399,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
     keine verbleibenden Befunde; Commit nach dem inzwischen erfolgten Serial-
     Bump empfohlen. Kein eigener Testlauf durch Claude.
 
-11. **Revisionsgeschützte Updates, zum Commit freigegeben.**
+11. **Revisionsgeschützte Updates, Commit `3897f242`.**
     `load_pb7_config(..., pb9_with_revision=True, pb9_context=...)` liefert
     `{config, revision}`; die SHA-256-Revision gehört exakt zu den einmal für
     die Validierung gelesenen Dateibytes, nicht zur reserialisierten Rückgabe.
@@ -447,6 +447,78 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
     erscheinen); dies verändert oder überschreibt keine Nutzerdaten.
     Das gemeinsame Temp-Präfix heißt auch im Replace-Pfad `.pbgui-create-`.
     Der Review war rein lesend ohne eigenen Testlauf.
+
+12. **Read-only-API, commitfähig nach unabhängigem Review.** Das neue `api/pb9.py` registriert
+    authentifizierte `GET /api/pb9/runtime` und `POST /api/pb9/template` im Server.
+    Ein Request liest genau einen INI-Snapshot und daraus ausschließlich die
+    sechs erlaubten Runtime-Pfadschlüssel. Status und Vorlagen werden anhand
+    dieser serverseitigen Auswahl erzeugt, nie anhand von Request-Pfaden.
+    Query-Parameter und nichtleere Parameterobjekte werden abgelehnt; der
+    Template-Body ist auf 1024 Bytes begrenzt. Geteilter Cookie-/Bearer-Auth und
+    `BrowserOriginMiddleware` bleiben zuständig. Erfolgsantworten und erwartete
+    Fehler sind `no-store`; Status ist ausdrücklich nur statische Erkennung.
+
+    Ein App-eigener `PB9RequestOwner` lässt höchstens zwei Jobs gleichzeitig zu,
+    ohne Warteschlange oder persistenten Cache. Jeder Thread wird vor seinem
+    Start registriert; ein unabhängiges Concurrent-Future meldet erst nach
+    Abschluss der synchronen Arbeit inklusive Helper-Bereinigung fertig.
+    Request-Cancel und Shutdown drainieren und joinen den Worker, statt einen
+    laufenden Thread als beendet zu behandeln. Startfehler vor oder nach
+    tatsächlichem Start, begrenzte Admission, erneuter Startup und wiederholter
+    Shutdown sind getestet. Auf dem Event-Loop laufen keine Git-/INI-/nativen
+    Operationen. Nur bereits abgeschlossene Arbeitsläufe werden synchron gejoint.
+
+    Der Server bindet Startup/Shutdown im vorhandenen geschützten Lifespan ein.
+    Aktive Jobs blockieren den koordinierten API-Restart; dessen Lease schließt
+    neue Admission vor der awaiteten Blocker-Prüfung. Fehler geben nur feste
+    Codes aus, erwartete HTTP-Statuswerte bleiben erhalten. Datei-CRUD, Runtime-
+    Pfadänderungen, Installer, Jobs und UI sind nicht angebunden.
+
+    Fokussiert geprüft: API, tatsächliche Server-Routen/Restart-Integration und
+    v9-Config, Quellklassifikation/Runtime sowie lokale Signal-/Stop-Fälle
+    **334 passed in 28.35s**.
+    Weitere Runtime-/Datei-/PB7/PB8-/Welcome-Regressionen: **556 passed,
+    2 skipped in 13.79s**. Der Mount-Test berücksichtigt FastAPIs
+    verzögerte Router-Einbindung über echte HTTP-Dispatch-Prüfung, nicht nur
+    flaches `app.routes`. Tiny-App- und echte Fixture-Helper-Tests verwenden
+    ausschließlich temporäre Pfade bzw. in-memory INI/Auth-Doubles. Reale
+    v9-/Rust-Abnahme bleibt offen. Serial nach finalen Startup-Edits und Review-Korrektur: **3706**.
+
+    Das erste Claude-Review fand einen Stop-Blocker: direktes Stoppen erzwingt
+    nach 5 s einen Kill, systemd nach 30 s, während der native Helper maximal
+    60 s laufen darf. Abbruch erst im Lifespan wäre außerdem zu spät, weil
+    Uvicorn zunächst aktive HTTP-Tasks drainiert. Deshalb installiert der
+    offizielle Server im Lifespan frühe SIGTERM-/SIGINT-Hooks, die den bereits
+    vorhandenen Handler weiter aufrufen und ausschließlich ein lockfreies
+    Poll-Flag setzen. Dafür ist kein freier Event-Loop nötig. Der Native-
+    Transport prüft dieses Flag vor dem Start sowie in seinen beiden
+    Poll-Schleifen und beendet/reapt bei Abbruch seine gesamte Prozessgruppe.
+    Shutdown setzt dasselbe Flag, drainiert danach die Threads und gibt die
+    Signal-Hooks wieder frei; Teil-Startup wird rückgängig gemacht. Normale
+    Request-Cancellation wartet weiterhin auf das Ergebnis, ohne automatisch
+    die Arbeit zu beenden. Nur expliziter Stop/Shutdown bricht native Arbeit ab.
+
+    Ein echter lokaler Uvicorn-Test über einen temporären Unix-Socket hält die
+    Event-Schleife 2,5 s an und führt gleichzeitig einen Fixture-Helper mit
+    Kindprozess aus. SIGTERM beendet die Gruppe noch vor der Rückkehr der
+    Event-Schleife, und der Server stoppt innerhalb der bestehenden Stop-Frist.
+    Weder Stop-Methode noch systemd-Timeouts wurden verändert. Erzwungenes
+    SIGKILL ohne vorherigen behandelbaren Stop ist kein Graceful-Shutdown-Pfad.
+    Weitere Review-Hinweise sind korrigiert: native Worker reichen keine freien
+    HTTP-Details/Header durch; Start-BaseExceptions werden bereinigt und nach
+    ggf. nötigem Drain erneut ausgelöst; Startfehler-Logging liegt außerhalb
+    der Owner-Sperre. Bestehende Admission-HTTP-Fehler bleiben erhalten.
+
+    Auch der statische Git-Vorlauf beachtet das Stop-Flag vor jedem weiteren
+    Prozessstart. API-eigene Prüfungen begrenzen jeden bereits laufenden Git-
+    Aufruf auf eine Sekunde; `subprocess.run` beendet und reapt ihn bei Timeout.
+    Bestehende synchrone Aufrufer behalten ohne neue Optionen ihr bisheriges
+    Fünf-Sekunden-Limit. Nach dem Vorlauf verhindert eine erneute Abbruchprüfung
+    einen späten nativen Start. Tests prüfen Stop vor und zwischen Git-Läufen,
+    Timeout ohne Folgeaufruf sowie die Weitergabe des Owner-Flags.
+    Claude Fable 5.2 / medium bestätigt den Stand als commitfähig ohne P1/P2.
+    Sein P3-Hinweis auf `math.isfinite` bei extrem großen Integer-Zeitlimits
+    ist durch vorgezogene Bereichsprüfung korrigiert und parametrisiert getestet.
 
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte

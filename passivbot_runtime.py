@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import math
 import os
 from pathlib import Path
 import re
@@ -73,8 +74,16 @@ def _read_string_literal(repo_dir: Path, relative_path: str, name: str) -> tuple
     return read_source_string_literal(source, name, source_name=relative_path), source
 
 
-def _read_commit(repo_dir: Path, sources: dict[str, bytes]) -> str:
+def _read_commit(repo_dir: Path, sources: dict[str, bytes], *, git_timeout: float = 5,
+                 cancel_requested=None) -> str:
     """Associate inspected bytes with HEAD only within the selected checkout."""
+    def run_git(arguments, *, text=False):
+        """Never start another Git read after the owner requests shutdown."""
+        if cancel_requested is not None and cancel_requested():
+            raise ValueError("Source inspection cancelled")
+        return subprocess.run(["git", "-C", str(repo_dir), *arguments], check=True,
+                              capture_output=True, text=text, timeout=git_timeout, env=env)
+
     if not (repo_dir / ".git").exists():
         raise ValueError("Source directory is not a Git checkout; commit is unavailable")
     # Git's repository/config environment must not redirect these local reads.
@@ -82,23 +91,14 @@ def _read_commit(repo_dir: Path, sources: dict[str, bytes]) -> str:
     env.update({"GIT_CONFIG_GLOBAL": os.devnull, "GIT_CONFIG_NOSYSTEM": "1",
                 "GIT_NO_REPLACE_OBJECTS": "1", "GIT_OPTIONAL_LOCKS": "0"})
     try:
-        root = subprocess.run(
-            ["git", "-C", str(repo_dir), "rev-parse", "--show-toplevel"],
-            check=True, capture_output=True, text=True, timeout=5, env=env,
-        ).stdout.strip()
+        root = run_git(["rev-parse", "--show-toplevel"], text=True).stdout.strip()
         if Path(root).resolve() != repo_dir:
             raise ValueError("Git checkout root does not match the source directory")
-        commit = subprocess.run(
-            ["git", "-C", str(repo_dir), "rev-parse", "--verify", "HEAD"],
-            check=True, capture_output=True, text=True, timeout=5, env=env,
-        ).stdout.strip()
+        commit = run_git(["rev-parse", "--verify", "HEAD"], text=True).stdout.strip()
         if not re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", commit):
             raise ValueError("Source Git commit is not a full commit hash")
         for relative_path, source in sources.items():
-            committed_source = subprocess.run(
-                ["git", "-C", str(repo_dir), "show", f"{commit}:{relative_path}"],
-                check=True, capture_output=True, timeout=5, env=env,
-            ).stdout
+            committed_source = run_git(["show", f"{commit}:{relative_path}"]).stdout
             # Git may materialize LF blobs as CRLF. Normalize only that pair;
             # do not run configured clean/textconv filters or ignore other edits.
             if committed_source.replace(b"\r\n", b"\n") != source.replace(b"\r\n", b"\n"):
@@ -108,7 +108,8 @@ def _read_commit(repo_dir: Path, sources: dict[str, bytes]) -> str:
     return commit
 
 
-def classify_passivbot_source(repo_dir: str | Path | None) -> dict:
+def classify_passivbot_source(repo_dir: str | Path | None, *, git_timeout: float = 5,
+                              cancel_requested=None) -> dict:
     """Return generation, package_version, config_schema, commit and errors.
 
     Only literal schema majors 8 and 9 classify as pb8/pb9. Other or unreadable
@@ -119,6 +120,8 @@ def classify_passivbot_source(repo_dir: str | Path | None) -> dict:
     Errors must be checked even when generation or commit is available.
     This source identity is not an installation readiness or compatibility check.
     Git reads are synchronous; async callers must offload this function.
+    Owners may shorten the default five-second per-command limit and provide a
+    cancellation callback checked before each Git subprocess is started.
     No inspected Python module is imported and no dependency is installed.
     """
     result = {
@@ -126,6 +129,14 @@ def classify_passivbot_source(repo_dir: str | Path | None) -> dict:
         "config_schema": None, "commit": None, "errors": [],
     }
     try:
+        if (isinstance(git_timeout, bool) or not isinstance(git_timeout, (int, float))
+                or not 0 < git_timeout <= 5 or not math.isfinite(git_timeout)):
+            raise ValueError("Git timeout must be positive and at most five seconds")
+        if cancel_requested is not None:
+            if not callable(cancel_requested):
+                raise ValueError("Cancellation callback must be callable")
+            if cancel_requested():
+                raise ValueError("Source inspection cancelled")
         if repo_dir is None or (isinstance(repo_dir, str) and not repo_dir.strip()):
             raise ValueError("Source directory must be explicitly set")
         if any(ord(char) < 32 or ord(char) == 127 for char in str(repo_dir)):
@@ -158,7 +169,7 @@ def classify_passivbot_source(repo_dir: str | Path | None) -> dict:
         else:
             result["generation"] = generation
     try:
-        result["commit"] = _read_commit(root, sources)
+        result["commit"] = _read_commit(root, sources, git_timeout=git_timeout, cancel_requested=cancel_requested)
     except ValueError as exc:
         result["errors"].append(str(exc))
     return result

@@ -72,6 +72,8 @@ from api.auth import (
     unauthenticated_page_redirect,
 )
 from api.ai import router as ai_router
+from api.pb9 import (router as pb9_router, startup as pb9_startup,
+                     shutdown as pb9_shutdown, restart_block_reason as pb9_restart_block_reason)
 from api.support_debug import router as support_debug_router
 from ai_chat import shutdown as ai_chat_shutdown
 from ai_capabilities import (
@@ -372,6 +374,7 @@ async def _restart_block_state() -> tuple[bool, str]:
             profit_sweep_restart_block_reason(),
             ai_restart_block_reason(),
             loop8_restart_block_reason(),
+            pb9_restart_block_reason(app),
             credential_migration_restart_block_reason(Path(PBGDIR)),
         )
         if reason
@@ -959,6 +962,7 @@ async def _lifespan(app: FastAPI):
         storage_startup()
         await ai_capabilities_startup()
         loop8_startup()
+        pb9_startup(app, restart_pending=lambda: _api_restart_lease is not None, install_signal_hooks=True)
 
         lifecycle_tasks = [
             asyncio.create_task(_deferred_startup(), name="deferred-startup"),
@@ -985,6 +989,7 @@ async def _lifespan(app: FastAPI):
             _log(SERVICE, f"[lifespan] pb8-loop shutdown failed: {type(exc).__name__}", level="ERROR", meta={"traceback": traceback.format_exc()})
 
         shutdown_steps = (
+            ("pb9", lambda: pb9_shutdown(app)),
             ("auth", auth_shutdown),
             ("ai-chat", ai_chat_shutdown),
             ("live", live_shutdown),
@@ -1120,6 +1125,7 @@ async def redirect_unauthenticated_page(request: Request, call_next):
 app.add_middleware(BrowserOriginMiddleware)
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
+app.include_router(pb9_router, prefix="/api/pb9", tags=["pb9"])
 app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
 app.include_router(support_debug_router, prefix="/api/debug", tags=["debug"])
 app.include_router(api_keys_router, prefix="/api/api-keys", tags=["api-keys"])

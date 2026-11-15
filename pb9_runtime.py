@@ -171,7 +171,7 @@ def _inspect_artifacts(status: dict, source: Path | None, python: Path, venv: Pa
 
 
 def inspect_pb9_runtime(pb9dir: str | Path | None, pb9venv: str | Path | None,
-                        other_slots: dict | None = None) -> dict:
+                        other_slots: dict | None = None, *, cancel_event=None) -> dict:
     """Inspect static layout evidence, not executable/ABI compatibility or readiness.
 
     other_slots contains optional pb7dir/pb7venv/pb8dir/pb8venv paths. No INI is
@@ -202,7 +202,8 @@ def inspect_pb9_runtime(pb9dir: str | Path | None, pb9venv: str | Path | None,
     try:
         _check_separation(status, source, venv, other_slots or {})
         if source:
-            identity = classify_passivbot_source(source)
+            identity = (classify_passivbot_source(source, git_timeout=1, cancel_requested=cancel_event.is_set)
+                        if cancel_event is not None else classify_passivbot_source(source))
             for key in ("package_version", "config_schema", "commit"):
                 status[key] = identity[key]
             status["source_diagnostics"] = identity["errors"]

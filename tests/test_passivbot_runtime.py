@@ -315,3 +315,68 @@ def test_missing_source_directory_is_unknown(tmp_path):
     result = classify_passivbot_source(tmp_path / "absent")
     assert result["generation"] == "unknown"
     assert result["errors"]
+
+
+@pytest.mark.parametrize("stop_after", [0, 1, 2, 3])
+def test_source_cancellation_prevents_late_git_reads(source_tree, committed_source, monkeypatch, stop_after):
+    """Each subsequent Git invocation is gated, including both metadata reads."""
+    original = subprocess.run
+    calls = []
+
+    def run(*args, **kwargs):
+        """Complete one real fixture Git read before requesting cancellation."""
+        calls.append(kwargs["timeout"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(passivbot_runtime.subprocess, "run", run)
+    result = classify_passivbot_source(source_tree, git_timeout=1,
+                                      cancel_requested=lambda: len(calls) >= stop_after)
+    assert len(calls) == stop_after
+    assert all(timeout == 1 for timeout in calls)
+    assert result["commit"] is None
+    assert any("Source inspection cancelled" in error for error in result["errors"])
+
+
+@pytest.mark.parametrize("timeout", [1, 5])
+def test_source_git_timeout_is_reported_without_further_commands(source_tree, committed_source, monkeypatch, timeout):
+    """A timed-out command prevents all subsequent reads and retains schema evidence."""
+    calls = []
+
+    def expire(arguments, **kwargs):
+        """Model subprocess.run's bounded kill-and-wait timeout result."""
+        calls.append(kwargs["timeout"])
+        raise subprocess.TimeoutExpired(arguments, kwargs["timeout"])
+
+    monkeypatch.setattr(passivbot_runtime.subprocess, "run", expire)
+    kwargs = {} if timeout == 5 else {"git_timeout": timeout}
+    result = classify_passivbot_source(source_tree, **kwargs)
+    assert calls == [timeout]
+    assert result["generation"] == "pb8"
+    assert result["commit"] is None
+    assert result["errors"] == ["Cannot read source Git commit (TimeoutExpired)"]
+
+
+@pytest.mark.parametrize("timeout", [0, -1, 6, True, float("nan"), float("inf"), "1", None, 10**400])
+def test_invalid_git_timeout_is_diagnostic_before_io(source_tree, monkeypatch, timeout):
+    """Even huge integers fail closed without conversion overflow or filesystem reads."""
+    def forbidden(*args, **kwargs):
+        """Invalid inspection options cannot start metadata or Git reads."""
+        pytest.fail("invalid timeout reached filesystem or subprocess access")
+
+    monkeypatch.setattr(passivbot_runtime, "_read_string_literal", forbidden)
+    monkeypatch.setattr(passivbot_runtime.subprocess, "run", forbidden)
+    result = classify_passivbot_source(source_tree, git_timeout=timeout)
+    assert result["generation"] == "unknown"
+    assert result["commit"] is None
+    assert len(result["errors"]) == 1
+    assert "Git timeout must be positive and at most five seconds" in result["errors"][0]
+
+
+@pytest.mark.parametrize("callback", [True, 1, object()])
+def test_invalid_cancellation_callback_is_diagnostic(source_tree, callback):
+    """A non-callable stop predicate is rejected before source classification."""
+    result = classify_passivbot_source(source_tree, cancel_requested=callback)
+    assert result["generation"] == "unknown"
+    assert result["commit"] is None
+    assert len(result["errors"]) == 1
+    assert "Cancellation callback must be callable" in result["errors"][0]

@@ -365,3 +365,22 @@ def test_saving_pb9_paths_leaves_existing_pb8_status_unchanged(layout, settings_
     assert before["ready"] is True
     assert pb9_runtime.save_pb9_runtime_paths(layout.source, layout.python)["detected"] is True
     assert pbgui_purefunc.pb8_runtime_status() == before
+
+
+def test_owned_inspection_bounds_git_and_forwards_cancellation(layout, monkeypatch):
+    """API-owned preflight uses a one-second Git budget and the owner's stop flag."""
+    import threading
+
+    original = pb9_runtime.classify_passivbot_source
+    cancel = threading.Event()
+    calls = []
+
+    def inspect(source, **kwargs):
+        """Retain real static inspection while recording optional ownership controls."""
+        calls.append(kwargs)
+        return original(source, **kwargs)
+
+    monkeypatch.setattr(pb9_runtime, "classify_passivbot_source", inspect)
+    status = pb9_runtime.inspect_pb9_runtime(layout.source, layout.python, cancel_event=cancel)
+    assert status["detected"] is True
+    assert calls == [{"git_timeout": 1, "cancel_requested": cancel.is_set}]
