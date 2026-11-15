@@ -679,10 +679,12 @@
     return base
       .replace(/\/api\/v7$/, '/api/balance-calc')
       .replace(/\/api\/v8$/, '/api/balance-calc')
+      .replace(/\/api\/v9$/, '/api/balance-calc')
       .replace(/\/api\/backtest-v7$/, '/api/balance-calc')
       .replace(/\/api\/backtest-v8$/, '/api/balance-calc')
       .replace(/\/v7$/, '/balance-calc')
       .replace(/\/v8$/, '/balance-calc')
+      .replace(/\/v9$/, '/balance-calc')
       .replace(/\/backtest-v7$/, '/balance-calc')
       .replace(/\/backtest-v8$/, '/balance-calc');
   }
@@ -2776,7 +2778,455 @@
     panel.replaceChildren(label, lines);
   }
 
+  function isPlainObject(value) {
+    return !!value && typeof value === 'object' && !Array.isArray(value);
+  }
+
+  function hasConfigPath(root, path) {
+    var node = root;
+    for (var i = 0; i < path.length; i++) {
+      if (!isPlainObject(node) || !Object.prototype.hasOwnProperty.call(node, path[i])) return false;
+      node = node[path[i]];
+    }
+    return true;
+  }
+
+  function getConfigPath(root, path) {
+    var node = root;
+    for (var i = 0; i < path.length; i++) {
+      if (!isPlainObject(node) || !Object.prototype.hasOwnProperty.call(node, path[i])) return undefined;
+      node = node[path[i]];
+    }
+    return node;
+  }
+
+  function setConfigPath(root, path, value) {
+    var node = root;
+    for (var i = 0; i < path.length - 1; i++) {
+      if (!isPlainObject(node[path[i]])) node[path[i]] = {};
+      node = node[path[i]];
+    }
+    node[path[path.length - 1]] = value;
+  }
+
+  function removeConfigPath(root, path, keepDepth) {
+    // Also drops the containers this removal emptied, but never one at or
+    // above keepDepth segments, so authored top-level groups stay in place.
+    if (!hasConfigPath(root, path)) return false;
+    var chain = [root];
+    for (var i = 0; i < path.length - 1; i++) chain.push(chain[i][path[i]]);
+    delete chain[path.length - 1][path[path.length - 1]];
+    for (var depth = path.length - 1; depth > (keepDepth || 0); depth--) {
+      if (Object.keys(chain[depth]).length) break;
+      delete chain[depth - 1][path[depth - 1]];
+    }
+    return true;
+  }
+
+  var METADATA_NULL_OPTION = '__null__';
+
+  function metadataControlKind(field) {
+    var types = field.types || [];
+    var choices = (field.domain && field.domain.choices) || [];
+    if (choices.length) return 'select';
+    if (types.indexOf('array') >= 0 || types.indexOf('object') >= 0) return 'json';
+    if (types.length === 1 && types[0] === 'boolean') return field.nullable ? 'select' : 'boolean';
+    if (types.length && types.every(function(type) { return type === 'integer' || type === 'float'; })) return 'number';
+    return 'text';
+  }
+
+  function checkMetadataNumber(field, value) {
+    var types = field.types || [];
+    var domain = field.domain || {};
+    if (!Number.isFinite(value)) return 'must be a finite number';
+    if (types.indexOf('integer') >= 0 && types.indexOf('float') < 0 && !Number.isInteger(value)) return 'must be an integer';
+    var minimum = domain.minimum != null ? domain.minimum : domain.min;
+    var maximum = domain.maximum != null ? domain.maximum : domain.max;
+    if (minimum != null && (domain.exclusive_minimum ? value <= minimum : value < minimum)) {
+      return 'must be ' + (domain.exclusive_minimum ? '> ' : '>= ') + minimum;
+    }
+    if (maximum != null && (domain.exclusive_maximum ? value >= maximum : value > maximum)) {
+      return 'must be ' + (domain.exclusive_maximum ? '< ' : '<= ') + maximum;
+    }
+    return '';
+  }
+
+  function checkMetadataValue(field, value) {
+    var types = field.types || [];
+    if (value === null) return field.nullable ? '' : 'cannot be null';
+    if (!types.length) return '';
+    if (typeof value === 'number') {
+      if (types.indexOf('integer') < 0 && types.indexOf('float') < 0) return 'must not be a number';
+      return checkMetadataNumber(field, value);
+    }
+    var type = Array.isArray(value) ? 'array' : typeof value;
+    return types.indexOf(type) >= 0 ? '' : 'must be ' + types.join(' or ');
+  }
+
+  /* Renders typed config fields from runtime metadata into the editor's
+   * existing .form-row/.form-group grid. A field is written to the config only
+   * while it is explicit; inherited fields display opts.resolve() and stay
+   * absent from the source. */
+  function createMetadataFieldRenderer(opts) {
+    opts = opts || {};
+    var idPrefix = opts.idPrefix || 'mf';
+    var keepDepth = opts.keepDepth != null ? opts.keepDepth : 2;
+    var entries = [];
+    var sections = [];
+    var lastSource = {};
+
+    function resolveField(source, field) {
+      var resolved = typeof opts.resolve === 'function' ? opts.resolve(source, field) : null;
+      if (resolved) return resolved;
+      var explicit = hasConfigPath(source, field.path);
+      var inherited = field.hasDefault ? field.default : undefined;
+      return { explicit: explicit, value: explicit ? getConfigPath(source, field.path) : inherited, inherited: inherited };
+    }
+
+    function setError(entry, message) {
+      entry.error = message || '';
+      entry.status.textContent = entry.error;
+      if (entry.error) entry.control.setAttribute('aria-invalid', 'true');
+      else entry.control.removeAttribute('aria-invalid');
+    }
+
+    function setState(entry, state) {
+      entry.state = state;
+      entry.group.dataset.metaState = state;
+      entry.toggle.checked = state === 'explicit';
+    }
+
+    function refreshCounts() {
+      sections.forEach(function(section) {
+        if (!section.count) return;
+        var explicit = section.entries.filter(function(entry) { return entry.state === 'explicit'; }).length;
+        section.count.textContent = explicit ? '(' + explicit + ' set)' : '';
+      });
+    }
+
+    function showValue(entry, value) {
+      var control = entry.control;
+      if (entry.kind === 'boolean') {
+        control.checked = value === true;
+      } else if (entry.kind === 'select') {
+        if (value === undefined) {
+          control.selectedIndex = -1;
+        } else if (value === null && entry.field.nullable) {
+          control.value = METADATA_NULL_OPTION;
+        } else {
+          var encoded = JSON.stringify(value);
+          var index = -1;
+          entry.options.forEach(function(option, optionIndex) {
+            if (index < 0 && JSON.stringify(option) === encoded) index = optionIndex;
+          });
+          if (index < 0) {
+            // Keep an unlisted authored value selectable instead of replacing it.
+            index = entry.options.push(value) - 1;
+            var extra = document.createElement('option');
+            extra.value = String(index);
+            extra.textContent = typeof value === 'string' ? value : encoded;
+            control.appendChild(extra);
+          }
+          control.value = String(index);
+        }
+      } else if (entry.kind === 'json') {
+        control.value = value === undefined ? '' : JSON.stringify(value, null, 2);
+        autoResizeTextarea(control);
+      } else {
+        control.value = value == null ? '' : String(value);
+      }
+    }
+
+    function readValue(entry) {
+      var field = entry.field;
+      var control = entry.control;
+      var types = field.types || [];
+      var message;
+      if (entry.kind === 'boolean') return { value: control.checked };
+      if (entry.kind === 'select') {
+        if (control.value === METADATA_NULL_OPTION) return { value: null };
+        if (control.selectedIndex < 0) return { error: 'select a value' };
+        return { value: entry.options[Number(control.value)] };
+      }
+      var text = String(control.value == null ? '' : control.value).trim();
+      if (entry.kind === 'json') {
+        if (!text) return field.nullable ? { value: null } : { error: 'cannot be empty' };
+        var parsed;
+        try { parsed = JSON.parse(text); } catch (error) { return { error: 'must be valid JSON' }; }
+        message = checkMetadataValue(field, parsed);
+        return message ? { error: message } : { value: parsed };
+      }
+      if (entry.kind === 'number') {
+        if (!text) return field.nullable ? { value: null } : { error: 'is required' };
+        message = checkMetadataNumber(field, Number(text));
+        return message ? { error: message } : { value: Number(text) };
+      }
+      if (!text) {
+        if (field.nullable) return { value: null };
+        return types.indexOf('string') >= 0 || !types.length ? { value: '' } : { error: 'is required' };
+      }
+      var numeric = types.indexOf('integer') >= 0 || types.indexOf('float') >= 0;
+      if (numeric && /^[-+]?(\d+\.?\d*|\.\d+)(e[-+]?\d+)?$/i.test(text)) {
+        message = checkMetadataNumber(field, Number(text));
+        return message ? { error: message } : { value: Number(text) };
+      }
+      if (types.indexOf('boolean') >= 0 && (text === 'true' || text === 'false')) return { value: text === 'true' };
+      if (types.length && types.indexOf('string') < 0) return { error: 'must be ' + types.join(' or ') };
+      var pattern = field.domain && field.domain.string_pattern;
+      if (pattern) {
+        var matches = true;
+        try { matches = new RegExp(pattern).test(text); } catch (error) { matches = true; }
+        if (!matches) return { error: 'has an unsupported format' };
+      }
+      return { value: text };
+    }
+
+    function buildControl(entry, id) {
+      var field = entry.field;
+      var domain = field.domain || {};
+      var control;
+      if (entry.kind === 'select') {
+        control = document.createElement('select');
+        entry.options = (domain.choices && domain.choices.length ? domain.choices : [true, false]).slice();
+        if (field.nullable) {
+          var none = document.createElement('option');
+          none.value = METADATA_NULL_OPTION;
+          none.textContent = typeof opts.nullLabel === 'function' ? opts.nullLabel(field) : 'none';
+          control.appendChild(none);
+        }
+        entry.options.forEach(function(choice, index) {
+          var option = document.createElement('option');
+          option.value = String(index);
+          option.textContent = typeof choice === 'string' ? choice : JSON.stringify(choice);
+          control.appendChild(option);
+        });
+      } else if (entry.kind === 'json') {
+        control = document.createElement('textarea');
+        control.className = 'json-editor compact-json-editor';
+        control.rows = 3;
+        control.addEventListener('input', function() { autoResizeTextarea(control); });
+      } else {
+        control = document.createElement('input');
+        control.type = entry.kind === 'boolean' ? 'checkbox' : entry.kind === 'number' ? 'number' : 'text';
+        if (entry.kind === 'number') {
+          control.step = (field.types || []).indexOf('float') >= 0 ? 'any' : '1';
+          var minimum = domain.minimum != null ? domain.minimum : domain.min;
+          var maximum = domain.maximum != null ? domain.maximum : domain.max;
+          if (minimum != null) control.min = String(minimum);
+          if (maximum != null) control.max = String(maximum);
+        }
+      }
+      control.id = id;
+      control.dataset.metaControl = entry.kind;
+      control.setAttribute('data-config-path', entry.key);
+      return control;
+    }
+
+    function buildField(item) {
+      var field = item.field;
+      var entry = {
+        field: field,
+        key: field.path.join('.'),
+        kind: metadataControlKind(field),
+        state: 'inherited',
+        error: '',
+        options: []
+      };
+      var id = idPrefix + '-' + field.path.join('__');
+      var group = document.createElement('div');
+      group.className = 'form-group meta-field' + (entry.kind === 'json' ? ' span-4' : '');
+      group.dataset.metaPath = entry.key;
+      var label = document.createElement('label');
+      label.htmlFor = id;
+      var text = document.createElement('span');
+      text.textContent = item.label || field.path[field.path.length - 1];
+      if (field.description) {
+        text.dataset.tip = String(field.description);
+        text.tabIndex = 0;
+      }
+      label.appendChild(text);
+      if (field.unit) {
+        var unit = document.createElement('span');
+        unit.className = 'meta-unit';
+        unit.textContent = '[' + field.unit + ']';
+        label.appendChild(unit);
+      }
+      var toggle = document.createElement('input');
+      toggle.type = 'checkbox';
+      toggle.className = 'meta-explicit';
+      toggle.title = 'Explicit value';
+      toggle.setAttribute('aria-label', 'Explicit value: ' + entry.key);
+      var control = buildControl(entry, id);
+      if (entry.kind === 'boolean') {
+        group.style.justifyContent = 'flex-end';
+        var row = document.createElement('div');
+        row.className = 'chk-row';
+        row.appendChild(control);
+        row.appendChild(label);
+        row.appendChild(toggle);
+        group.appendChild(row);
+      } else {
+        label.appendChild(toggle);
+        group.appendChild(label);
+        group.appendChild(control);
+      }
+      var status = document.createElement('div');
+      status.className = 'meta-error';
+      status.setAttribute('aria-live', 'polite');
+      group.appendChild(status);
+      entry.group = group;
+      entry.control = control;
+      entry.toggle = toggle;
+      entry.status = status;
+
+      function edited() {
+        setState(entry, 'explicit');
+        setError(entry, readValue(entry).error);
+        refreshCounts();
+      }
+      control.addEventListener('input', edited);
+      control.addEventListener('change', edited);
+      toggle.addEventListener('change', function() {
+        setState(entry, toggle.checked ? 'explicit' : 'inherited');
+        if (entry.state === 'inherited') {
+          showValue(entry, resolveField(lastSource, field).inherited);
+          setError(entry, '');
+        } else {
+          setError(entry, readValue(entry).error);
+        }
+        refreshCounts();
+      });
+      entries.push(entry);
+      return entry;
+    }
+
+    function clear() {
+      var open = {};
+      sections.forEach(function(section) {
+        if (section.expander && section.expander.id) open[section.expander.id] = section.expander.classList.contains('open');
+        section.nodes.forEach(function(node) { node.remove(); });
+      });
+      entries = [];
+      sections = [];
+      return open;
+    }
+
+    // sections: [{ id, title, expander, open, groups: [{ title, fields: [{ field, label }] }] }]
+    function mount(hostTarget, sectionList, openState) {
+      var host = resolveElement(hostTarget);
+      if (!host) return;
+      (sectionList || []).forEach(function(definition) {
+        var section = { entries: [], nodes: [], expander: null, count: null };
+        var body = host;
+        if (definition.expander) {
+          var expander = document.createElement('div');
+          expander.className = 'expander';
+          expander.id = idPrefix + '-section-' + definition.id;
+          var wasOpen = openState && openState[expander.id] !== undefined ? openState[expander.id] : definition.open;
+          if (wasOpen) expander.classList.add('open');
+          var header = document.createElement('div');
+          header.className = 'expander-header';
+          var arrow = document.createElement('span');
+          arrow.className = 'arrow';
+          arrow.textContent = '▶';
+          header.appendChild(arrow);
+          header.appendChild(document.createTextNode(' ' + definition.title));
+          section.count = document.createElement('span');
+          section.count.className = 'meta-count';
+          header.appendChild(section.count);
+          header.addEventListener('click', function() {
+            expander.classList.toggle('open');
+            if (!expander.classList.contains('open')) return;
+            expander.querySelectorAll('textarea').forEach(function(textarea) { autoResizeTextarea(textarea); });
+          });
+          body = document.createElement('div');
+          body.className = 'expander-body';
+          expander.appendChild(header);
+          expander.appendChild(body);
+          host.appendChild(expander);
+          section.expander = expander;
+          section.nodes.push(expander);
+        }
+        (definition.groups || []).forEach(function(group) {
+          var title = group.title || (definition.expander ? '' : definition.title);
+          if (title) {
+            var heading = document.createElement('div');
+            heading.className = 'subsection-title';
+            heading.textContent = title;
+            body.appendChild(heading);
+            if (body === host) section.nodes.push(heading);
+          }
+          var row = document.createElement('div');
+          row.className = 'form-row cols-8';
+          (group.fields || []).forEach(function(item) {
+            var entry = buildField(item);
+            section.entries.push(entry);
+            row.appendChild(entry.group);
+          });
+          body.appendChild(row);
+          if (body === host) section.nodes.push(row);
+        });
+        sections.push(section);
+      });
+    }
+
+    function populate(source) {
+      lastSource = source || {};
+      entries.forEach(function(entry) {
+        var resolved = resolveField(lastSource, entry.field);
+        setState(entry, resolved.explicit ? 'explicit' : 'inherited');
+        setError(entry, '');
+        if (document.activeElement !== entry.control) showValue(entry, resolved.value);
+      });
+      refreshCounts();
+    }
+
+    // Writes explicit fields into target and removes the ones returned to
+    // inheritance; invalid input leaves the target value untouched.
+    function apply(target) {
+      var errors = [];
+      entries.forEach(function(entry) {
+        if (entry.state !== 'explicit') {
+          removeConfigPath(target, entry.field.path, keepDepth);
+          return;
+        }
+        var result = readValue(entry);
+        setError(entry, result.error);
+        if (result.error) errors.push(entry);
+        else setConfigPath(target, entry.field.path, result.value);
+      });
+      lastSource = target;
+      entries.forEach(function(entry) {
+        if (entry.state === 'explicit' || document.activeElement === entry.control) return;
+        showValue(entry, resolveField(target, entry.field).value);
+      });
+      refreshCounts();
+      return errors;
+    }
+
+    function firstInvalid() {
+      for (var i = 0; i < entries.length; i++) {
+        if (entries[i].state !== 'explicit') continue;
+        var result = readValue(entries[i]);
+        setError(entries[i], result.error);
+        if (result.error) return { key: entries[i].key, message: result.error, control: entries[i].control };
+      }
+      return null;
+    }
+
+    return {
+      clear: clear,
+      mount: mount,
+      populate: populate,
+      apply: apply,
+      firstInvalid: firstInvalid,
+      count: function() { return entries.length; }
+    };
+  }
+
   global.PBGuiEditorShared = {
+    configPath: { has: hasConfigPath, get: getConfigPath, set: setConfigPath, remove: removeConfigPath },
+    createMetadataFieldRenderer: createMetadataFieldRenderer,
     applyConfigMigrationMarkers: applyConfigMigrationMarkers,
     renderHslMigrationRemovals: renderHslMigrationRemovals,
     escapeHtml: escapeHtml,

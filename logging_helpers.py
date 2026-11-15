@@ -56,6 +56,7 @@ LOG_GROUPS: dict[str, str] = {
     'Services':        'PBGui',
     'V7Instances':     'PBGui',
     'V8Instances':     'PBGui',
+    'V9Instances':     'PBGui',
     'MarketDataAPI':   'PBGui',
     'PB7OhlcvAPI':     'PBGui',
     'PBV7UI':          'PBGui',

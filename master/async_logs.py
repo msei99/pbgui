@@ -159,7 +159,8 @@ def _remote_log_follow_command(log_path: str, full_path: str) -> str:
 def _normalize_pb_version(pb_version: object) -> str:
     """Return the supported Passivbot runtime version for a logical identifier."""
     value = str(pb_version or "7").strip().lower()
-    aliases = {"7": "7", "v7": "7", "pb7": "7", "8": "8", "v8": "8", "pb8": "8"}
+    aliases = {"7": "7", "v7": "7", "pb7": "7", "8": "8", "v8": "8", "pb8": "8",
+               "9": "9", "v9": "9", "pb9": "9"}
     if value not in aliases:
         raise ValueError("Unsupported Passivbot version")
     return aliases[value]
@@ -169,7 +170,7 @@ def _split_bot_identifier(value: str) -> tuple[str, str]:
     """Split a local/remote Bot identifier without restricting colons in names."""
     raw = str(value or "").strip()
     name, separator, suffix = raw.rpartition(":")
-    if separator and suffix.lower() in {"7", "v7", "pb7", "8", "v8", "pb8"}:
+    if separator and suffix.lower() in {"7", "v7", "pb7", "8", "v8", "pb8", "9", "v9", "pb9"}:
         return _validate_remote_log_instance_name(name), _normalize_pb_version(suffix)
     return _validate_remote_log_instance_name(raw), "7"
 
@@ -240,6 +241,8 @@ def resolve_local_bot_log_path(instance_name: str, pb_version: str = "7") -> Pat
     """Resolve a local bot instance to the native passivbot log path."""
     version = _normalize_pb_version(pb_version)
     name = _validate_remote_log_instance_name(instance_name)
+    if version == "9":
+        return local_pb9_logs_dir() / f"{name}.log"
     configured_dir = str((pb8dir if version == "8" else pb7dir)() or "").strip()
     if configured_dir:
         return Path(configured_dir) / "logs" / f"{name}.log"
@@ -260,6 +263,17 @@ def local_pb8_logs_dir() -> Path:
     if configured_pb8dir:
         return Path(configured_pb8dir) / "logs"
     return Path.home() / "software" / "pb8" / "logs"
+
+
+def local_pb9_logs_dir() -> Path:
+    """Use the explicitly configured local PB9 source, with no PB7/PB8 fallback."""
+    from pbgui_purefunc import load_ini_snapshot
+
+    snapshot = load_ini_snapshot()
+    value = snapshot.get("main", "pb9dir") if snapshot.has_option("main", "pb9dir") else ""
+    if value and Path(value).expanduser().is_absolute():
+        return Path(value).expanduser() / "logs"
+    return _project_root() / "data" / "run_v9" / ".unconfigured-native-logs"
 
 
 def resolve_local_bot_err_log_path(instance_name: str, pb_version: str = "7") -> Path:
@@ -409,7 +423,8 @@ def resolve_local_log_path(filename: str) -> Optional[Path]:
     if filename.startswith("Bot:"):
         instance_name, version = _split_bot_identifier(filename[4:])
         fp = resolve_local_bot_log_path(instance_name, version)
-        logs_root = (local_pb8_logs_dir() if version == "8" else local_pb7_logs_dir()).resolve()
+        logs_root = ({"7": local_pb7_logs_dir, "8": local_pb8_logs_dir,
+                      "9": local_pb9_logs_dir}[version])().resolve()
         if not fp.resolve().is_relative_to(logs_root):
             return None
         return fp
@@ -434,11 +449,11 @@ def resolve_local_log_path(filename: str) -> Optional[Path]:
             instance_name = _validate_remote_log_instance_name(instance_name)
         except (ValueError, TypeError):
             return None
-        if version != "8" or not backup_id.isdigit() or log_name not in {
+        if version not in {"8", "9"} or not backup_id.isdigit() or log_name not in {
             "passivbot.log", "passivbot_err.log", "passivbot_err.log.old",
         }:
             return None
-        backup_root = (root / "data" / "backup" / "v8").resolve()
+        backup_root = (root / "data" / "backup" / f"v{version}").resolve()
         fp = backup_root / instance_name / backup_id / log_name
         if fp.is_symlink() or not fp.resolve().is_relative_to(backup_root):
             return None
@@ -964,11 +979,16 @@ class AsyncLogStreamer:
             result.extend(sorted(
                 f"Bot:{p.stem}:8" for p in pb8_logs.glob("*.log") if p.is_file()
             ))
-        for version in ("7", "8"):
+        pb9_logs = local_pb9_logs_dir()
+        if pb9_logs.exists():
+            result.extend(sorted(
+                f"Bot:{p.stem}:9" for p in pb9_logs.glob("*.log") if p.is_file()
+            ))
+        for version in ("7", "8", "9"):
             run_root = _project_root() / "data" / f"run_v{version}"
             if not run_root.exists():
                 continue
-            suffix = "" if version == "7" else ":8"
+            suffix = "" if version == "7" else f":{version}"
             result.extend(sorted(
                 f"BotErr:{p.parent.name}{suffix}"
                 for p in run_root.glob("*/passivbot_err.log")

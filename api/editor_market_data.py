@@ -136,3 +136,86 @@ def classify_coins(exchanges: list[str], coins: list[str]) -> dict[str, dict]:
             "status": "valid" if normalized in active_coins else "invalid",
         }
     return statuses
+
+
+def exact_market_catalog(root, exchanges, identifiers=None) -> dict:
+    """Resolve exact native IDs using published local mappings, without network IO.
+
+    Always qualify catalog IDs by venue. Coin aliases resolve only when there
+    is exactly one eligible mapping per venue; collisions never choose a row.
+    """
+    import json
+    import re
+    from pathlib import Path
+    from fastapi import HTTPException
+    from secure_files import read_regular_file_nofollow
+
+    if (not isinstance(exchanges, list) or not 1 <= len(exchanges) <= 16
+            or any(not isinstance(x, str) or not re.fullmatch(r"[a-z0-9_-]+", x) for x in exchanges)):
+        raise HTTPException(422, "Invalid exchange selection")
+    identifiers = [] if identifiers is None else identifiers
+    if (not isinstance(identifiers, list) or len(identifiers) > 1000
+            or any(not isinstance(x, str) or not x or x != x.strip() or len(x) > 256
+                   or any(ord(c) < 32 or ord(c) == 127 for c in x) for x in identifiers)):
+        raise HTTPException(422, "Invalid market identifiers")
+    base = Path(root) / "data" / "coindata"
+    catalog, aliases = [], {}
+    for exchange in dict.fromkeys(exchanges):
+        # Match the native resolver's default settlement quote; all market
+        # identities still come exclusively from the published mapping rows.
+        quote = "USDC" if exchange in {"hyperliquid", "lighter"} else "USDT"
+        path = base / exchange / "mapping.json"
+        if not path.exists():
+            raise HTTPException(503, "Market mapping is not available; check Coin Data")
+        try:
+            if path.stat().st_size > 32 * 1024 * 1024:
+                raise ValueError("Oversize mapping")
+            rows = json.loads(read_regular_file_nofollow(path, base))
+            if not isinstance(rows, list):
+                raise ValueError("Invalid mapping")
+        except (OSError, ValueError) as exc:
+            _log(SERVICE, "Market mapping could not be read", level="WARNING")
+            raise HTTPException(503, "Market mapping is unavailable") from exc
+        seen = set()
+        for row in rows:
+            if (not isinstance(row, dict) or row.get("quote") != quote
+                    or row.get("swap") is not True or row.get("active") is False
+                    or row.get("linear") is False):
+                continue
+            native = row.get("symbol")
+            symbol = row.get("ccxt_symbol") or native
+            coin = row.get("coin")
+            if not all(isinstance(x, str) and x and not any(ord(c) < 32 for c in x)
+                       for x in (native, symbol, coin)):
+                continue
+            if native in seen:
+                continue
+            seen.add(native)
+            config_id = exchange + "::" + native
+            record = {"config_id": config_id, "coin": coin, "display": coin,
+                      "resolutions": [{"exchange": exchange, "symbol": symbol}]}
+            catalog.append(record)
+            for alias in {config_id, native, symbol, coin}:
+                aliases.setdefault(alias, []).append(record)
+    catalog.sort(key=lambda item: item["config_id"])
+    statuses = {}
+    for value in identifiers:
+        candidates = aliases.get(value, [])
+        venues = [x["resolutions"][0]["exchange"] for x in candidates]
+        ambiguous = len(venues) != len(set(venues))
+        valid = bool(candidates) and not ambiguous
+        if value.lower() == "all":
+            valid, candidates = True, []
+        statuses[value] = {"input": value, "normalized": value, "status": "valid" if valid else "invalid",
+                           "reason": "resolved" if valid else "ambiguous" if ambiguous else "unknown",
+                           "detail": "" if valid else "Select an exact market from the catalog",
+                           "resolutions": [r for c in candidates for r in c["resolutions"]] if valid else [],
+                           "display": candidates[0]["display"] if valid and candidates else value}
+    counts = {}
+    for record in catalog:
+        counts[record["display"]] = counts.get(record["display"], 0) + 1
+    for record in catalog:
+        if counts[record["display"]] > 1:
+            record["display"] += " (" + record["config_id"] + ")"
+    return {"symbols": [r["config_id"] for r in catalog], "catalog": catalog,
+            "statuses": statuses, "exchanges": list(dict.fromkeys(exchanges))}

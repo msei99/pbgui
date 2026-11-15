@@ -774,3 +774,40 @@ blockierenden Fehler. Die 167 Tests sind Codex-Evidenz, kein Claude-Testlauf.
 > und Envs, statische Erkennung ohne Codeausführung und unverändertes PB8.
 > Fehlender Commit und Rust-Stempel sind vorerst kein Erkennungshindernis.
 > Nur lesen, nichts ändern; melde Fehler oder Commit-Reife.
+
+## PB9 Run: gemeinsamer Editor und lokale Laufzeit
+
+Der JSON-Bibliothekseditor aus `136cd0b7` erfüllt die Run-Anforderung nicht.
+Ziel ist jetzt dieselbe Run-Liste und derselbe strukturierte Editor wie PB8,
+mit explizitem v9-Adapter und nativen Metadaten statt eines neuen Seitenbaus.
+Commit `07bfc915` teilt Backup-/Publikationshelfer und ergänzt den isolierten
+Metadaten-/Live-Validierungsaufruf. Fokussierte Evidenz: 159 Bridge-Tests,
+316 PB8-API-/Backup-/Cluster-Tests sowie 15 abschließende Bridge-Tests.
+
+Die separat freigegebene offizielle lokale v9-Installation liegt unter
+`data/passivbot_v9`, ihre Umgebung unter `data/venv_pb9`. Rust wurde gebaut;
+440 native Felder, zwei Strategien und eine native Live-Strukturvalidierung
+wurden erfolgreich gelesen/geprüft. Keine Trading-Prozesse oder Remote-Aktionen.
+Die Integration verwendet native `config.json` plus private `pbgui.json`;
+Remote-Run, Backtest und Strategy Explorer dürfen keinen PB8-Fallback erhalten.
+API, gemeinsamer Frontend-Adapter, PBRun und Kontosperre sind integriert.
+Die echten Menüpfade Run → Add, der Editor mit 275 Live-Feldern, beide
+Strategien, der getrennte Guide/Help-Pfad und die Rückkehr zum Editor wurden
+im angemeldeten Browser geprüft; kein horizontaler Überlauf bei 240 px Sidebar.
+Native Rust-/Quell-Fingerprint und Live-Strukturvalidierung sind mit der
+separaten Installation erfolgreich geprüft. Kein echter Trading-Start.
+
+Fokussierte Offline-Evidenz: 937 Funktionstests im breiten betroffenen Scope;
+die vier dort zunächst fehlgeschlagenen Logging-Audits sind nach Entfernen der
+temporären Quellbelege und Ergänzung der Service-Liste separat grün. Weitere
+abschließende Gruppen: 66 Editor-/API-/Supervisor-Tests, 31 Kern-Tests,
+32 Mount-Pfad-Tests, drei Override-Tests, 100 Log-Tests. Das Suite-Gate verlangte
+`focused`; keine vollständige Suite gestartet. Filter-/Draft-/Versionsgrenzen,
+Native-Importisolation und Eingaben während Save sind mit Fixtures geprüft.
+
+Die drei laufenden Claude-Implementierungsaufträge wurden nach dem Kostenhinweis
+gestoppt. Die Teilstände wurden von Codex vervollständigt und geprüft; es gab
+keinen abschließenden Claude-Review. Weitere Claude-Aufrufe erfolgten nicht.
+Der Browser bleibt beim testbaren PB9-Editor. Nach der abschließenden Serial-
+Änderung müssen API und PBRun den neuen Code laden; weitere Dienste oder
+Browseraktionen werden nach dem Nutzerhinweis nicht mehr ausgelöst.

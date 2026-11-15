@@ -108,6 +108,8 @@ from api.storage import router as storage_router, startup as storage_startup, sh
 from api.live import router as live_router, shutdown as live_shutdown
 from api.v7_instances import router as v7_router
 from api.v8_instances import router as v8_router
+from api.v9_instances import router as v9_router
+from api.v9_market import router as v9_market_router
 from api.balance_calc import router as balance_calc_router
 from api.coin_data import (
     router as coin_data_router,
@@ -1126,6 +1128,8 @@ app.add_middleware(BrowserOriginMiddleware)
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(pb9_router, prefix="/api/pb9", tags=["pb9"])
+app.include_router(v9_router, prefix="/api/v9", tags=["v9"])
+app.include_router(v9_market_router, prefix="/api/v9", tags=["v9"])
 app.include_router(ai_router, prefix="/api/ai", tags=["ai"])
 app.include_router(support_debug_router, prefix="/api/debug", tags=["debug"])
 app.include_router(api_keys_router, prefix="/api/api-keys", tags=["api-keys"])

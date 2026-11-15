@@ -151,11 +151,9 @@ def editor(request):
 
 
 def _enter(editor):
-    """Use the real PBv9 menu destination, not direct HTML injection."""
+    """Open the retained JSON-library preview; the PBv9 menu now opens Run."""
     page = editor.page
-    page.goto("http://pb9.test" + editor.prefix + "/api/services/main_page")
-    page.locator('.nav-group-btn[data-group="pbv9"]').click()
-    page.locator('.nav-item[data-page="v9_editor"]').click()
+    page.goto("http://pb9.test" + editor.prefix + "/api/pb9/main_page")
     editor.expect(page).to_have_url("http://pb9.test" + editor.prefix + "/api/pb9/main_page")
     editor.expect(page.locator("#runtime-status")).to_contain_text("PB9 detected")
     editor.expect(page.locator("#new-template")).to_be_enabled()
@@ -177,7 +175,7 @@ def _pending(editor):
     return editor.pending.pop(0)
 
 
-def test_real_menu_template_save_open_and_reload_preserve_navigation(editor):
+def test_library_preview_template_save_open_and_reload_preserve_navigation(editor):
     """A real first-editor cycle keeps authored values, revisions and mounted routes."""
     _enter(editor)
     _draft(editor)

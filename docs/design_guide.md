@@ -196,6 +196,7 @@ Use the established editor/table hierarchy, as in Optimize (`v7_optimize.html`, 
 - Show summary values using the editor's grid/field hierarchy or the page's existing status controls. Do not invent a second dashboard-card style inside an editor.
 - Preserve the shell, all fields/actions, automatic updates and navigation/edit state when reorganizing the main content.
 - Config compatibility changes use the shared `editor_shared.js` markers: amber outlines on the exact mapped structured fields, and amber highlights at exact paths in Raw JSON. JSON syntax errors retain red priority. Preserve focus, selection and scroll; annotations never enter saved config data. The Long/Short JSON editors keep their individual HSL review markers instead of coloring unrelated blocks.
+- Native hierarchical config forms use `PBGuiEditorShared.createMetadataFieldRenderer` in `editor_shared.js`, inside the existing Run page shell and form grids. Choose typed controls from native field metadata; use the compact **Explicit value** checkbox to distinguish authored values from inherited defaults. Rendering a default never creates an override. Keep side activation explicit, nullable values distinct, descriptions in `data-tip`, and Raw JSON as a secondary editing surface. Persist section/scroll navigation without storing config drafts or credentials.
 
 ### Windows and detail dialogs
 

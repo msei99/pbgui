@@ -2766,7 +2766,7 @@ def _api_keys_target_path() -> Path:
 
 
 def _api_keys_projection_targets(cluster_root: Path) -> list[tuple[str, Path, Path]]:
-    """Return distinct PB7 and configured PB8 exchange-key projection targets."""
+    """Return distinct exchange-key targets for explicitly configured runtimes."""
 
     credentials_root = Path(cluster_root).parent / "credentials"
     targets = [("pb7", _api_keys_target_path(), credentials_root / "pb7_projection.json")]
@@ -2780,6 +2780,25 @@ def _api_keys_projection_targets(cluster_root: Path) -> list[tuple[str, Path, Pa
         pb8_target = pb8_root / "api-keys.json"
         if pb8_target != targets[0][1]:
             targets.append(("pb8", pb8_target, credentials_root / "pb8_projection.json"))
+    # PB9 has its own source tree and credential journal. Never infer its slot
+    # from a package version (the v8 and v9 development versions overlap).
+    from pbgui_purefunc import load_ini_snapshot
+    from passivbot_runtime import classify_passivbot_source
+
+    snapshot = load_ini_snapshot()
+    configured = snapshot.get("main", "pb9dir").strip() if snapshot.has_option("main", "pb9dir") else ""
+    configured_python = snapshot.get("main", "pb9venv").strip() if snapshot.has_option("main", "pb9venv") else ""
+    if configured and configured_python:
+        lexical = Path(configured).expanduser()
+        local_data = Path(PBGDIR).resolve(strict=False) / "data"
+        if lexical.is_absolute() and not lexical.is_symlink():
+            pb9_root = lexical.resolve(strict=False)
+            if pb9_root.parent in {install_root, local_data}:
+                identity = classify_passivbot_source(pb9_root)
+                if identity["generation"] == "pb9" and not identity["errors"]:
+                    target = pb9_root / "api-keys.json"
+                    if target not in {item[1] for item in targets}:
+                        targets.append(("pb9", target, credentials_root / "pb9_projection.json"))
     return targets
 
 

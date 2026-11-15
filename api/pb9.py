@@ -135,6 +135,12 @@ def _operation(operation: str, cancel_event: PB9CancelSignal, payload: bytes | N
     """Inspect, load or validate using only settings selected on the server."""
     if cancel_event.is_set():
         raise PB9ConfigError("helper_cancelled")
+    if operation.startswith("run_"):
+        from api.v9_instances import _operation as run_operation
+        return run_operation(operation, cancel_event, payload)
+    if operation.startswith("market_"):
+        from api.v9_market import _operation as market_operation
+        return market_operation(operation[7:], cancel_event, payload)
     document = _validation_document(payload) if operation == "validate" else None
     if operation == "runtime_paths":
         values = _request_envelope(payload, {"pb9dir", "pb9venv"})
@@ -224,6 +230,13 @@ def _worker(operation: str, future: Future, cancel_event: PB9CancelSignal, paylo
     try:
         result = (_operation(operation, cancel_event, payload) if payload is not None
                   else _operation(operation, cancel_event))
+    except HTTPException as exc:
+        if operation.startswith(("run_", "market_")):
+            future.set_exception(exc)
+        else:
+            _log(SERVICE, "PB9 API operation failed", level="ERROR",
+                 meta={"operation": operation, "error_codes": ["api_operation_failed"]})
+            future.set_exception(PB9ConfigError("api_operation_failed"))
     except BaseException as exc:
         code = exc.error_codes[0] if isinstance(exc, PB9ConfigError) else "api_operation_failed"
         expected = _VALIDATION_ERRORS | {"config_file_not_found", "config_file_exists", "config_revision_conflict"}
@@ -403,6 +416,8 @@ async def shutdown(app) -> None:
             await owner.shutdown()
         finally:
             _restore_stop_signals(owner)
+            from api.v9_instances import clear_drafts
+            clear_drafts()
 
 
 def restart_block_reason(app) -> str:

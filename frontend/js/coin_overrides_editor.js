@@ -31,6 +31,9 @@ var _covState = {
   pendingConfigFileWrites: {},
   loadGeneration: 0,
   request: null,
+  inlineOnly: false,          // no override_config_path files: inline patches only
+  staticAllowedParams: false, // allowedParams supplied by the page instead of /override-params
+  runtimeLabel: 'PB8',
 };
 
 function _covRequest(path, options) {
@@ -476,8 +479,24 @@ function coinOvInit(containerId, opts) {
       strategyKind: String(opts.context.strategyKind || '')
     };
   }
+  _covState.inlineOnly = !!(opts && opts.inlineOnly);
+  _covState.runtimeLabel = (opts && opts.runtimeLabel) || 'PB8';
+  _covState.staticAllowedParams = false;
   _covEnsureValidationStyles();
+  if (opts && opts.allowedParams) {
+    coinOvSetAllowedParams(opts.allowedParams);
+    return;
+  }
   _fetchAllowedParams();
+}
+
+/** Use page-supplied override parameter metadata instead of the /override-params lookup. */
+function coinOvSetAllowedParams(params) {
+  _covState.metadataGeneration += 1;
+  _covState.staticAllowedParams = true;
+  _covState.allowedParams = JSON.parse(JSON.stringify(params || {}));
+  _covState.allowedParamsError = '';
+  if (_covState.editCoin) _covRender();
 }
 
 function _fetchAllowedParams() {
@@ -513,6 +532,7 @@ function _fetchAllowedParams() {
 }
 
 function coinOvSetContext(context) {
+  if (_covState.staticAllowedParams) return Promise.resolve(_covState.allowedParams || {});
   var next = {
     hslSignalMode: String((context && context.hslSignalMode) || ''),
     strategyKind: String((context && context.strategyKind) || '')
@@ -1166,7 +1186,8 @@ function _covEditHtml(coin) {
   }
   var unsupported = _covUnsupportedInlineParams(data, allowed);
   if (unsupported.length) {
-    h += '\x3Cdiv style="margin-bottom:var(--sp-sm);color:var(--red);font-size:var(--fs-sm)">Unsupported inline override values are preserved but PB8 will reject them: ' +
+    h += '\x3Cdiv style="margin-bottom:var(--sp-sm);color:var(--red);font-size:var(--fs-sm)">Unsupported inline override values are preserved but ' +
+      esc(_covState.runtimeLabel || 'PB8') + ' will reject them: ' +
       esc(unsupported.join(', ')) + '\x3C/div>';
   }
 
@@ -1227,6 +1248,11 @@ function _covEditHtml(coin) {
     }
 
     h += '\x3C/div>';
+  }
+
+  if (_covState.inlineOnly) {
+    h += '\x3C/div>';
+    return h;
   }
 
   /* Config File — long/short JSON textareas that map directly to COIN.json on disk */
@@ -1455,6 +1481,7 @@ function _covSaveEdit() {
 
 /** Save the Config File textareas to COIN.json via the API. */
 function _covSaveConfigFile(coin) {
+  if (_covState.inlineOnly) return true;
   var cfgArea = document.getElementById('cov-cfg-area');
   if (!cfgArea) return true;
   var data = _covState.overrides[coin];

@@ -1,4 +1,5 @@
-"""Manage local Passivbot V7 and V8 live processes."""
+"""Manage local Passivbot V7, V8 and V9 live processes."""
+from contextlib import nullcontext
 import psutil
 import signal
 import stat
@@ -17,6 +18,7 @@ from PBCoinData import CoinData
 import pbgui_purefunc
 from logging_helpers import human_log as _log, get_rotate_settings, rotate_logfile_if_oversize
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
+from passivbot_account_guard import AccountConflictError, account_start_lock
 
 SERVICE = "PBRun"
 from master.cluster_state import (
@@ -63,6 +65,32 @@ print(json.dumps({
     "needs_rebuild": rust_utils.extension_needs_rebuild(path, source_mtime, fingerprint),
 }))
 """
+# Read-only: unlike the PB8 probe this never prunes shadowing extensions, and
+# -I/-B keep the PB9 checkout free of imports from cwd and of new bytecode.
+PB9_RUST_PROBE_CODE = """
+import json
+import sys
+from pathlib import Path
+sys.path.insert(0, "src")
+import rust_utils
+local = [path for path in rust_utils._local_extension_candidates() if path.exists()]
+fingerprint = rust_utils.source_fingerprint()
+if local:
+    result = {"shadowed": True, "fingerprinted": bool(fingerprint), "stamped": False, "needs_rebuild": True}
+else:
+    import passivbot_rust
+    path = Path(passivbot_rust.__file__).resolve()
+    if not path.is_relative_to(Path(sys.prefix).resolve()):
+        raise RuntimeError("Native extension is outside the selected environment")
+    verified = rust_utils.verify_loaded_runtime_extension(fingerprint=fingerprint)
+    stamp = verified.get("runtime_compiled_source_stamp")
+    result = {"path": str(path), "shadowed": False, "fingerprinted": bool(fingerprint),
+              "stamped": bool(stamp), "needs_rebuild": not fingerprint or stamp != fingerprint}
+print(json.dumps(result))
+"""
+PB9_PROBE_ENV_KEYS = frozenset({"HOME", "LANG", "LC_ALL", "LC_CTYPE", "TMPDIR", "TZ"})
+PB9_MAX_CONFIG_BYTES = 1024 * 1024
+PB9_VALIDATION_CACHE_SECONDS = 60
 
 
 def _arg_matches_path(arg: str, expected_path: Path) -> bool:
@@ -189,6 +217,21 @@ def _read_json_file(path: Path) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _read_regular_json_object(path: Path, label: str, max_bytes: int = PB9_MAX_CONFIG_BYTES) -> dict:
+    """Read one bounded JSON object from a regular file without following a symlink."""
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    with os.fdopen(fd, "rb") as stream:
+        if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
+            raise ValueError(f"{label} must be a regular file")
+        source = stream.read(max_bytes + 1)
+    if len(source) > max_bytes:
+        raise ValueError(f"{label} exceeds the size limit")
+    payload = json.loads(source)
+    if not isinstance(payload, dict):
+        raise ValueError(f"{label} must be a JSON object")
+    return payload
+
+
 def _cluster_gate_is_configured(cluster_root: Path) -> bool:
     if not cluster_root.exists():
         return False
@@ -275,8 +318,12 @@ def _credential_error(runner, exc: Exception) -> None:
         runner._credential_error_after = now + 60
 
 
-def _credential_launch(runtime: str):
-    """Bind a launch acknowledgement to its pre-launch credential revision and PID."""
+def _credential_launch(default_runtime: str):
+    """Bind a launch acknowledgement to its pre-launch credential revision and PID.
+
+    A runner's own ``runtime_generation`` wins over the decorator default, so a
+    subclass reusing the decorated launch reports against its own runtime.
+    """
     from functools import wraps
 
     def decorate(method):
@@ -284,6 +331,7 @@ def _credential_launch(runtime: str):
         @wraps(method)
         def wrapped(runner, *args, **kwargs):
             """Only a newly observed live process can acknowledge the captured revision."""
+            runtime = getattr(runner, "runtime_generation", None) or default_runtime
             try:
                 context = _credential_context(runner, runtime)
             except Exception as exc:
@@ -477,6 +525,10 @@ def _ensure_dynamic_ignore_ready(dynamic_ignore: "DynamicIgnore") -> bool:
     if callable(lists_ready):
         return lists_ready()
     return False
+
+
+class _NotAssignedError(ValueError):
+    """The instance is disabled or assigned to another host, not misconfigured."""
 
 
 class DynamicIgnore():
@@ -970,13 +1022,22 @@ class RunV7():
             try:
                 cmd = [self.pb7venv, '-u', PurePath(f'{self.pb7dir}/src/main.py'), PurePath(f'{self.path}/config_run.json')]
                 err_log = str(Path(f'{self.path}/passivbot_err.log'))
-                if platform.system() == "Windows":
-                    creationflags = subprocess.DETACHED_PROCESS
-                    creationflags |= subprocess.CREATE_NO_WINDOW
-                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=self.pb7dir, text=True, creationflags=creationflags)
-                else:
-                    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=self.pb7dir, text=True, start_new_session=True)
+                # Hold the shared account lock through process creation so another
+                # generation cannot start or be enabled on this account meanwhile.
+                with self._account_start_guard():
+                    if platform.system() == "Windows":
+                        creationflags = subprocess.DETACHED_PROCESS
+                        creationflags |= subprocess.CREATE_NO_WINDOW
+                        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=self.pb7dir, text=True, creationflags=creationflags)
+                    else:
+                        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, cwd=self.pb7dir, text=True, start_new_session=True)
                 threading.Thread(target=_ts_wrap_stderr, args=(proc.stderr, err_log), daemon=True).start()
+            except AccountConflictError as exc:
+                now = time()
+                if now - getattr(self, "_account_block_log_ts", 0) >= 60:
+                    _log(SERVICE, f"PB7 start blocked for {self.user}: {exc}", level="WARNING")
+                    self._account_block_log_ts = now
+                return
             finally:
                 os.environ['PATH'] = old_os_path
             _log(SERVICE,
@@ -990,6 +1051,15 @@ class RunV7():
                 self.create_v7_running_version()
                 break
             sleep(1)
+
+    def _account_start_guard(self):
+        """Return the cross-generation account lock for this bot's API-key user."""
+
+        if not getattr(self, "pbgdir", None):
+            return nullcontext()
+        live = (getattr(self, "_v7_config", None) or {}).get("live")
+        user = live.get("user") if isinstance(live, dict) else None
+        return account_start_lock(Path(self.pbgdir), str(user or self.user), "pb7", Path(self.path))
 
     def clean_log(self):
         err_log = Path(f'{self.path}/passivbot_err.log')
@@ -1097,7 +1167,18 @@ class RunV7():
 
 
 class RunV8:
-    """Validate and supervise one materialized PB8 live configuration."""
+    """Validate and supervise one materialized PB8 live configuration.
+
+    Generation-specific behavior is limited to the class attributes and the
+    ``_read_launch_metadata``, ``_cluster_gate_result``, ``_runtime_ready``,
+    ``_config_ready`` and ``_launch_files`` hooks, so a later native runtime
+    reuses the complete start, stop, crash-backoff and watch lifecycle.
+    """
+
+    runtime_generation = "pb8"
+    runtime_label = "PB8"
+    account_field = "live.user"
+    quiet_unassigned = False
 
     def __init__(self):
         self.user = None
@@ -1123,6 +1204,24 @@ class RunV8:
         self._block_log_ts = 0.0
 
     @property
+    def source_dir(self):
+        """Return this generation's configured Passivbot source directory."""
+
+        return getattr(self, f"{self.runtime_generation}dir")
+
+    @property
+    def python_path(self):
+        """Return this generation's configured virtual-environment interpreter."""
+
+        return getattr(self, f"{self.runtime_generation}venv")
+
+    def bind_runtime(self, source_dir, python_path) -> None:
+        """Assign the source directory and interpreter of this generation."""
+
+        setattr(self, f"{self.runtime_generation}dir", source_dir)
+        setattr(self, f"{self.runtime_generation}venv", python_path)
+
+    @property
     def config_path(self) -> Path:
         """Return the canonical absolute config path used in process identity."""
 
@@ -1130,13 +1229,13 @@ class RunV8:
 
     @property
     def venv_dir(self) -> Path:
-        """Return the configured PB8 virtual environment root."""
+        """Return the configured virtual environment root of this generation."""
 
-        return Path(self.pb8venv).expanduser().absolute().parent.parent
+        return Path(self.python_path).expanduser().absolute().parent.parent
 
     @property
     def command(self) -> list[str]:
-        """Return the exact PB8 live command for this instance."""
+        """Return the exact native live command for this instance."""
 
         return [
             str(self.venv_dir / "bin" / "passivbot"),
@@ -1150,42 +1249,47 @@ class RunV8:
 
         now = time()
         if self._block_log_key != key or now - self._block_log_ts >= 60:
-            _log(SERVICE, f"PB8 start blocked for {self.user}: {reason}", level="WARNING")
+            _log(SERVICE, f"{self.runtime_label} start blocked for {self.user}: {reason}", level="WARNING")
             self._block_log_key = key
             self._block_log_ts = now
 
+    def _read_launch_metadata(self) -> tuple[dict, str]:
+        """Return PBGui metadata and the account user from the PB8 config."""
+
+        payload = _read_json_file(self.config_path)
+        pbgui = payload.get("pbgui") if isinstance(payload.get("pbgui"), dict) else {}
+        live = payload.get("live") if isinstance(payload.get("live"), dict) else {}
+        return pbgui, str(live.get("user") or "").strip()
+
     def load(self) -> bool:
-        """Load and validate PBGui metadata plus PB8 API-key user presence."""
+        """Load and validate PBGui metadata plus API-key user presence."""
 
         try:
-            payload = _read_json_file(self.config_path)
-            pbgui = payload.get("pbgui") if isinstance(payload.get("pbgui"), dict) else {}
-            live = payload.get("live") if isinstance(payload.get("live"), dict) else {}
+            pbgui, live_user = self._read_launch_metadata()
             raw_version = pbgui.get("version")
-            if str(pbgui.get("runtime") or "").strip().lower() != "pb8":
-                raise ValueError("pbgui.runtime must be pb8")
+            if str(pbgui.get("runtime") or "").strip().lower() != self.runtime_generation:
+                raise ValueError(f"pbgui.runtime must be {self.runtime_generation}")
             if str(pbgui.get("enabled_on") or "").strip() != str(self.name or "").strip():
-                raise ValueError("pbgui.enabled_on is not assigned to this host")
+                raise _NotAssignedError("pbgui.enabled_on is not assigned to this host")
             if isinstance(raw_version, bool) or not str(raw_version or "").isdigit() or int(raw_version) < 1:
                 raise ValueError("pbgui.version must be a positive integer")
-            live_user = str(live.get("user") or "").strip()
             if not live_user:
-                raise ValueError("live.user is required")
+                raise ValueError(f"{self.account_field} is required")
 
-            api_keys_path = Path(self.pb8dir) / "api-keys.json"
+            api_keys_path = Path(self.source_dir) / "api-keys.json"
             api_stat = os.stat(api_keys_path, follow_symlinks=False)
             if not stat.S_ISREG(api_stat.st_mode):
-                raise ValueError("PB8 api-keys.json must be a regular file")
+                raise ValueError(f"{self.runtime_label} api-keys.json must be a regular file")
             api_keys = _read_json_file(api_keys_path)
             if live_user not in api_keys:
-                raise ValueError("live.user is absent from PB8 api-keys.json")
+                raise ValueError(f"{self.account_field} is absent from {self.runtime_label} api-keys.json")
 
             self.version = int(raw_version)
             if self._retry_config_version is not None and self._retry_config_version != self.version:
                 self._crash_count = 0
                 self._next_start_at = 0.0
                 self._last_started_at = 0.0
-                _log(SERVICE, f"PB8 {self.user} config version changed "
+                _log(SERVICE, f"{self.runtime_label} {self.user} config version changed "
                      f"{self._retry_config_version} -> {self.version}; cleared restart backoff")
             self._retry_config_version = self.version
             self.live_user = live_user
@@ -1193,7 +1297,8 @@ class RunV8:
         except Exception as exc:
             self.version = None
             self.live_user = None
-            self._log_block("invalid_config", str(exc))
+            if not (self.quiet_unassigned and isinstance(exc, _NotAssignedError)):
+                self._log_block("invalid_config", str(exc))
             return False
 
     @staticmethod
@@ -1314,17 +1419,35 @@ class RunV8:
             return False
         return True
 
+    def _config_ready(self) -> bool:
+        """Return whether the loaded config passed generation-specific validation."""
+
+        return True
+
+    def _launch_files(self) -> tuple[Path, ...]:
+        """Return the files whose modification restarts a running process."""
+
+        return (self.config_path,)
+
+    def _launch_env(self) -> dict:
+        """Return the child environment bound to this generation's virtualenv."""
+
+        env = os.environ.copy()
+        env["VIRTUAL_ENV"] = str(self.venv_dir)
+        env["PATH"] = str(self.venv_dir / "bin") + os.pathsep + os.defpath
+        return env
+
     def _matches_process(self, process: psutil.Process) -> bool:
-        """Match only the exact command and working directory launched by RunV8."""
+        """Match only the exact command and working directory launched by this runner."""
 
         try:
             cmdline = [str(arg) for arg in process.cmdline()]
-            # Every accepted PB8 command contains this literal argument. Reject
+            # Every accepted native command contains this literal argument. Reject
             # unrelated processes before resolving config and Python paths.
             if "live" not in cmdline:
                 return False
             expected = self.command
-            configured_python = str(Path(self.pb8venv).expanduser().absolute())
+            configured_python = str(Path(self.python_path).expanduser().absolute())
             resolved_python = str(Path(configured_python).resolve())
             command_matches = cmdline in (
                 expected,
@@ -1334,7 +1457,7 @@ class RunV8:
             if not command_matches:
                 return False
             cwd_method = getattr(process, "cwd", None)
-            if not callable(cwd_method) or Path(cwd_method()).resolve() != Path(self.pb8dir).resolve():
+            if not callable(cwd_method) or Path(cwd_method()).resolve() != Path(self.source_dir).resolve():
                 return False
             return True
         except (psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied, OSError):
@@ -1351,13 +1474,29 @@ class RunV8:
         pbgdir: Path,
         name: str,
     ) -> "RunV8 | None":
-        """Reconstruct an exact managed runner whose config disappeared."""
+        """Reconstruct an exact managed PB8 runner whose config disappeared."""
+
+        return cls._orphan_runner(
+            process, run_root=run_root, source_dir=pb8dir, python_path=pb8venv, pbgdir=pbgdir, name=name)
+
+    @classmethod
+    def _orphan_runner(
+        cls,
+        process: psutil.Process,
+        *,
+        run_root: Path,
+        source_dir: str,
+        python_path: str,
+        pbgdir: Path,
+        name: str,
+    ) -> "RunV8 | None":
+        """Reconstruct an exact managed runner of this generation whose config disappeared."""
 
         try:
             cmdline = [str(arg) for arg in process.cmdline()]
             if "live" not in cmdline:
                 return None
-            python = str(Path(pb8venv).expanduser().absolute())
+            python = str(Path(python_path).expanduser().absolute())
             resolved_python = str(Path(python).resolve())
             passivbot = str(Path(python).parent / "passivbot")
             if len(cmdline) == 4 and cmdline[:2] == [passivbot, "live"]:
@@ -1385,15 +1524,14 @@ class RunV8:
             runner.path = str(config_path.parent)
             runner.user = relative.parts[0]
             runner.name = name
-            runner.pb8dir = pb8dir
-            runner.pb8venv = pb8venv
+            runner.bind_runtime(source_dir, python_path)
             runner.pbgdir = pbgdir
             return runner if runner._matches_process(process) else None
         except (ValueError, OSError, psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
             return None
 
     def pid(self):
-        """Return the exact PB8 process for this config, with current stats."""
+        """Return the exact native process for this config, with current stats."""
 
         for process in psutil.process_iter():
             if not self._matches_process(process):
@@ -1467,11 +1605,12 @@ class RunV8:
             return
         if not self._same_process(process, create_time):
             return
+        generation = self.runtime_generation[2:]
         _log(
             SERVICE,
-            f"Stop: passivbot v8 {self.config_path}",
+            f"Stop: passivbot v{generation} {self.config_path}",
             user=self.user,
-            meta={"operation": "stop_passivbot_v8", "instance": self.user},
+            meta={"operation": f"stop_passivbot_v{generation}", "instance": self.user},
         )
         for sig, timeout in ((signal.SIGINT, 10), (signal.SIGTERM, 5), (signal.SIGKILL, 3)):
             try:
@@ -1481,21 +1620,21 @@ class RunV8:
                 return
             if self._wait_stopped(process, timeout):
                 return
-        _log(SERVICE, f"Timed out stopping passivbot v8 {self.user}", level="WARNING")
+        _log(SERVICE, f"Timed out stopping passivbot v{generation} {self.user}", level="WARNING")
 
     def _record_crash(self) -> None:
-        """Apply a bounded exponential delay after an early PB8 exit."""
+        """Apply a bounded exponential delay after an early native bot exit."""
 
         self._crash_count = min(self._crash_count + 1, 16)
         exponent = min(self._crash_count - 1, 10)
         delay = min(PB8_BACKOFF_INITIAL_SECONDS * (2 ** exponent), PB8_BACKOFF_MAX_SECONDS)
         self._next_start_at = time() + delay
         self._last_started_at = 0.0
-        _log(SERVICE, f"PB8 {self.user} exited early; retrying in {delay}s", level="WARNING")
+        _log(SERVICE, f"{self.runtime_label} {self.user} exited early; retrying in {delay}s", level="WARNING")
 
     @_credential_launch("pb8")
     def start(self, *, reload_config: bool = True) -> bool:
-        """Start one validated PB8 live process in an isolated virtualenv."""
+        """Start one validated native live process in an isolated virtualenv."""
 
         if self.is_running():
             return False
@@ -1511,30 +1650,34 @@ class RunV8:
             self._log_block(f"cluster_{self.cluster_gate}", self.cluster_blocked_reason)
             return False
 
-        env = os.environ.copy()
-        env["VIRTUAL_ENV"] = str(self.venv_dir)
-        env["PATH"] = str(self.venv_dir / "bin") + os.pathsep + os.defpath
+        env = self._launch_env()
         err_log = str(Path(self.path) / "passivbot_err.log")
         runtime_lease = None
         try:
             runtime_lease = acquire_master_runtime_lock(Path(self.pbgdir))
-            if self.is_running() or not self._runtime_ready():
+            if self.is_running() or not self._runtime_ready() or not self._config_ready():
                 return False
-            proc = subprocess.Popen(
-                self.command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                cwd=str(Path(self.pb8dir).resolve()),
-                text=True,
-                env=env,
-                start_new_session=platform.system() != "Windows",
-                creationflags=(subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW) if platform.system() == "Windows" else 0,
-            )
+            # Hold the shared account lock through process creation so another
+            # generation cannot start or be enabled on this account meanwhile.
+            with account_start_lock(Path(self.pbgdir), self.live_user, self.runtime_generation, Path(self.path)):
+                proc = subprocess.Popen(
+                    self.command,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    cwd=str(Path(self.source_dir).resolve()),
+                    text=True,
+                    env=env,
+                    start_new_session=platform.system() != "Windows",
+                    creationflags=(subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW) if platform.system() == "Windows" else 0,
+                )
         except MasterUpdateBusyError:
-            self._log_block("runtime_update_busy", "PB8 is being installed or updated")
+            self._log_block("runtime_update_busy", f"{self.runtime_label} is being installed or updated")
+            return False
+        except AccountConflictError as exc:
+            self._log_block(f"account_{exc.code}", str(exc))
             return False
         except (OSError, subprocess.SubprocessError) as exc:
-            _log(SERVICE, f"PB8 {self.user} failed to launch: {exc}", level="ERROR")
+            _log(SERVICE, f"{self.runtime_label} {self.user} failed to launch: {exc}", level="ERROR")
             self._record_crash()
             return False
         finally:
@@ -1543,11 +1686,12 @@ class RunV8:
         threading.Thread(target=_ts_wrap_stderr, args=(proc.stdout, err_log), daemon=True).start()
         self._last_started_at = time()
         self._running_version = self.version
+        generation = self.runtime_generation[2:]
         _log(
             SERVICE,
-            f"Start: passivbot_v8 {self.config_path}",
+            f"Start: passivbot_v{generation} {self.config_path}",
             user=self.user,
-            meta={"operation": "start_passivbot_v8", "instance": self.user},
+            meta={"operation": f"start_passivbot_v{generation}", "instance": self.user},
         )
         for _attempt in range(5):
             if self.is_running():
@@ -1574,11 +1718,12 @@ class RunV8:
 
         now = time()
         if process:
-            if _reconcile_credentials(self, 'pb8', process):
+            if _reconcile_credentials(self, self.runtime_generation, process):
                 return
             config_changed = False
             try:
-                config_changed = self.config_path.stat().st_mtime > float(process.create_time())
+                created = float(process.create_time())
+                config_changed = any(path.stat().st_mtime > created for path in self._launch_files())
             except (OSError, psutil.Error):
                 pass
             if config_changed or (self._running_version is not None and self._running_version != self.version):
@@ -1601,8 +1746,161 @@ class RunV8:
                 self._last_started_at = 0.0
         self.start(reload_config=False)
 
+
+class RunV9(RunV8):
+    """Supervise one local native PB9 live config through the RunV8 lifecycle.
+
+    ``config.json`` is the pure native config (``live.account.user``); PBGui
+    metadata lives in the ``pbgui.json`` sidecar. PB9 has no Cluster desired
+    state: only an instance whose sidecar assigns this host runs, and remote
+    targets are never started. Readiness checks are read-only and never prune
+    or compile the Rust extension; the CLI's ``--fail-on-stale-rust`` remains
+    the final gate. Structural validation is not full launch acceptance.
+    """
+
+    runtime_generation = "pb9"
+    runtime_label = "PB9"
+    account_field = "live.account.user"
+    quiet_unassigned = True
+
+    def __init__(self):
+        super().__init__()
+        self.pb9dir = None
+        self.pb9venv = None
+        self.other_slots = {}
+        self._live_config = None
+        self._validation_cache = (None, False, 0.0)
+
+    @property
+    def sidecar_path(self) -> Path:
+        """Return the PBGui metadata sidecar next to the native config."""
+
+        return Path(self.path) / "pbgui.json"
+
+    def _read_launch_metadata(self) -> tuple[dict, str]:
+        """Read the pure native config and its sidecar as safe regular files."""
+
+        self._live_config = None
+        config = _read_regular_json_object(Path(self.path) / "config.json", "config.json")
+        if "pbgui" in config:
+            raise ValueError("config.json must not contain pbgui metadata")
+        pbgui = _read_regular_json_object(self.sidecar_path, "pbgui.json")
+        if str(pbgui.get("enabled_on") or "").strip() in {"", "disabled"}:
+            raise _NotAssignedError("pbgui.enabled_on is disabled")
+        live = config.get("live") if isinstance(config.get("live"), dict) else {}
+        account = live.get("account") if isinstance(live.get("account"), dict) else {}
+        user = account.get("user")
+        self._live_config = config
+        return pbgui, user.strip() if isinstance(user, str) else ""
+
+    def _cluster_gate_result(self) -> dict:
+        """PB9 is local-only; the PB8 desired-state map never applies to it."""
+
+        return {"ok": True, "status": "not_configured", "reason": "PB9 runs on the local host only"}
+
+    def _launch_env(self) -> dict:
+        """Reuse the native launch environment without inherited Python import overrides."""
+        env = super()._launch_env()
+        for key in ("PYTHONPATH", "PYTHONHOME", "PYTHONUSERBASE"):
+            env.pop(key, None)
+        env["PYTHONNOUSERSITE"] = "1"
+        return env
+
+    def _runtime_ready(self) -> bool:
+        """Require the isolated PB9 layout and a current Rust build, read-only."""
+
+        from pb9_runtime import inspect_pb9_runtime
+
+        try:
+            status = inspect_pb9_runtime(self.pb9dir, self.pb9venv, dict(self.other_slots or {}))
+        except Exception:
+            status = {}
+        if not status.get("detected"):
+            codes = [str(code) for code in status.get("error_codes") or []]
+            detail = f" ({', '.join(codes)})" if codes else ""
+            self._log_block("runtime_not_ready", f"PB9 runtime is not detected{detail}")
+            return False
+        env = {key: value for key, value in os.environ.items() if key in PB9_PROBE_ENV_KEYS}
+        env["PATH"] = str(self.venv_dir / "bin") + os.pathsep + os.defpath
+        try:
+            result = subprocess.run(
+                [str(Path(self.pb9venv).expanduser().absolute()), "-I", "-B", "-c", PB9_RUST_PROBE_CODE],
+                cwd=str(Path(self.pb9dir).resolve()),
+                env=env,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                timeout=60,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError("probe exited with an error")
+            lines = [line for line in result.stdout.splitlines() if line.strip()]
+            rust_status = json.loads(lines[-1]) if lines else {}
+            if not isinstance(rust_status, dict):
+                raise RuntimeError("probe returned an invalid result")
+        except (OSError, subprocess.SubprocessError, RuntimeError, json.JSONDecodeError) as exc:
+            self._log_block("rust_probe_failed", f"PB9 Rust extension check failed: {type(exc).__name__}")
+            return False
+        if rust_status.get("shadowed"):
+            self._log_block(
+                "rust_shadowed",
+                "PB9 source contains a local Rust extension copy shadowing the installed build; "
+                "PBGui does not prune it",
+            )
+            return False
+        if rust_status.get("fingerprinted") is not True or rust_status.get("needs_rebuild") is not False:
+            if not rust_status.get("stamped"):
+                reason = "PB9 Rust extension is missing or has no current source fingerprint stamp; rebuild PB9 on this host"
+            else:
+                reason = "PB9 Rust extension is stale; rebuild PB9 on this host"
+            self._log_block("rust_stale", reason)
+            return False
+        return True
+
+    def _config_ready(self) -> bool:
+        """Validate the loaded live config natively inside the selected PB9 environment."""
+
+        from pb9_config import PB9ConfigError, validate_pb9_live_config
+
+        if not isinstance(self._live_config, dict):
+            return False
+        try:
+            info = (Path(self.path) / "config.json").stat()
+            signature = (info.st_mtime_ns, info.st_size, str(self.pb9dir), str(self.pb9venv))
+        except OSError:
+            return False
+        cached_signature, cached_valid, cached_until = self._validation_cache
+        if signature == cached_signature and time() < cached_until:
+            return cached_valid
+        try:
+            validate_pb9_live_config(
+                self._live_config, self.pb9dir, self.pb9venv, dict(self.other_slots or {}), timeout=60)
+            valid = True
+        except PB9ConfigError as exc:
+            valid = False
+            self._log_block("config_rejected", "PB9 live config validation failed: " + ", ".join(exc.error_codes))
+        self._validation_cache = (signature, valid, time() + PB9_VALIDATION_CACHE_SECONDS)
+        return valid
+
+    def _launch_files(self) -> tuple[Path, ...]:
+        """Restart on a changed native config or metadata sidecar."""
+
+        return (self.config_path, self.sidecar_path)
+
+    def start(self, *, reload_config: bool = True) -> bool:
+        """Reuse the shared launch and record only a newly confirmed running version."""
+        started = super().start(reload_config=reload_config)
+        if started:
+            try:
+                _atomic_write_text(Path(self.path) / "running_version.txt", str(self.version))
+            except OSError as exc:
+                _log(SERVICE, f"PB9 running version could not be recorded: {type(exc).__name__}", level="WARNING")
+        return started
+
+
 class PBRun():
-    """PBRun manages local V7 and V8 passivbot instances.
+    """PBRun manages local V7, V8 and V9 passivbot instances.
 
     It reconciles local data/run_v7 configs against Cluster Sync desired state.
 
@@ -1614,6 +1912,7 @@ class PBRun():
         self.coindata = CoinData()
         self.run_v7 = []
         self.run_v8 = []
+        self.run_v9 = []
         self.index = 0
         self.pbgdir = Path.cwd()
         ini_snapshot = pbgui_purefunc.load_ini_snapshot()
@@ -1636,9 +1935,15 @@ class PBRun():
         self.pb8dir = ini_snapshot.get("main", "pb8dir") if ini_snapshot.has_option("main", "pb8dir") else None
         self.pb8venv = ini_snapshot.get("main", "pb8venv") if ini_snapshot.has_option("main", "pb8venv") else None
         self.pb8_ready = bool(self.pb8dir and self.pb8venv)
+        self.pb9dir = self._snapshot_main_value(ini_snapshot, "pb9dir")
+        self.pb9venv = self._snapshot_main_value(ini_snapshot, "pb9venv")
+        self.pb9_ready = bool(self.pb9dir and self.pb9venv)
+        self._v9_runtime_signature = None
+        self._v9_runtime_changed = False
         # Init paths
         self.v7_path = f'{self.pbgdir}/data/run_v7'
         self.v8_path = f'{self.pbgdir}/data/run_v8'
+        self.v9_path = f'{self.pbgdir}/data/run_v9'
         # Init pid
         self.piddir = Path(f'{self.pbgdir}/data/pid')
         if not self.piddir.exists():
@@ -1656,7 +1961,11 @@ class PBRun():
         return value or None
 
     def refresh_runtime_config(self) -> tuple[bool, bool]:
-        """Refresh runtime profiles and stop runners removed by an INI change."""
+        """Refresh runtime profiles and stop runners removed by an INI change.
+
+        The return value stays the PB7/PB8 pair; a PB9 profile change is
+        reported separately through ``take_v9_runtime_change``.
+        """
 
         ini_snapshot = pbgui_purefunc.load_ini_snapshot()
         new_name = self._snapshot_main_value(ini_snapshot, "pbname") or platform.node()
@@ -1679,6 +1988,17 @@ class PBRun():
                 runner.stop()
             self.run_v8 = []
             self._v8_runtime_signature = None
+        new_pb9dir = self._snapshot_main_value(ini_snapshot, "pb9dir")
+        new_pb9venv = self._snapshot_main_value(ini_snapshot, "pb9venv")
+        if name_changed or (new_pb9dir, new_pb9venv) != (getattr(self, "pb9dir", None), getattr(self, "pb9venv", None)):
+            for runner in list(getattr(self, "run_v9", [])):
+                runner.stop()
+            self.run_v9 = []
+            self._v9_runtime_signature = None
+            self._v9_runtime_changed = True
+        self.pb9dir = new_pb9dir
+        self.pb9venv = new_pb9venv
+        self.pb9_ready = bool(new_pb9dir and new_pb9venv)
 
         self.name = new_name
         self.pb7dir = new_pb7dir
@@ -1688,6 +2008,13 @@ class PBRun():
         self.pb8venv = new_pb8venv
         self.pb8_ready = bool(new_pb8dir and new_pb8venv)
         return v7_changed, v8_changed
+
+    def take_v9_runtime_change(self) -> bool:
+        """Return and clear whether the last refresh changed the PB9 profile."""
+
+        changed = bool(getattr(self, "_v9_runtime_changed", False))
+        self._v9_runtime_changed = False
+        return changed
 
     @staticmethod
     def _git_dir(repo_dir) -> Path | None:
@@ -1988,6 +2315,36 @@ class PBRun():
         self.watch_v8()
         return True
 
+    def _current_v9_runtime_signature(self) -> tuple:
+        """Return the local PB9 config and metadata-sidecar signature."""
+
+        run_root = Path(self.v9_path)
+        if not run_root.is_dir():
+            return ((str(run_root), None, None),)
+        signature: list[tuple] = []
+        for instance_dir in sorted(run_root.iterdir(), key=lambda item: item.name):
+            if not instance_dir.is_dir() or instance_dir.name.startswith("."):
+                continue
+            signature.append(("instance", instance_dir.name))
+            for item in sorted(instance_dir.glob("*.json"), key=lambda path: path.name):
+                file_sig = self._file_signature(item)
+                signature.append((instance_dir.name, item.name, file_sig[1], file_sig[2]))
+        return tuple(signature)
+
+    def has_v9_runtime_changed(self) -> bool:
+        """Poll PB9 configs and sidecars for immediate PBRun rescans."""
+
+        signature = self._current_v9_runtime_signature()
+        if self._v9_runtime_signature is None:
+            self._v9_runtime_signature = signature
+            return False
+        if signature == self._v9_runtime_signature:
+            return False
+        self._v9_runtime_signature = signature
+        _log(SERVICE, "run_v9 state changed - rescanning PB9 instances")
+        self.watch_v9()
+        return True
+
     def fetch_cmc_credits(self):
         provider_refreshed = bool(self.coindata.fetch_api_status())
         return {
@@ -2083,18 +2440,77 @@ class PBRun():
             v8_instances = [path for path in sorted(run_root.iterdir(), key=lambda item: item.name)] if run_root.is_dir() else []
         else:
             run_root = Path(self.v8_path)
+        self.run_v8 = self._reconcile_native_runners(
+            RunV8,
+            v8_instances,
+            run_root=run_root,
+            existing=self.run_v8,
+            source_dir=self.pb8dir,
+            python_path=self.pb8venv,
+            internal_prefix=".pbgui-v8-stage-",
+        )
+        self._v8_runtime_signature = self._current_v8_runtime_signature()
+
+    def watch_v9(self, v9_instances: list | None = None) -> None:
+        """Scan ``data/run_v9`` and reconcile exact local PB9 live processes.
+
+        Only PB9 processes with this runtime's exact command identity are ever
+        stopped: those of removed configs and of disabled or invalid instances.
+        """
+
+        if not self.pb9_ready:
+            for runner in list(self.run_v9):
+                runner.stop()
+            self.run_v9 = []
+            return
+        run_root = Path(self.v9_path)
+        if run_root.is_symlink() or run_root.parent.is_symlink():
+            _log(SERVICE, "PB9 live storage is unsafe; reconciliation is blocked", level="ERROR")
+            return
+        if v9_instances is None:
+            v9_instances = [path for path in sorted(run_root.iterdir(), key=lambda item: item.name)] if run_root.is_dir() else []
+        other_slots = {
+            key: getattr(self, key, None) or ""
+            for key in ("pb7dir", "pb7venv", "pb8dir", "pb8venv")
+        }
+        self.run_v9 = self._reconcile_native_runners(
+            RunV9,
+            v9_instances,
+            run_root=run_root,
+            existing=self.run_v9,
+            source_dir=self.pb9dir,
+            python_path=self.pb9venv,
+            internal_prefix=".",
+            configure=lambda runner: setattr(runner, "other_slots", dict(other_slots)),
+        )
+        self._v9_runtime_signature = self._current_v9_runtime_signature()
+
+    def _reconcile_native_runners(
+        self,
+        runner_cls: type[RunV8],
+        instances: list,
+        *,
+        run_root: Path,
+        existing: list,
+        source_dir: str,
+        python_path: str,
+        internal_prefix: str,
+        configure=None,
+    ) -> list:
+        """Reconcile one native generation's instance directories and exact processes."""
+
         active_paths = {
             str(Path(path).resolve())
-            for path in v8_instances
+            for path in instances
             if (
                 Path(path).is_dir()
                 and not Path(path).is_symlink()
-                and not Path(path).name.startswith(".pbgui-v8-stage-")
+                and not Path(path).name.startswith(internal_prefix)
                 and (Path(path) / "config.json").is_file()
             )
         }
         retained: list[RunV8] = []
-        existing_by_path = {str(Path(item.path).resolve()): item for item in self.run_v8}
+        existing_by_path = {str(Path(item.path).resolve()): item for item in existing}
         handled_missing_paths: set[str] = set()
         for missing_path, runner in existing_by_path.items():
             if missing_path not in active_paths:
@@ -2102,11 +2518,11 @@ class PBRun():
                 handled_missing_paths.add(missing_path)
 
         for process in psutil.process_iter():
-            orphan = RunV8.from_missing_config_process(
+            orphan = runner_cls._orphan_runner(
                 process,
                 run_root=run_root,
-                pb8dir=self.pb8dir,
-                pb8venv=self.pb8venv,
+                source_dir=source_dir,
+                python_path=python_path,
                 pbgdir=Path(self.pbgdir),
                 name=self.name,
             )
@@ -2114,7 +2530,8 @@ class PBRun():
                 continue
             _log(
                 SERVICE,
-                f"Stop orphaned passivbot v8 process for missing config {orphan.config_path}",
+                f"Stop orphaned passivbot v{runner_cls.runtime_generation[2:]} process "
+                f"for missing config {orphan.config_path}",
                 user=orphan.user,
                 level="WARNING",
             )
@@ -2122,23 +2539,23 @@ class PBRun():
             handled_missing_paths.add(orphan.path)
 
         for path_text in sorted(active_paths):
-            runner = existing_by_path.get(path_text) or RunV8()
+            runner = existing_by_path.get(path_text) or runner_cls()
             runner.path = path_text
             runner.user = Path(path_text).name
             runner.name = self.name
-            runner.pb8dir = self.pb8dir
-            runner.pb8venv = self.pb8venv
+            runner.bind_runtime(source_dir, python_path)
             runner.pbgdir = self.pbgdir
+            if configure is not None:
+                configure(runner)
             runner.watch()
             retained.append(runner)
-        self.run_v8 = retained
-        self._v8_runtime_signature = self._current_v8_runtime_signature()
+        return retained
 
     def find_high_memory_bot(self):
         """Finds the bot with the highest memory usage."""
         high_mem = 0
         high_bot = None
-        for runner in [*self.run_v7, *getattr(self, "run_v8", [])]:
+        for runner in [*self.run_v7, *getattr(self, "run_v8", []), *getattr(self, "run_v9", [])]:
             mem = _memory_usage_bytes(runner.memory)
             if mem > high_mem:
                 high_mem = mem
@@ -2221,7 +2638,7 @@ class PBRun():
 
 def main():
     """
-    Start and monitor configured V7 and V8 passivbot instances.
+    Start and monitor configured V7, V8 and V9 passivbot instances.
     """
     from credential_process_registry import ProcessCapabilityHeartbeat
 
@@ -2248,6 +2665,8 @@ def main():
             run.watch_v7()
         if run.pb8_ready:
             run.watch_v8()
+        if getattr(run, "pb9_ready", False):
+            run.watch_v9()
         from pbcoindata_controller import LegacyController
         coindata_controller = LegacyController(run.pbgdir)
         maintenance_count = 0
@@ -2270,6 +2689,18 @@ def main():
                         v8_reconciled = True
                     else:
                         v8_reconciled = run.has_v8_runtime_changed()
+                # PB9 reports its profile change separately so the refresh
+                # result above keeps its two-value PB7/PB8 contract.
+                take_v9_change = getattr(run, "take_v9_runtime_change", None)
+                v9_changed = bool(take_v9_change()) if callable(take_v9_change) else False
+                v9_ready = bool(getattr(run, "pb9_ready", False))
+                v9_reconciled = False
+                if v9_ready:
+                    if v9_changed:
+                        run.watch_v9()
+                        v9_reconciled = True
+                    else:
+                        v9_reconciled = run.has_v9_runtime_changed()
                 if now >= next_maintenance:
                     coindata_controller.reconcile(run.coindata.cmc_pool_ready)
                     run.watch_memory()
@@ -2279,6 +2710,8 @@ def main():
                         run_v7.watch_dynamic()
                     if run.pb8_ready and not v8_reconciled:
                         run.watch_v8()
+                    if v9_ready and not v9_reconciled:
+                        run.watch_v9()
                     if maintenance_count % 2 == 0:
                         for run_v7 in run.run_v7:
                             run_v7.clean_log()

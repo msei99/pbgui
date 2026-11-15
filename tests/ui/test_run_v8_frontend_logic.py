@@ -260,7 +260,7 @@ def test_pb8_run_editor_exposes_cookie_authenticated_strategy_handoff() -> None:
 
     assert "supportsStrategyExplorer: true" in adapter
     assert 'data-v7-only onclick="goStrategyExplorer()"' not in page
-    assert '/app/js/run_editor_adapter.js?v=10' in page
+    assert '/app/js/run_editor_adapter.js?v=12' in page
     assert "'/api/strategy-explorer-v8'" in page
     assert "coinOvSnapshotAllFiles()" in handoff
     assert "override_configs: overrideConfigs || {}" in handoff
@@ -459,7 +459,7 @@ def test_pb8_run_adapter_enables_existing_forced_mode_actions() -> None:
     assert "'/instances/' + encodeURIComponent(name) + '/forced-mode'" in execute
     assert "expected_version: Number(expectedVersion)" in execute
     assert "mode === 'normal' ? { mode: mode, expected_version: Number(expectedVersion) }" in execute
-    assert '/app/js/run_list_adapter.js?v=3' in page
+    assert '/app/js/run_list_adapter.js?v=4' in page
 
 
 def test_pb7_run_shows_normal_for_an_active_global_forced_mode() -> None:

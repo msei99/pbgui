@@ -2,13 +2,26 @@
 
 ## Development
 
+- Add local **PBv9 → Run** using the shared PB7/PB8 instance list, structured
+  editor, coin selectors, inline override editor, dialogs and log panel. Build
+  typed PB9 controls from the native registry and preserve sparse inheritance.
+  Keep native configs and private PBGui sidecars separate, require optimistic
+  versions, retain filter preferences, and reuse the shared backup/publication
+  service. Preserve newer typing during Save and restore editor navigation;
+  update clean editors automatically without replacing unsaved changes.
+- Extend the PB8 supervisor through runtime hooks for PB9 commands, process
+  identity, crash handling, credentials and read-only Rust fingerprint checks.
+  Serialize account starts across PB7/PB8/PB9 and reject conflicting assignments.
+  PB9 currently runs locally; remote Run, Backtest and Strategy Explorer remain
+  unavailable. Add bilingual guides and isolated API/browser/runtime coverage.
+
 - Prepare PB9 Run to reuse the PB8 editor and live-bundle infrastructure:
   expose native field/strategy metadata through the isolated PB9 helper,
   validate inline live coin overrides without file references, and share
   backup/publication helpers through explicit generation-specific stores.
   Existing PB8 lifecycle and API contracts remain unchanged.
 
-- Add the first PB9 JSON config editor under **PBv9 → Config Editor** with
+- Retain the advanced PB9 JSON config library at `/api/pb9/main_page` with
   separate runtime-path settings, native authored templates, inline validation,
   private revision-protected save/open and automatic file/status updates.
   Preserve newer edits, exact large integers and raw duplicate-key rejection;

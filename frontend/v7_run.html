@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>%%RUN_LABEL%% Run</title>
 <script src="/app/js/pbgui_dialogs.js?v=12"></script>
-<script src="/app/js/run_list_adapter.js?v=3"></script>
+<script src="/app/js/run_list_adapter.js?v=4"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
   <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
   <style>
@@ -717,6 +717,7 @@ var COLS = [
   { key: '_actions',        label: '' },
 ];
 if (runListAdapter.isV8) COLS.splice(2, 0, { key: 'strategy', label: 'Strategy' });
+else if (runListAdapter.showsStrategy) COLS.splice(2, 0, { key: 'strategy', label: 'Strategy' });
 
 /* Persist only this tab's non-secret Run-list navigation state. */
 var RUN_NAVIGATION_KEY = 'pbgui:run:' + runListAdapter.version + ':navigation:v1';
@@ -796,6 +797,7 @@ function buildCells(r) {
   var runtimeError = String(r.runtime_error || '').trim();
   var statusReason = runtimeError || String(r.load_error || '').trim() || String(r.blocked_reason || '').trim();
   if (runtimeError) stLabel = 'PB8 update required';
+  if (runtimeError && runListAdapter.runtimeLabel) stLabel = runListAdapter.runtimeLabel + ' update required';
   var stTitle = statusReason ? ' title="' + esc(statusReason) + '"' : '';
   var statusDetail = r.status === 'config_error' && statusReason
     ? '<div class="status-reason">' + esc(statusReason) + '</div>'
@@ -812,7 +814,7 @@ function buildCells(r) {
     esc(r.name),
     esc(r.user || '\u2013'),
   ];
-  if (runListAdapter.isV8) cells.push(esc(r.strategy || '\u2013'));
+  if (runListAdapter.isV8 || runListAdapter.showsStrategy) cells.push(esc(r.strategy || '\u2013'));
   return cells.concat([
     esc(r.enabled_on || '\u2013'),
     '<span class="' + stClass + '"' + stTitle + '>' + esc(stLabel) + '</span>' + statusDetail + forcedDetail,
@@ -827,7 +829,7 @@ function buildCells(r) {
     '<button class="btn-tp-only" data-forced-mode="tp_only" data-forced-name="' + esc(r.name) + '" title="Take Profit Only all positions">T</button>' +
     (forcedSummary ? '<button class="btn-normal" data-forced-mode="normal" data-forced-name="' + esc(r.name) + '" data-forced-version="' + String(r.version || 0) + '" title="Clear global forced mode">N</button>' : '') : '') +
     '<button class="btn-edit" data-edit="' + esc(r.name) + '" title="Edit">\u270E</button>' +
-    '<button class="btn-edit" data-balance="' + esc(r.name) + '" title="Open Balance Calculator">$</button>' +
+    (runListAdapter.supportsBalanceCalculator === false ? '' : '<button class="btn-edit" data-balance="' + esc(r.name) + '" title="Open Balance Calculator">$</button>') +
     (runListAdapter.supportsConversion ? '<button class="btn-v8" data-convert-v8="' + esc(r.name) + '" title="Convert this V7 run config to V8">V8</button>' : '') +
     '<button class="btn-del" data-delete="' + esc(r.name) + '" title="Delete">\u2716</button>',
   ]);
@@ -1553,7 +1555,7 @@ function fetchBackups() {
         if (canRestore) {
           html += '\x3Cbutton class="btn-restore" data-restore-name="' + esc(b.name) + '" data-restore-ts="' + esc(item.id) + '">Load in editor\x3C/button>';
         }
-        if (runListAdapter.isV8 && b.currently_exists) {
+        if (runListAdapter.isV8 && b.currently_exists || runListAdapter.supportsRollback && b.currently_exists) {
           html += '\x3Cbutton class="btn-rollback" data-rollback-name="' + esc(b.name) + '" data-rollback-ts="' + esc(item.id) + '">Rollback\x3C/button>';
         }
         html += '\x3Cbutton class="btn-del-backup" data-del-name="' + esc(b.name) + '" data-del-ts="' + esc(item.id) + '">\u2716\x3C/button>';
@@ -1601,7 +1603,7 @@ function loadBackupInEditor(name, ts) {
 
 async function rollbackBackup(name, ts) {
   if (!(await window.PBGuiDialogs.confirm({
-    title: 'Rollback PB8 instance',
+    title: 'Rollback ' + (runListAdapter.runtimeLabel || 'PB8') + ' instance',
     message: "Restore '" + name + "' from backup " + ts + '?',
     detail: 'The instance must be stopped everywhere. PBGui will back up the current bundle, restore config.json and all referenced overrides, publish a new version, and keep the restored instance disabled.',
     confirmText: 'Rollback'

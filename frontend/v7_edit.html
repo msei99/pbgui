@@ -240,6 +240,20 @@ body {
   margin: var(--sp-sm) 0 var(--sp-sm);
 }
 
+/* ─── Metadata fields (inherited vs. explicit) ─────────────── */
+[data-meta-state="inherited"] input:not(.meta-explicit),
+[data-meta-state="inherited"] select,
+[data-meta-state="inherited"] textarea { color: var(--text-dim); font-style: italic; }
+.form-group input.meta-explicit,
+.chk-row input.meta-explicit {
+  width: 14px; height: 14px; padding: 0; margin-left: auto; flex-shrink: 0;
+  accent-color: var(--orange); cursor: pointer;
+}
+.meta-field [aria-invalid="true"] { border-color: var(--red); }
+.meta-unit { color: var(--text-dim); opacity: .75; }
+.meta-error { color: var(--red); font-size: var(--fs-xs); line-height: 1.3; }
+.meta-count { margin-left: 6px; color: var(--text-dim); font-size: var(--fs-xs); font-weight: 400; }
+
 /* ─── Table ────────────────────────────────────────────────── */
 .tbl { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-base); user-select: none; }
 .tbl th { position: sticky; top: 0; z-index: 2; background: var(--bg2); font-size: var(--fs-sm);
@@ -576,8 +590,8 @@ textarea.json-invalid:focus {
       <button class="sb-btn info" onclick="openImportModal()" title="Import JSON config">📥 Import</button>
       <button class="sb-btn info" onclick="openCopyUserModal()" title="Copy current config to another user">📋 Copy</button>
       <hr class="sb-sep">
-      <button class="sb-btn" onclick="goBacktest()" title="Open in Backtest">📊 Backtest</button>
-      <button class="sb-btn" onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
+      <button class="sb-btn" data-run-capability="supportsBacktest" onclick="goBacktest()" title="Open in Backtest">📊 Backtest</button>
+      <button class="sb-btn" data-run-capability="supportsStrategyExplorer" onclick="goStrategyExplorer()" title="Open Strategy Explorer">🔍 Strategy Explorer</button>
       <button class="sb-btn" onclick="goBalanceCalc()" title="Open Balance Calculator page">💰 Balance Calculator</button>
       <button class="sb-btn" onclick="calculateBalance()" title="Calculate needed balance from current config (shown inline)">⚡ Calc Balance</button>
       <button class="sb-btn" id="btn-apply-filters" onclick="applyRunFilters()" title="Apply market cap, volume, tag, CPT, and notice filters to approved/ignored coins">🔎 Apply Filters</button>
@@ -691,6 +705,9 @@ Example: 0.05 blocks closes once balance would fall below 95% of peak.">max_real
     </div>
   </div>
 </div>
+
+<!-- Metadata-driven live/logging/monitor sections (rendered by the run editor adapter) -->
+<div id="run-meta-settings" class="run-version-hidden" data-v9-only></div>
 
 <!-- Advanced Settings -->
 <div class="expander" id="exp-advanced" data-v7-only>
@@ -1089,7 +1106,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 </div>
 
 <!-- Dynamic Ignore -->
-<div class="form-row cols-4">
+<div class="form-row cols-4" data-not-v9>
   <div class="form-group">
     <div class="chk-row">
       <input type="checkbox" id="f-dynamic-ignore">
@@ -1111,7 +1128,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <!-- Bot Long / Short -->
 <div class="section-title section-title-with-control">
   <span>Bot Configuration</span>
-  <div class="form-group section-title-control run-version-hidden" data-v8-only>
+  <div class="form-group section-title-control run-version-hidden" data-v8-only data-v9-also>
     <label><span data-tip="PB8 strategy schema reported by the installed runtime.">strategy_kind</span></label>
     <select id="f-strategy-kind"></select>
   </div>
@@ -1134,7 +1151,9 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
     <input type="number" id="f-short-npos" min="0" max="100" step="1" value="0">
   </div>
 </div>
-<div class="form-row cols-2">
+<!-- Metadata-driven side activation, portfolio, global and side sections -->
+<div id="run-meta-bot" class="run-version-hidden" data-v9-only></div>
+<div class="form-row cols-2" data-not-v9>
   <div class="form-group">
     <label id="lbl-long-json">Long config (JSON)</label>
     <textarea class="json-editor" id="f-long-json" rows="24"></textarea>
@@ -1148,7 +1167,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 </div>
 
 <!-- Additional Parameters (populated dynamically) -->
-<div id="extra-params-container"></div>
+<div id="extra-params-container" data-not-v9></div>
 
 <!-- Raw JSON -->
 <div class="expander" id="exp-raw">
@@ -1240,11 +1259,11 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=17"></script>
+<script src="/app/js/editor_shared.js?v=18"></script>
 <script src="/app/js/pbgui_dialogs.js?v=12"></script>
-<script src="/app/js/run_editor_adapter.js?v=10"></script>
+<script src="/app/js/run_editor_adapter.js?v=12"></script>
 <script src="/app/js/log_viewer_panel.js?v=50"></script>
-<script src="/app/js/coin_overrides_editor.js?v=27"></script>
+<script src="/app/js/coin_overrides_editor.js?v=28"></script>
 <script>
 /* ─── Injected Vars ────────────────────────────────────────── */
 var API_BASE       = "%%API_BASE%%";
@@ -1271,6 +1290,7 @@ var hostCapabilitiesByName = {};
 var editorMetadata = {};
 var _managedLiveKeys = new Set();
 var dirty = false;
+var _runEditGeneration = 0;
 var draftOverrideConfigs = {};
 var _extraLiveKeys = []; // unknown live.* keys not in the GUI form
 var _extraLiveFieldIds = {};
@@ -1695,6 +1715,7 @@ function bindStructuredJsonFieldValidation() {
 }
 
 function ensureStructuredJsonFieldsValidForSave() {
+  if (runEditorAdapter.metadataDriven) return ensureNativeRunFieldsValidForSave();
   var fields = [
     document.getElementById('f-long-json'),
     document.getElementById('f-short-json'),
@@ -1727,6 +1748,7 @@ function ensureStructuredJsonFieldsValidForSave() {
 }
 
 function validateExecutionSyncFieldsForSave() {
+  if (runEditorAdapter.metadataDriven) return true;
   if (runEditorAdapter.isV8 && !(_managedLiveKeys.has('max_n_cancellations_per_batch') && _managedLiveKeys.has('max_n_creations_per_batch'))) return true;
   var maxCancel = getInt('f-max-cancel');
   var maxCreate = getInt('f-max-create');
@@ -1780,6 +1802,7 @@ function goBack() {
 }
 
 function goBacktest() {
+  if (runEditorAdapter.supportsBacktest === false) return;
   if (!ensureRawJsonValidForSave()) return;
   if (!ensureStructuredJsonFieldsValidForSave()) return;
   if (!validateExecutionSyncFieldsForSave()) return;
@@ -1816,6 +1839,7 @@ function strategyExplorerApiBase() {
 }
 
 function goStrategyExplorer() {
+  if (runEditorAdapter.supportsStrategyExplorer === false) return;
   if (!ensureRawJsonValidForSave()) return;
   if (!ensureStructuredJsonFieldsValidForSave()) return;
   if (!validateExecutionSyncFieldsForSave()) return;
@@ -1866,7 +1890,7 @@ async function goBalanceCalc() {
   try {
     await window.PBGuiEditorShared.openBalanceCalcPage({
       apiBase: API_BASE,
-      config: collectConfig(),
+      config: runEditorAdapter.metadataDriven ? runEditorAdapter.balanceCalcConfig(collectConfig()) : collectConfig(),
       exchange: exchange,
     });
   } catch (e) {
@@ -1883,9 +1907,9 @@ async function init() {
       draftPromise = fetchPreparedDraftConfig(DRAFT_ID).catch(function() { return null; });
     }
     var metadataPromise = null;
-    if (runEditorAdapter.isV8) {
+    if (runEditorAdapter.isV8 || runEditorAdapter.metadataDriven) {
       metadataPromise = apiFetch('/editor/metadata').then(function(response) {
-        if (!response.ok) throw new Error('PB8 editor metadata: HTTP ' + response.status);
+        if (!response.ok) throw new Error((runEditorAdapter.metadataDriven ? runEditorAdapter.label : 'PB8') + ' editor metadata: HTTP ' + response.status);
         return response.json();
       });
     }
@@ -1974,7 +1998,8 @@ async function init() {
       allHosts = ['disabled'];
       if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
       populateHosts();
-      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8, preserveMarketIdentifiers: runEditorAdapter.isV8, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
+      if (runEditorAdapter.metadataDriven) coinOvInit('coin-overrides-container', runEditorAdapter.coinOverrideOptions(API_BASE));
+      else coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8, preserveMarketIdentifiers: runEditorAdapter.isV8, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
       coinOvSetConfigName(IS_NEW === 'true' ? '' : INSTANCE_NAME);
       populateForm();
       if (typeof coinOvSetOverrideConfigs === 'function') {
@@ -1995,7 +2020,8 @@ async function init() {
       allHosts = ['disabled'];
       if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
       populateHosts();
-      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8, preserveMarketIdentifiers: runEditorAdapter.isV8, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
+      if (runEditorAdapter.metadataDriven) coinOvInit('coin-overrides-container', runEditorAdapter.coinOverrideOptions(API_BASE));
+      else coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8, preserveMarketIdentifiers: runEditorAdapter.isV8, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
       coinOvSetConfigName('');
       populateForm();
       queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
@@ -2023,7 +2049,8 @@ async function init() {
       allHosts = ['disabled'];
       if (configuredHost && configuredHost !== 'disabled') allHosts.push(configuredHost);
       populateHosts();
-      coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8, preserveMarketIdentifiers: runEditorAdapter.isV8, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
+      if (runEditorAdapter.metadataDriven) coinOvInit('coin-overrides-container', runEditorAdapter.coinOverrideOptions(API_BASE));
+      else coinOvInit('coin-overrides-container', { apiBase: API_BASE, deferConfigFileWrites: runEditorAdapter.isV8, preserveMarketIdentifiers: runEditorAdapter.isV8, context: { hslSignalMode: (cfg.live || {}).hsl_signal_mode, strategyKind: (cfg.live || {}).strategy_kind } });
       coinOvSetConfigName(INSTANCE_NAME);
       populateForm();
       if (typeof coinOvSetOverrideConfigs === 'function') coinOvSetOverrideConfigs(draftOverrideConfigs);
@@ -2061,7 +2088,7 @@ async function requestHostCapabilities() {
     ? window.crypto.randomUUID()
     : 'host-capability-' + Date.now() + '-' + generation;
   var hostQuery = '?request_id=' + encodeURIComponent(requestId);
-  if (runEditorAdapter.isV8) {
+  if (runEditorAdapter.isV8 || runEditorAdapter.metadataDriven) {
     if (INSTANCE_NAME) hostQuery += '&name=' + encodeURIComponent(INSTANCE_NAME);
     hostQuery += '&config_schema=' + encodeURIComponent(String((cfg || {}).config_version || ''));
   }
@@ -2129,10 +2156,10 @@ function updateEnabledOnAvailability() {
       return;
     }
     var capability = hostCapabilitiesByName[opt.value] || null;
-    var schemaBlocked = runEditorAdapter.isV8 && capability && capability.schema_compatible === false;
+    var schemaBlocked = (runEditorAdapter.isV8 || runEditorAdapter.metadataDriven) && capability && capability.schema_compatible === false;
     opt.disabled = !capability || capability[runEditorAdapter.capabilityKey] !== true || schemaBlocked;
     if (schemaBlocked) {
-      opt.textContent += ' (' + String(capability.schema_reason || 'PB8 config schema unsupported') + ')';
+      opt.textContent += ' (' + String(capability.schema_reason || ((runEditorAdapter.label || 'PB8') + ' config schema unsupported')) + ')';
     } else if (opt.disabled) {
       opt.textContent += ' (' + runEditorAdapter.label + ' capability unconfirmed)';
     }
@@ -2146,15 +2173,20 @@ async function fetchTemplateConfig(user) {
       var data = await resp.json();
       var tmpl = data.config || {};
       // Set user from dropdown selection
-      if (!tmpl.live) tmpl.live = {};
-      tmpl.live.user = user;
+      if (runEditorAdapter.metadataDriven) {
+        runEditorAdapter.setUser(tmpl, user);
+      } else {
+        if (!tmpl.live) tmpl.live = {};
+        tmpl.live.user = user;
+      }
       if (!tmpl.pbgui) tmpl.pbgui = {};
       return tmpl;
     }
   } catch (e) {
-    if (runEditorAdapter.isV8) throw e;
+    if (runEditorAdapter.isV8 || runEditorAdapter.metadataDriven) throw e;
     console.warn('fetchTemplateConfig failed, using built-in defaults:', e);
   }
+  if (runEditorAdapter.metadataDriven) throw new Error(runEditorAdapter.label + ' template is unavailable');
   if (runEditorAdapter.isV8) throw new Error('PB8 template is unavailable');
   return buildDefaultConfig(user);
 }
@@ -2311,6 +2343,7 @@ function queueSymbolsAndTagsLoad(sourceCfg, opts) {
 }
 
 function getCoins(key, side) {
+  if (runEditorAdapter.metadataDriven) return runEditorAdapter.readCoinSelection(cfg, key, side);
   return getCoinSelectionValue((cfg.live || {})[key], side, key === 'approved_coins');
 }
 
@@ -2328,7 +2361,9 @@ function getCoinSelectionValue(rawValue, side, allowAll) {
 function getCoinsForLoad(sourceCfg, key, side, wrapId, opts) {
   opts = opts || {};
   var live = (sourceCfg && sourceCfg.live) || {};
-  var selected = getCoinSelectionValue(live[key], side, key === 'approved_coins');
+  var selected = runEditorAdapter.metadataDriven
+    ? (sourceCfg ? runEditorAdapter.readCoinSelection(sourceCfg, key, side) : [])
+    : getCoinSelectionValue(live[key], side, key === 'approved_coins');
   if (opts.preferConfigValues) return selected;
   if (selected.length) return selected;
   if (msState[wrapId]) return getMultiselectValues(wrapId);
@@ -2421,6 +2456,10 @@ function refreshBotParamStatusLabels() {
 }
 
 function changeRunStrategyKind(nextStrategy) {
+  if (runEditorAdapter.metadataDriven) {
+    changeNativeRunStrategyKind();
+    return;
+  }
   if (!runEditorAdapter.isV8) return;
   var cleanNext = String(nextStrategy || '').trim();
   var allowed = (editorMetadata.strategies || []).map(function(value) { return String(value); });
@@ -2514,8 +2553,77 @@ function forcedModeConfigValue(value) {
   return aliases[selected] !== undefined ? aliases[selected] : selected;
 }
 
+function nativeRunEditorPage() {
+  return {
+    setVal: setVal,
+    getVal: getVal,
+    setChk: setChk,
+    getChk: getChk,
+    getInt: getInt,
+    getNum: getNum,
+    ensureSelectOption: ensureSelectOption,
+    ensureHost: function(host) {
+      if (host !== 'disabled' && allHosts.indexOf(host) < 0) {
+        allHosts.push(host);
+        populateHosts();
+      }
+      ensureSelectOption('f-enabled-on', host);
+      setVal('f-enabled-on', host);
+    },
+    hasMultiselect: function(wrapId) { return !!msState[wrapId]; },
+    getMultiselectValues: getMultiselectValues,
+    coinOvLoad: coinOvLoad,
+    coinOvCollect: coinOvCollect
+  };
+}
+
+function populateNativeRunForm(opts) {
+  if (!cfg || typeof cfg !== 'object' || Array.isArray(cfg)) cfg = {};
+  runEditorAdapter.populateForm(cfg, nativeRunEditorPage());
+  updateEnabledOnAvailability();
+  if (!opts.skipRawUpdate) {
+    var rawEl = document.getElementById('cfg-raw-json');
+    if (rawEl) {
+      rawEl.value = JSON.stringify(cfg, null, 2);
+      autoResizeTa(rawEl);
+      _rawEditorLastApplied = rawEl.value;
+    }
+  }
+  window.PBGuiEditorShared.clearFixedValidationStatus();
+  setRawJsonValidationError(null);
+}
+
+function collectNativeRunConfig() {
+  var rawEl = document.getElementById('cfg-raw-json');
+  var base = null;
+  if (rawEl && rawEl.value.trim()) {
+    try { base = JSON.parse(rawEl.value); } catch (e) { base = null; }
+  }
+  return runEditorAdapter.collectConfig(base, cfg, nativeRunEditorPage());
+}
+
+function ensureNativeRunFieldsValidForSave() {
+  var invalid = runEditorAdapter.firstInvalidField();
+  if (!invalid) return true;
+  var expander = invalid.control.closest('.expander');
+  if (expander) expander.classList.add('open');
+  invalid.control.focus();
+  toast(invalid.key + ' ' + invalid.message + '. Fix it before saving.', 'err');
+  return false;
+}
+
+function changeNativeRunStrategyKind() {
+  // Collect first so edits to the previous strategy are kept before its fields are replaced.
+  cfg = collectConfig();
+  populateForm();
+}
+
 function populateForm(opts) {
   opts = opts || {};
+  if (runEditorAdapter.metadataDriven) {
+    populateNativeRunForm(opts);
+    return;
+  }
   var skipRawUpdate = !!opts.skipRawUpdate;
   var live = cfg.live || {};
   var pbgui = cfg.pbgui || {};
@@ -2891,6 +2999,7 @@ function shouldIgnoreStructuredSyncTarget(target, phase) {
     if (target.id === 'f-long-json' || target.id === 'f-short-json') return true;
     if (target.id === 'cov-cfg-long' || target.id === 'cov-cfg-short') return true;
     if (target.dataset && target.dataset.extraLiveType === 'json') return true;
+    if (target.dataset && target.dataset.metaControl === 'json') return true;
   }
   return false;
 }
@@ -2905,6 +3014,7 @@ function bindStructuredEditorSync() {
 
 /* ─── Collect Form → Config ────────────────────────────────── */
 function collectConfig() {
+  if (runEditorAdapter.metadataDriven) return collectNativeRunConfig();
   // Start from Raw JSON as base (preserves any unknown top-level keys)
   var rawEl = document.getElementById('cfg-raw-json');
   var base = {};
@@ -3116,16 +3226,17 @@ function collectConfig() {
 
 /* ─── Save ─────────────────────────────────────────────────── */
 async function resolveRunSaveTarget(name, wasNew, expectedVersion, config) {
-  if (!runEditorAdapter.isV8 || !wasNew) {
+  if (!(runEditorAdapter.isV8 || runEditorAdapter.metadataDriven) || !wasNew) {
     return { createOnly: wasNew, expectedVersion: expectedVersion };
   }
+  var runtimeLabel = runEditorAdapter.label || 'PB8';
   var existingResponse = await apiFetch('/instances/' + encodeURIComponent(name) + '/config');
   if (existingResponse.status === 404) {
     return { createOnly: true, expectedVersion: expectedVersion };
   }
   var existingPayload = await existingResponse.json();
   if (!existingResponse.ok) {
-    throw new Error(existingPayload.detail || ('Could not inspect existing PB8 instance: HTTP ' + existingResponse.status));
+    throw new Error(existingPayload.detail || ('Could not inspect existing ' + runtimeLabel + ' instance: HTTP ' + existingResponse.status));
   }
   var existingConfig = existingPayload.config && typeof existingPayload.config === 'object'
     ? existingPayload.config
@@ -3133,8 +3244,8 @@ async function resolveRunSaveTarget(name, wasNew, expectedVersion, config) {
   var currentVersion = Number(((existingConfig.pbgui || {}).version) || 0);
   var enabledOn = String(((config.pbgui || {}).enabled_on) || 'disabled');
   var confirmed = await window.PBGuiDialogs.confirm({
-    title: 'Replace existing PB8 instance?',
-    message: 'PB8 instance "' + name + '" already exists as v' + currentVersion
+    title: 'Replace existing ' + runtimeLabel + ' instance?',
+    message: runtimeLabel + ' instance "' + name + '" already exists as v' + currentVersion
       + '. Saving this draft will back up that config, create the next version, and sync it to "' + enabledOn + '".',
     confirmText: 'Replace and Save'
   });
@@ -3162,6 +3273,7 @@ async function saveConfig() {
     if (!ensureStructuredJsonFieldsValidForSave()) return;
     if (!validateExecutionSyncFieldsForSave()) return;
     var config = collectConfig();
+    var savedEditGeneration = _runEditGeneration;
     var wasNew = IS_NEW === 'true';
     var name = wasNew ? runEditorAdapter.newInstanceName(config) : INSTANCE_NAME;
     if (!name) {
@@ -3194,7 +3306,27 @@ async function saveConfig() {
     }
 
     // Update state
+    if (runEditorAdapter.metadataDriven && savedEditGeneration !== _runEditGeneration) {
+      if (cfg.pbgui) cfg.pbgui.version = data.version;
+      setVal('f-version', data.version);
+      if (IS_NEW === 'true') {
+        INSTANCE_NAME = name;
+        IS_NEW = 'false';
+        coinOvSetConfigName(name);
+        var pendingUrl = new URL(window.location.href);
+        pendingUrl.searchParams.set('name', name);
+        pendingUrl.searchParams.delete('new');
+        pendingUrl.searchParams.delete('draft_id');
+        history.replaceState(null, '', pendingUrl);
+      }
+      dirty = true;
+      toast('Saved PB9 v' + data.version + '. Newer edits remain unsaved.', 'ok');
+      return;
+    }
     cfg = data.config || config;
+    if (runEditorAdapter.metadataDriven && (!cfg.pbgui || typeof cfg.pbgui !== 'object')) {
+      cfg.pbgui = Object.assign({}, config.pbgui);
+    }
     cfg.pbgui.version = data.version;
     setVal('f-version', data.version);
     var rawEl = document.getElementById('cfg-raw-json');
@@ -3203,11 +3335,19 @@ async function saveConfig() {
       autoResizeTa(rawEl);
       _rawEditorLastApplied = rawEl.value;
     }
+    if (runEditorAdapter.metadataDriven) populateForm({ skipRawUpdate: true });
 
     if (IS_NEW === 'true') {
       INSTANCE_NAME = name;
       IS_NEW = 'false';
       coinOvSetConfigName(name);
+      if (runEditorAdapter.metadataDriven) {
+        var savedUrl = new URL(window.location.href);
+        savedUrl.searchParams.set('name', name);
+        savedUrl.searchParams.delete('new');
+        savedUrl.searchParams.delete('draft_id');
+        history.replaceState(null, '', savedUrl);
+      }
     }
     if (runEditorAdapter.isV8 && typeof coinOvAcknowledgePendingFiles === 'function') {
       coinOvAcknowledgePendingFiles(overrideSnapshot);
@@ -3299,10 +3439,14 @@ async function doCopyToUser() {
 
     var config = collectConfig();
     var copyConfig = JSON.parse(JSON.stringify(config));
-    if (!copyConfig.live || typeof copyConfig.live !== 'object' || Array.isArray(copyConfig.live)) {
-      copyConfig.live = {};
+    if (runEditorAdapter.metadataDriven) {
+      runEditorAdapter.setUser(copyConfig, targetUser);
+    } else {
+      if (!copyConfig.live || typeof copyConfig.live !== 'object' || Array.isArray(copyConfig.live)) {
+        copyConfig.live = {};
+      }
+      copyConfig.live.user = targetUser;
     }
-    copyConfig.live.user = targetUser;
     if (!copyConfig.pbgui || typeof copyConfig.pbgui !== 'object' || Array.isArray(copyConfig.pbgui)) {
       copyConfig.pbgui = {};
     }
@@ -3497,8 +3641,12 @@ async function doImport() {
     return;
   }
   var selectedUser = matchedUser.name;
-  if (!parsed.live) parsed.live = {};
-  parsed.live.user = selectedUser;
+  if (runEditorAdapter.metadataDriven) {
+    runEditorAdapter.setUser(parsed, selectedUser);
+  } else {
+    if (!parsed.live) parsed.live = {};
+    parsed.live.user = selectedUser;
+  }
 
   var prepared;
   var currentEditorVersion = getInt('f-version');
@@ -3508,7 +3656,7 @@ async function doImport() {
       if (!prepared.config.pbgui || typeof prepared.config.pbgui !== 'object' || Array.isArray(prepared.config.pbgui)) {
         prepared.config.pbgui = {};
       }
-      prepared.config.pbgui.version = runEditorAdapter.isV8
+      prepared.config.pbgui.version = runEditorAdapter.isV8 || runEditorAdapter.metadataDriven
         ? currentEditorVersion
         : await fetchNextInstanceVersion(INSTANCE_NAME);
     }
@@ -3560,8 +3708,9 @@ async function openLogPanel() {
   // Determine host from enabled_on field
   var enabledOn = getVal('f-enabled-on') || 'disabled';
   var badge = document.getElementById('log-panel-host');
-  var runtimeNumber = runEditorAdapter.isV8 ? '8' : '7';
+  var runtimeNumber = runEditorAdapter.runtimeNumber || (runEditorAdapter.isV8 ? '8' : '7');
   var svc = 'Bot:' + INSTANCE_NAME + ':' + runtimeNumber;
+  var usesSmartLog = runEditorAdapter.isV8 || runEditorAdapter.metadataDriven;
 
   function isLocalBotLogFile(file) {
     var value = String(file || '');
@@ -3572,6 +3721,10 @@ async function openLogPanel() {
     if (value === ('data/run_v' + runtimeNumber + '/' + INSTANCE_NAME + '/passivbot_err.log')) return true;
     if (value === ('data/run_v' + runtimeNumber + '/' + INSTANCE_NAME + '/passivbot_err.log.old')) return true;
     if (runEditorAdapter.isV8 && value.indexOf('BotBackup:' + INSTANCE_NAME + ':8:') === 0) return true;
+    if (runEditorAdapter.metadataDriven) {
+      return value.indexOf('BotBackup:' + INSTANCE_NAME + ':' + runtimeNumber + ':') === 0
+        || (value.indexOf('pb' + runtimeNumber + '/logs/') === 0 && value.indexOf(INSTANCE_NAME) >= 0);
+    }
     return value.indexOf((runEditorAdapter.isV8 ? 'pb8/logs/' : 'pb7/logs/')) === 0 && value.indexOf(INSTANCE_NAME) >= 0;
   }
 
@@ -3598,7 +3751,7 @@ async function openLogPanel() {
         if (viewHost === 'local') return undefined;
         return remoteBotLogServices(viewHost, state).indexOf(item) >= 0 ? svc : null;
       },
-      restartHandler: runEditorAdapter.isV8 ? function() {
+      restartHandler: runEditorAdapter.isV8 || runEditorAdapter.metadataDriven ? function() {
         return apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/restart', {method: 'POST'})
           .then(async function(response) {
             var data = await response.json().catch(function() { return {}; });
@@ -3615,7 +3768,7 @@ async function openLogPanel() {
 
   badge.textContent = 'searching...';
   badge.className = 'disabled';
-  if (runEditorAdapter.isV8) {
+  if (usesSmartLog) {
     apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/log-smart?lines=1')
     .then(function(r) { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
     .then(function(data) {
@@ -3800,6 +3953,7 @@ async function applyRunFilters() {
 });
 
 function syncBotInputToJson(side) {
+  if (runEditorAdapter.metadataDriven) return;
   var jsonEl = document.getElementById('f-' + side + '-json');
   var obj;
   try { obj = JSON.parse(jsonEl.value); } catch (e) { obj = {}; }
@@ -4082,11 +4236,15 @@ async function refreshCoinStatuses(exchange, requestSeq) {
       var status = data.statuses[identifier];
       if (status && status.display) pb8MarketLabels[identifier] = status.display;
     });
-    if (runEditorAdapter.isV8) coinOvSetCoins(allSymbols, pb8MarketLabels);
+    if (runEditorAdapter.isV8 || runEditorAdapter.metadataDriven) coinOvSetCoins(allSymbols, pb8MarketLabels);
     var applyAnchor = captureRawEditorAnchor();
+    var pristineCoins = runEditorAdapter.metadataDriven
+      ? runEditorAdapter.pristineCoinSelections(getMultiselectValues)
+      : null;
     wrapIds.forEach(function(wrapId) {
       applyMultiselectCoinStatus(wrapId, data.statuses || {});
     });
+    if (pristineCoins) runEditorAdapter.rebaseCoinSelections(pristineCoins, getMultiselectValues);
     restoreRawEditorAnchor(applyAnchor);
   } catch (e) {
     if (requestSeq != null && requestSeq !== _symbolsAndTagsLoadSeq) return;
@@ -4167,6 +4325,7 @@ async function calculateBalance() {
   }
 
   var config = collectConfig();
+  if (runEditorAdapter.metadataDriven) config = runEditorAdapter.balanceCalcConfig(config);
   try {
     var data = await window.PBGuiEditorShared.requestBalanceCalculation({
       apiBase: API_BASE,
@@ -4229,6 +4388,82 @@ async function calculateBalance() {
 /* ─── Init ─────────────────────────────────────────────────── */
 bindStructuredEditorSync();
 _editorInitPromise = init();
+/* PB9 navigation stores UI context only; config drafts stay in memory. */
+(function () {
+  if (!runEditorAdapter.metadataDriven) return;
+  var alive = true, timer = null, controller = null, viewTimer = null;
+  function edited() { dirty = true; _runEditGeneration += 1; }
+  var content = document.getElementById('main-content');
+  content.addEventListener('input', edited, true);
+  content.addEventListener('change', edited, true);
+  content.addEventListener('mousedown', function (event) {
+    if (event.target.closest('.ms-option,.coin-picker-row')) edited();
+  }, true);
+  content.addEventListener('click', function (event) {
+    if (event.target.closest('#coin-overrides-container button')) edited();
+  }, true);
+  var key = function () { return 'pbgui:run:v9:editor:' + (INSTANCE_NAME || 'new'); };
+  function saveView() {
+    var main = document.getElementById('main-content');
+    try {
+      sessionStorage.setItem(key(), JSON.stringify({
+        scroll: main ? main.scrollTop : 0,
+        open: Array.from(document.querySelectorAll('.expander.open[id]')).map(function (el) { return el.id; })
+      }));
+    } catch (error) { /* Storage can be disabled by the browser. */ }
+  }
+  function restoreView() {
+    var state;
+    try { state = JSON.parse(sessionStorage.getItem(key()) || 'null'); } catch (error) { return; }
+    if (!state || !Array.isArray(state.open)) return;
+    document.querySelectorAll('.expander[id]').forEach(function (el) {
+      el.classList.toggle('open', state.open.indexOf(el.id) >= 0);
+    });
+    var main = document.getElementById('main-content');
+    if (main && Number.isFinite(state.scroll)) main.scrollTop = state.scroll;
+  }
+  async function update() {
+    if (!alive || controller || document.hidden || IS_NEW === 'true' || !INSTANCE_NAME || dirty || _configLoadFailed) return;
+    var snapshot = cfg;
+    controller = new AbortController();
+    var mine = controller;
+    try {
+      var response = await apiFetch('/instances/' + encodeURIComponent(INSTANCE_NAME) + '/config', {signal: mine.signal});
+      if (!alive || dirty || cfg !== snapshot) return;
+      if (response.status === 404) {
+        _configLoadFailed = true;
+        document.getElementById('btn-save').disabled = true;
+        toast('This PB9 instance no longer exists. Your editor remains open.', 'warn');
+        return;
+      }
+      if (!response.ok) return;
+      var result = await response.json();
+      if (!alive || dirty || cfg !== snapshot || !result.config) return;
+      if (JSON.stringify(result.config) !== JSON.stringify(cfg)) {
+        saveView();
+        cfg = result.config;
+        populateForm();
+        restoreView();
+      }
+    } catch (error) { /* Transient failures retry on the next automatic update. */ }
+    finally { if (controller === mine) controller = null; }
+  }
+  document.addEventListener('click', function (event) {
+    if (event.target.closest('.expander-header')) saveView();
+  });
+  document.getElementById('main-content').addEventListener('scroll', function () {
+    clearTimeout(viewTimer); viewTimer = setTimeout(saveView, 150);
+  });
+  document.addEventListener('visibilitychange', function () { if (!document.hidden) update(); });
+  window.addEventListener('pagehide', function () {
+    alive = false; saveView(); clearTimeout(viewTimer); clearInterval(timer);
+    if (controller) controller.abort();
+  });
+  window.addEventListener('pageshow', function (event) {
+    if (event.persisted) { alive = true; timer = setInterval(update, 10000); update(); }
+  });
+  _editorInitPromise.then(function () { if (alive) { restoreView(); timer = setInterval(update, 10000); } });
+}());
 function visibleRunLogLines(limit) {
   if (!_logPanelOpen || !_runLogViewer || typeof _runLogViewer._q !== 'function') return [];
   var terminal = _runLogViewer._q('terminal');
@@ -4356,8 +4591,8 @@ window.PBGUI_NAV_CONFIG = {
   var _topicCache = {};
 
   /* docsBase strips the router prefix from API_BASE to reach /api */
-  var docsBase = API_BASE.replace(/\/api\/v[78]$/, '');
-  var helpKeyword = runEditorAdapter.isV8 ? 'pbv8 run' : 'pbv7 run';
+  var docsBase = API_BASE.replace(/\/api\/v[789]$/, '');
+  var helpKeyword = runEditorAdapter.helpTopic || (runEditorAdapter.isV8 ? 'pbv8 run' : 'pbv7 run');
 
   function mdToHtml(md) {
     var lines = md.split('\n'), html = '', inPre = false, preBuf = '', inUl = false, inOl = false;
@@ -4527,7 +4762,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   window.PBGUI_HELP_OPENER = function () {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-    window.PBGuiSharedHelp.open(runEditorAdapter.isV8 ? 'pbv8 run' : 'pbv7 run');
+    window.PBGuiSharedHelp.open(runEditorAdapter.helpTopic || (runEditorAdapter.isV8 ? 'pbv8 run' : 'pbv7 run'));
   };
 });
 </script>
