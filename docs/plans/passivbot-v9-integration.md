@@ -1,10 +1,11 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
-Stand: 15. November 2026. Status: Grundlagen einschließlich Welcome-Gegenprüfung,
-Vorlagenadapter, Inline-Validierung und Dokumentgrenze committed; der explizite
-v9-Dateiladepfad, sichere Neuerstellung und Revisionsschutz sind committed;
-die Inline-Validierungs-API ist committed; die sichere Datei-API ist umgesetzt
-und unabhängig geprüft. Die Editor-Oberfläche folgt als nächster Schritt.
+Stand: 15. November 2026. Grundlagen, Schutz der PB7/PB8-Slots, native
+Konfigurationsanbindung und Datei-API sind committed. Der erste testbare
+PB9-JSON-Editor ist umgesetzt, unabhängig geprüft und mit fokussierten
+Offline- und Browserprüfungen abgenommen.
+Wir sind in Schritt 3 (Konfiguration/Editor); strukturierte Parameterformulare,
+Migration und die Backtest-Anbindung sind noch nicht umgesetzt.
 
 ## Vorgehen
 
@@ -550,7 +551,7 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
     ASCII-escaped JSON und kann unterhalb des rohen Body-Limits 422 ablehnen.
     Serial nach den finalen API-Änderungen: **3707**.
 
-14. **Isolierte Datei-API, unabhängig geprüft.** Die authentifizierten Routen
+14. **Isolierte Datei-API, Commit `f8ee013f`.** Die authentifizierten Routen
     `GET /api/pb9/configs`, `POST /configs/load` und `POST /configs/save` nutzen
     den vorhandenen Owner und genau einen Einstellungen-Snapshot. Die Ablage
     ist ausschließlich `PBGDIR/data/configs_v9`. Nur gültige UTF-8-JSON-Basenamen
@@ -587,6 +588,77 @@ Die Regeln zur Auswahl und Aufzeichnung vollständiger Testsuiten gelten weiter.
     Veröffentlichung bestätigt Erfolg trotz Stop; nachträglicher Abbruch rollt
     die Datei nicht zurück. Serial nach finalen API-/Startcode-Edits: **3708**.
 
+15. **Erster testbarer JSON-Editor, geprüft und commitfähig.** Unter **PBv9 → Config
+    Editor** führt das reale gemeinsame Menü zur authentifizierten, montierten
+    `GET /api/pb9/main_page`. Die neue Seite nutzt den gemeinsamen Sidebar-Shell,
+    Keyboard-/Pointer-Resize und Guide. `POST /runtime/paths` speichert nur das
+    eigene PB9-Paar über den vorhandenen atomaren INI-Schreiber mit Slot-Trennung.
+    Native Erkennung/Git erhält das Owner-Stop-Flag; ein Stop während dieser
+    Prüfung verhindert die INI-Veröffentlichung. INI-Eingabefehler sind feste
+    422-Antworten; Prozentzeichen in Runtime-Pfaden bleiben vorerst unsupported.
+
+    Der Editor lädt native authored Vorlagen oder gespeicherte Konfigurationen,
+    bearbeitet vollständiges Raw JSON, validiert ausdrücklich und erstellt oder
+    aktualisiert Dateien über die bestehende Revisionsgrenze. Python-generierter
+    `config_text` erhält auch Integer über dem JavaScript-Sicherheitsbereich im
+    Textfeld. JSON-Anfragen enthalten den ursprünglichen Raw-Text, damit doppelte
+    Schlüssel nicht im Browser verschwinden. Rückgaben ergänzter nativer Defaults
+    werden nicht in das Dokument übernommen. Speicherung verwendet vier Leerzeichen
+    und ursprüngliche Root-GUI-Metadaten am Ende. Config-Inhalte liegen ausschließlich
+    im aktuellen Seitenspeicher, nie in Browser-Storage oder Navigationsparametern.
+
+    Dateiauswahl, Suche und geöffnetes Runtime-Panel werden als nicht geheime
+    Navigation in der URL gehalten. Automatische Prüfungen bei Sichtbarkeit,
+    alle zehn Sekunden und nach Rückkehr erhalten Entwürfe, Fokus, Auswahl und
+    Scrollposition. Unveränderte Dateien verwenden `POST /configs/revision`:
+    maximal 1 MiB No-Follow-Lesen plus SHA-256, ohne Native/Git. Nur Änderungen
+    sauberer Dateien lösen einen erneuten nativen Load aus. Derselbe abgelehnte
+    Stand wird nicht in jedem Intervall erneut nativ validiert. Generationen und
+    Pagehide-/Pageshow-Bereinigung schützen vor verspäteten Antworten und Timern.
+
+    Claudes erste vier P2-Befunde zu falschem Konfliktziel, Restart-409, fehlender
+    Bestätigung nach Save und nativer Hintergrundlast sind korrigiert. Auch sein
+    weiterer P2 zum endlosen Abgleich nicht angekommener Saves ist korrigiert:
+    unbekannte Ergebnisse werden ausschließlich lesend geprüft; Abweichung oder
+    fehlender Zielname beendet den Abgleich und lässt einen bewussten, weiterhin
+    revisionsgeschützten Versuch zu. 401/403 sind keine unklaren Schreibausgänge.
+    Ein reiner Backend-Abgleich unter `POST /configs/reconcile` vergleicht die
+    ursprünglichen Werte mit Python-JSON (sortierte Schlüssel, exakte Integer
+    und Typen), niemals über gerundete JavaScript-Zahlen. Er liest einmal bis
+    1 MiB ohne Native/Git/Schreibzugriff und bindet Ergebnis, SHA-256 und bei
+    Übereinstimmung `config_text` an dieselben Bytes. Damit startet auch die
+    Save-Bestätigung keinen zusätzlichen nativen Helper.
+    Neuere Texte bleiben erhalten. Publizierte Saves mit I/O-Bestätigungsfehler
+    behalten eine Warnung; es gibt keine automatischen Save-Wiederholungen.
+
+    Isolierte Browsertests nutzen echte Menü-/Guide-/Help-Wege sowie alle lokalen
+    Assets, ohne Screenshots, Runtime-Installation oder Produktionsdaten. Geprüft
+    sind Root/Mount, Create/Load/Update/Reload, Konflikte, neuere Eingaben, Native-
+    freie unveränderte Revisionen, ausgefallene Save-Antworten und Dateinamen-/Layout-
+    Grenzen. Der nächste Schritt nach dieser Vorschau braucht eine neue Aufgabe:
+    strukturierte v9-Felder und Migration bzw. lokale Backtests. Die Dauerfreigabe
+    endet mit dem abgeschlossenen Editor-Commit; Push/Installationen/Remote-Aktionen
+    wurden nicht ausgeführt. Abschließender Claude-Review (Fable 5.2 / medium):
+    „commit-ready, no blockers found“, rein lesend ohne eigene Tests. Seine
+    nichtblockierenden Hinweise zum überflüssigen JS-Fallback, selten dauerhaft
+    nicht lesbaren Bestätigungsdateien und normalisierter Textdarstellung sind
+    bekannt; die Oberfläche behauptet keine native Validierung durch Abgleich.
+
+    Fokussiert offline geprüft, ohne vollständige Testsuite:
+    - Editor/Navigation, API/Auth/Restart, PB9-Runtime und Guide-Abdeckung:
+      **258 passed in 47.69s**, eine DeprecationWarning im ASGI-Mount-Test.
+    - Native Fixture-Bridge/Stop-Signale, Storage/Revisionen, Locks und private
+      Dateifunktionen: **299 passed in 26.53s**.
+    - PB7/PB8/Welcome-Verträge: **319 passed, 2 skipped in 4.22s**.
+    - Help-/Notifications-Menü und Cache-Version: **41 passed in 42.50s**.
+    - Gemeinsame Sidebar, Editorbreiten und Pointer-/Tastaturbedienung:
+      **4 passed, 58 deselected in 1.68s**.
+    Insgesamt **921 bestanden, 2 übersprungen** in disjunkten Fokusgruppen.
+    Die Tests verwenden temporäre Daten, abgefangene Browser-Anfragen und
+    Fixture-Module. Echte v9-/Rust-Abnahme bleibt Voraussetzung einer separat
+    eingerichteten Installation. API-Serial nach finalen Startcode-Änderungen:
+    **3709**. Kein produktiver Server oder Bot wurde neu gestartet, kein Push ausgeführt.
+
 Die bestehenden Guard-/Installer-Wege prüfen bereits vor dem Checkout.
 Playbooks rufen den Guard aus dem PBGui-Checkout auf; eine einzelne kopierte
 Guard-Datei wurde bei der Quellsuche nicht gefunden. Die neu importierten
@@ -620,9 +692,10 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
   einen bestehenden Konflikt erneut melden. Frei angegebene Interpreter
   außerhalb von bin/Scripts ergeben bei aktiver PB9-Reservierung den Code
   `other_slot_path_invalid`, statt eine Env-Trennung zu behaupten.
-- Vor API-/UI-Anbindung: Interpolationsfehler bei Prozentzeichen in Pfaden
-  ebenfalls auf stabile Fehlercodes abbilden; aktuell bleibt die INI unverändert,
-  die ConfigParser-Ausnahme ist aber nicht PB9RuntimePathError.
+- Prozentzeichen in Runtime-Pfaden bleiben vom INI-Schreiber ausgeschlossen.
+  Die Editor-API bildet dessen Eingabefehler jetzt auf `runtime_paths_invalid` ab;
+  die INI bleibt unverändert. Unterstützung benötigt eine konsistente Behandlung
+  der vorhandenen Raw-Pfad-/Konfliktprüfungen.
 - Git-Umgebungsbereinigung im Guard; der bisherige Ablauf bleibt hier erhalten.
 - Bei breiterer Verwendung des Klassifikators: stabile Fehlercodes und klare
   Ablehnungsregel. Generation/Commit allein sind bei Fehlern kein Erfolgsnachweis.
@@ -630,11 +703,10 @@ API-Start importiert wird, bleibt die Serial für diesen Schritt unverändert.
 - Vollständiger Dirty-Status für Backtest-Provenienz; der Klassifikator belegt
   nur die beiden Metadatendateien. Dynamische Neubindung wird nicht vollständig
   durch die AST-Deklarationsprüfung ausgeschlossen.
-- Für native Config-Vorbereitung und Speichern zunächst `clean_config`,
-  `strip_config_metadata` und `src/config/universe.py` am gewählten v9-Ref
-  prüfen; autorisierte Sparse-Form und Metadaten müssen erhalten bleiben.
-- Vor der API-Anbindung des Template-Adapters: Inflight-/Shutdown-Besitzer und
-  SIGCHLD-Invariante sicherstellen. Entkommene eigene Sessions werden nicht
+- Bei weiteren v9-Refs die native Vorbereitung und Datei-/Symbolquellen erneut
+  prüfen; die aktuelle Sparse-/Metadatengrenze wurde am dokumentierten Ref geprüft.
+- Der API-Owner samt Stop-/Shutdown-Bereinigung ist umgesetzt; die normale
+  SIGCHLD-Invariante bleibt Voraussetzung. Entkommene eigene Sessions werden nicht
   beendet, beenden den Aufruf aber spätestens an der Deadline. Rohes Schreiben
   auf fd 1 kann das Protokoll verwerfen; echte Rust-Integration bleibt zu prüfen.
   Striktes NaN/Infinity-Parsing im Parent und Abbildung seltener

@@ -34,7 +34,8 @@ def test_pb9_routes_are_mounted_with_shared_auth() -> None:
     import httpx
 
     expected = {("/api/pb9/runtime", "GET"), ("/api/pb9/template", "POST"), ("/api/pb9/validate", "POST"),
-                ("/api/pb9/configs", "GET"), ("/api/pb9/configs/load", "POST"), ("/api/pb9/configs/save", "POST")}
+                ("/api/pb9/configs", "GET"), ("/api/pb9/configs/load", "POST"), ("/api/pb9/configs/save", "POST"), ("/api/pb9/configs/revision", "POST"), ("/api/pb9/configs/reconcile", "POST"),
+                ("/api/pb9/runtime/paths", "POST"), ("/api/pb9/main_page", "GET")}
     found = set()
     # FastAPI can defer included-router expansion in app.routes. Check auth at
     # the owning router, then exercise actual prefixed dispatch without startup.
@@ -48,7 +49,7 @@ def test_pb9_routes_are_mounted_with_shared_auth() -> None:
                                      base_url="http://fixture") as client:
             for path, method in expected:
                 response = await client.request(method, path)
-                assert response.status_code == 401
+                assert response.status_code in ((303, 401) if path.endswith("/main_page") else (401,))
                 assert response.headers["cache-control"] == "no-store"
 
     asyncio.run(exercise())

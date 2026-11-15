@@ -737,6 +737,9 @@
       { page: 'v8_optimize',          icon: '&#9881;',   label: 'Optimize'          },
       { page: 'v8_strategy_explorer', icon: '&#128065;', label: 'Strategy Explorer' },
       { page: 'v8_pareto_explorer',   icon: '&#9733;',   label: 'Pareto Explorer'   }
+    ]},
+    { id: 'pbv9', label: 'PBv9', items: [
+      { page: 'v9_editor', icon: '&#9998;', label: 'Config Editor' }
     ]}
   ];
 
@@ -1829,13 +1832,14 @@
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
     'system_storage':     '/api/storage/main_page',
-    'help':               '/app/help.html?v=1781',
+    'help':               '/app/help.html?v=1782',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',
     'v7_pareto_explorer': '/api/pareto-explorer/main_page',
     'v7_strategy_explorer': '/api/strategy-explorer/main_page',
     'info_balance_calc':  '/api/balance-calc/main_page',
+    'v9_editor':          '/api/pb9/main_page',
     'v8_run':             '/api/v8/main_page',
     'v8_backtest':        '/api/backtest-v8/main_page',
     'v8_optimize':        '/api/optimize-v8/main_page',
@@ -1869,6 +1873,7 @@
     'v7_pareto_explorer':          '37_pareto_explorer',
     'v7_strategy_explorer':        '00_strategy_explorer_help',
     'info_balance_calc':           '38_balance_calc',
+    'v9_editor':                   '52_pbv9_editor',
     'v8_run':                      '44_pbv8_run',
     'v8_backtest':                 '42_pbv8_backtest',
     'v8_optimize':                 '43_pbv8_optimize',

@@ -189,6 +189,55 @@ def _parse_document(data: bytes) -> dict:
     raise PB9ConfigError("invalid_document") from None
 
 
+def inspect_pb9_config_revision(name: str, context: PB9FileContext) -> dict:
+    """Read bounded exact-byte provenance without native validation or imports."""
+    error = None
+    try:
+        root = _approved_root(context)
+        filename = _config_name(name)
+        data = _read_config_bytes(root, filename)
+        _check_cancel(context)
+        return {"revision": hashlib.sha256(data).hexdigest()}
+    except FileNotFoundError:
+        error = "config_file_not_found"
+    except (OSError, ValueError, RuntimeError) as exc:
+        error = exc.error_codes[0] if isinstance(exc, PB9ConfigError) else "config_file_unavailable"
+    _log(SERVICE, "PB9 revision read failed", level="WARNING", meta={"error_codes": [error]})
+    raise PB9ConfigError(error) from None
+
+
+def reconcile_pb9_config_file(name: str, document: dict, context: PB9FileContext) -> dict:
+    """Compare stored authored values exactly, without JavaScript number coercion.
+
+    This read-only check neither validates nor executes native code and never
+    acknowledges that a write occurred; it reports whether the requested values
+    currently exist. Revision and text belong to the same bounded source read.
+    """
+    error = None
+    try:
+        root = _approved_root(context)
+        filename = _config_name(name)
+        if not isinstance(document, dict):
+            raise PB9ConfigError("invalid_document")
+        data = _read_config_bytes(root, filename)
+        stored = _parse_document(data)
+        _check_cancel(context)
+        options = {"sort_keys": True, "ensure_ascii": False, "allow_nan": False}
+        matches = json.dumps(stored, **options) == json.dumps(document, **options)
+        result = {"matches": matches, "revision": hashlib.sha256(data).hexdigest()}
+        if matches:
+            result["config_text"] = json.dumps(stored, ensure_ascii=False, indent=4, allow_nan=False) + "\n"
+        return result
+    except FileNotFoundError:
+        error = "config_file_not_found"
+    except OSError:
+        error = "config_file_unavailable"
+    except (ValueError, RuntimeError, TypeError) as exc:
+        error = exc.error_codes[0] if isinstance(exc, PB9ConfigError) else "invalid_document"
+    _log(SERVICE, "PB9 saved-value check failed", level="WARNING", meta={"error_codes": [error]})
+    raise PB9ConfigError(error) from None
+
+
 def load_pb9_config_file(name: str | Path, context: PB9FileContext, *,
                          verbose: bool = False, neutralize_added: bool = False,
                          with_revision: bool = False) -> dict:

@@ -2,6 +2,18 @@
 
 ## Development
 
+- Add the first PB9 JSON config editor under **PBv9 → Config Editor** with
+  separate runtime-path settings, native authored templates, inline validation,
+  private revision-protected save/open and automatic file/status updates.
+  Preserve newer edits, exact large integers and raw duplicate-key rejection;
+  reconcile uncertain writes without automatic save retries. Unchanged files
+  use a bounded revision-only read rather than native validation on each poll.
+  Save reconciliation compares exact authored values on the server and performs
+  no native validation or writes.
+  Restore file/search/runtime-panel navigation, reuse the shared sidebar and
+  Guide, and include matching English/German documentation. This preview needs
+  a separately installed PB9 runtime for native operations and starts no bot jobs.
+
 - Add an authenticated PB9 config library with bounded listing, validated loads
   and private atomic saves under `data/configs_v9`. Creation is exclusive;
   updates require the exact loaded revision. Keep native work and transactions

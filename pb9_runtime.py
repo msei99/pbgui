@@ -277,7 +277,7 @@ def check_slot_change(parser: configparser.ConfigParser, changed_keys: set[tuple
         raise PB9RuntimePathError(status)
 
 
-def save_pb9_runtime_paths(pb9dir: str | Path | None, pb9venv: str | Path | None) -> dict:
+def save_pb9_runtime_paths(pb9dir: str | Path | None, pb9venv: str | Path | None, *, cancel_event=None) -> dict:
     """Validate and save both PB9 paths in one locked, atomic INI transaction.
 
     Two empty values explicitly remove both keys. Otherwise the static layout
@@ -293,6 +293,8 @@ def save_pb9_runtime_paths(pb9dir: str | Path | None, pb9venv: str | Path | None
 
     def mutate(parser: configparser.ConfigParser) -> dict:
         """Check separation before publishing either of the new path values."""
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("PB9 path update cancelled")
         if clear:
             if parser.has_section("main"):
                 for key in ("pb9dir", "pb9venv"):
@@ -300,7 +302,10 @@ def save_pb9_runtime_paths(pb9dir: str | Path | None, pb9venv: str | Path | None
             return _empty_status()
         other_slots = {key: parser.get("main", key) if parser.has_option("main", key) else ""
                        for key in _SLOT_KEYS}
-        status = inspect_pb9_runtime(pb9dir, pb9venv, other_slots)
+        status = (inspect_pb9_runtime(pb9dir, pb9venv, other_slots, cancel_event=cancel_event)
+                  if cancel_event is not None else inspect_pb9_runtime(pb9dir, pb9venv, other_slots))
+        if cancel_event is not None and cancel_event.is_set():
+            raise RuntimeError("PB9 path update cancelled")
         if not status["detected"]:
             raise PB9RuntimePathError(status)
         if not parser.has_section("main"):

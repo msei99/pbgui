@@ -384,3 +384,24 @@ def test_owned_inspection_bounds_git_and_forwards_cancellation(layout, monkeypat
     status = pb9_runtime.inspect_pb9_runtime(layout.source, layout.python, cancel_event=cancel)
     assert status["detected"] is True
     assert calls == [{"git_timeout": 1, "cancel_requested": cancel.is_set}]
+
+
+def test_owned_path_save_cancelled_after_inspection_never_persists(layout, settings_path, monkeypatch):
+    """A stop during static inspection leaves both stored slot settings unchanged."""
+    import threading
+
+    before = settings_path.read_bytes()
+    cancel = threading.Event()
+    actual = pb9_runtime.inspect_pb9_runtime
+
+    def inspect(*args, **kwargs):
+        """Use real temporary layout checks, then stop before INI publication."""
+        assert kwargs["cancel_event"] is cancel
+        result = actual(*args, **kwargs)
+        cancel.set()
+        return result
+
+    monkeypatch.setattr(pb9_runtime, "inspect_pb9_runtime", inspect)
+    with pytest.raises(RuntimeError, match="PB9 path update cancelled"):
+        pb9_runtime.save_pb9_runtime_paths(layout.source, layout.python, cancel_event=cancel)
+    assert settings_path.read_bytes() == before

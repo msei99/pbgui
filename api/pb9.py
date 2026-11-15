@@ -9,19 +9,21 @@ import math
 import re
 import signal
 import threading
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.routing import APIRoute
 
 from api.auth import SessionToken, require_auth
 from logging_helpers import human_log as _log
 from pb9_config import (MAX_DOCUMENT_BYTES, PB9CancelSignal, PB9ConfigError,
                         load_pb9_template, validate_pb9_document)
-from pb9_runtime import inspect_pb9_runtime
+from pb9_runtime import PB9RuntimePathError, inspect_pb9_runtime, save_pb9_runtime_paths
 from pbgui_purefunc import PBGDIR, load_ini_snapshot
 from pb7_config import load_pb7_config, save_pb7_config
 from pb9_config_library import config_library, config_name, list_configs, require_config
+from pb9_config_storage import inspect_pb9_config_revision, reconcile_pb9_config_file
 
 
 SERVICE = "PB9Config"
@@ -30,7 +32,7 @@ MAX_VALIDATION_BODY_BYTES = MAX_DOCUMENT_BYTES
 MAX_JSON_DEPTH = 64
 _VALIDATION_ERRORS = frozenset({"invalid_request", "invalid_document", "invalid_config",
                                 "config_version_mismatch", "external_reference_rejected",
-                                "native_config_rejected", "invalid_config_name", "invalid_revision"})
+                                "native_config_rejected", "invalid_config_name", "invalid_revision", "runtime_paths_invalid"})
 _PATH_KEYS = ("pb9dir", "pb9venv", "pb7dir", "pb7venv", "pb8dir", "pb8venv")
 
 
@@ -134,9 +136,27 @@ def _operation(operation: str, cancel_event: PB9CancelSignal, payload: bytes | N
     if cancel_event.is_set():
         raise PB9ConfigError("helper_cancelled")
     document = _validation_document(payload) if operation == "validate" else None
+    if operation == "runtime_paths":
+        values = _request_envelope(payload, {"pb9dir", "pb9venv"})
+        if any(not isinstance(value, str) for value in values.values()):
+            raise PB9ConfigError("runtime_paths_invalid")
+        try:
+            return save_pb9_runtime_paths(values["pb9dir"], values["pb9venv"], cancel_event=cancel_event)
+        except PB9RuntimePathError:
+            raise PB9ConfigError("runtime_paths_invalid") from None
+        except (ValueError, configparser.Error):
+            raise PB9ConfigError("runtime_paths_invalid") from None
+        except RuntimeError:
+            if cancel_event.is_set():
+                raise PB9ConfigError("helper_cancelled") from None
+            raise
     envelope = None
-    if operation == "config_load":
+    if operation in {"config_load", "config_revision"}:
         envelope = _request_envelope(payload, {"name"})
+    elif operation == "config_reconcile":
+        envelope = _request_envelope(payload, {"name", "config"})
+        if not isinstance(envelope["config"], dict):
+            raise PB9ConfigError("invalid_document")
     elif operation == "config_save":
         envelope = _request_envelope(payload, {"name", "config", "revision"})
         if not isinstance(envelope["config"], dict):
@@ -150,15 +170,21 @@ def _operation(operation: str, cancel_event: PB9CancelSignal, payload: bytes | N
     if cancel_event.is_set():
         raise PB9ConfigError("helper_cancelled")
     other_slots = {key: paths[key] for key in _PATH_KEYS[2:]}
-    if operation in {"config_list", "config_load", "config_save"}:
+    if operation in {"config_list", "config_load", "config_revision", "config_reconcile", "config_save"}:
         try:
             create = operation == "config_save" and envelope["revision"] is None
             with config_library(PBGDIR, paths, cancel_event, create=create) as context:
                 if operation == "config_list":
                     return {"configs": list_configs(context)}
+                if operation == "config_revision":
+                    return inspect_pb9_config_revision(envelope["name"], context)
+                if operation == "config_reconcile":
+                    return reconcile_pb9_config_file(envelope["name"], envelope["config"], context)
                 if operation == "config_load":
                     name = require_config(context, envelope["name"])
-                    return load_pb7_config(name, pb9_context=context, pb9_with_revision=True)
+                    loaded = load_pb7_config(name, pb9_context=context, pb9_with_revision=True)
+                    loaded["config_text"] = json.dumps(loaded["config"], ensure_ascii=False, indent=4, allow_nan=False) + "\n"
+                    return loaded
                 save_pb7_config(envelope["config"], envelope["name"], pb9_context=context,
                                 pb9_expected_revision=envelope["revision"])
                 return {"saved": True, "name": envelope["name"]}
@@ -174,7 +200,9 @@ def _operation(operation: str, cancel_event: PB9CancelSignal, payload: bytes | N
             raise PB9ConfigError("helper_cancelled")
         return result
     if operation == "template":
-        return load_pb9_template(paths["pb9dir"], paths["pb9venv"], other_slots, cancel_event=cancel_event)
+        result = load_pb9_template(paths["pb9dir"], paths["pb9venv"], other_slots, cancel_event=cancel_event)
+        result["config_text"] = json.dumps(result["config"], ensure_ascii=False, indent=4, allow_nan=False) + "\n"
+        return result
     if operation == "validate":
         result = validate_pb9_document(document, paths["pb9dir"], paths["pb9venv"], other_slots,
                                        cancel_event=cancel_event)
@@ -199,7 +227,7 @@ def _worker(operation: str, future: Future, cancel_event: PB9CancelSignal, paylo
     except BaseException as exc:
         code = exc.error_codes[0] if isinstance(exc, PB9ConfigError) else "api_operation_failed"
         expected = _VALIDATION_ERRORS | {"config_file_not_found", "config_file_exists", "config_revision_conflict"}
-        level = "WARNING" if operation in {"validate", "config_save", "config_load"} and code in expected else "ERROR"
+        level = "WARNING" if operation in {"validate", "config_save", "config_load", "config_revision", "config_reconcile", "runtime_paths"} and code in expected else "ERROR"
         _log(SERVICE, "PB9 API operation failed", level=level,
              meta={"operation": operation, "error_codes": [code]})
         future.set_exception(PB9ConfigError(code))
@@ -396,7 +424,7 @@ async def _execute(request: Request, operation: str, payload: bytes | None = Non
     except HTTPException:
         raise
     except PB9ConfigError as exc:
-        if operation in {"validate", "config_save", "config_load"} and exc.error_codes[0] in _VALIDATION_ERRORS:
+        if operation in {"validate", "config_save", "config_load", "config_revision", "config_reconcile", "runtime_paths"} and exc.error_codes[0] in _VALIDATION_ERRORS:
             raise _error(422, exc.error_codes[0], "PB9 config was rejected") from None
         if exc.error_codes[0] in {"config_file_exists", "config_revision_conflict"}:
             raise _error(409, exc.error_codes[0], "PB9 config changed; load its current revision") from None
@@ -482,3 +510,33 @@ async def config_load(request: Request, session: SessionToken = Depends(require_
 async def config_save(request: Request, session: SessionToken = Depends(require_auth)):
     """Create exclusively or update an exact revision; never migrate or overwrite implicitly."""
     return await _file_payload(request, "config_save", MAX_VALIDATION_BODY_BYTES)
+
+
+@router.post("/configs/revision")
+async def config_revision(request: Request, session: SessionToken = Depends(require_auth)):
+    """Check exact-byte changes without launching native code on editor polling."""
+    return await _file_payload(request, "config_revision", 4096)
+
+
+@router.post("/configs/reconcile")
+async def config_reconcile(request: Request, session: SessionToken = Depends(require_auth)):
+    """Compare exact authored values after an acknowledged or uncertain Save."""
+    return await _file_payload(request, "config_reconcile", MAX_VALIDATION_BODY_BYTES)
+
+
+@router.post("/runtime/paths")
+async def runtime_paths(request: Request, session: SessionToken = Depends(require_auth)):
+    """Explicitly configure the separated PB9 slot through its atomic INI writer."""
+    return await _file_payload(request, "runtime_paths", 4096)
+
+
+@router.get("/main_page", response_class=HTMLResponse)
+def editor_page(request: Request, session: SessionToken = Depends(require_auth)):
+    """Render the productive PB9 editor through the trusted application mount."""
+    from api.page_templates import render_page_urls
+
+    frontend = Path(__file__).resolve().parent.parent / "frontend"
+    html = (frontend / "pb9_editor.html").read_text(encoding="utf-8")
+    html = render_page_urls(request, html, "/api/pb9")
+    html = html.replace("%%NAV_HASH%%", str((frontend / "pbgui_nav.js").stat().st_mtime_ns))
+    return HTMLResponse(html, headers={"Cache-Control": "no-store"})

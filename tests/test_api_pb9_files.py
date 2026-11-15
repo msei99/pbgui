@@ -60,7 +60,10 @@ def test_file_api_create_load_update_conflict_and_private_library(library):
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     loaded = response.json()
-    assert loaded == {"config": _document(), "revision": hashlib.sha256(original).hexdigest()}
+    assert loaded["config"] == _document()
+    assert loaded["revision"] == hashlib.sha256(original).hexdigest()
+    import json
+    assert json.loads(loaded["config_text"]) == _document()
     for revision in (None, "0" * 64):
         response = _post(library, "save", {"name": "example.json", "config": _document("Rejected"), "revision": revision})
         assert response.status_code == 409
@@ -236,3 +239,57 @@ def test_file_api_stop_after_publication_returns_success_and_keeps_file(library,
     assert response.json() == {"saved": True, "name": "test.json"}
     assert (library.root / "test.json").exists()
     assert library.app.state.pb9_requests.active == 0
+
+
+def test_revision_endpoint_hashes_exact_bytes_without_native_work(library, monkeypatch):
+    """An idle editor check never validates, imports native code or starts subprocesses."""
+    import pb9_config_storage
+
+    library.root.mkdir(parents=True, mode=0o700)
+    data = b'{ "config_version" : "v9.0.0", "pbgui":{} }\n'
+    (library.root / "test.json").write_bytes(data)
+
+    def forbidden(*args, **kwargs):
+        """Only bounded filesystem reads and hashing may happen for revisions."""
+        pytest.fail("revision polling reached native validation")
+
+    monkeypatch.setattr(pb9_config_storage, "validate_pb9_document", forbidden)
+    response = _post(library, "revision", {"name": "test.json"})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {"revision": hashlib.sha256(data).hexdigest()}
+    assert not library.native
+
+
+@pytest.mark.parametrize("stored,submitted,matches", [
+    ({"n": 9007199254740992}, {"n": 9007199254740993}, False),
+    ({"n": True}, {"n": 1}, False), ({"n": 1.0}, {"n": 1}, False),
+    ({"n": 9007199254740993}, {"n": 9007199254740993}, True),
+    ({"a": 1, "b": {"x": 2, "y": 3}}, {"b": {"y": 3, "x": 2}, "a": 1}, True),
+])
+def test_reconcile_preserves_exact_json_numbers_and_types_without_native(library, monkeypatch, stored, submitted, matches):
+    """Server-side comparison cannot confuse adjacent large ints, booleans or floats."""
+    import json
+    import pb9_config_storage
+
+    library.root.mkdir(parents=True, mode=0o700)
+    raw = json.dumps(stored).encode()
+    (library.root / "test.json").write_bytes(raw)
+
+    def forbidden(*args, **kwargs):
+        """A value comparison is never a native validation or write operation."""
+        pytest.fail("saved-value reconciliation invoked native code")
+
+    monkeypatch.setattr(pb9_config_storage, "validate_pb9_document", forbidden)
+    response = _post(library, "reconcile", {"name": "test.json", "config": submitted})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    result = response.json()
+    assert result["matches"] is matches
+    assert result["revision"] == hashlib.sha256(raw).hexdigest()
+    assert (library.root / "test.json").read_bytes() == raw
+    assert not library.native
+    if matches:
+        assert json.loads(result["config_text"]) == stored
+    else:
+        assert "config_text" not in result

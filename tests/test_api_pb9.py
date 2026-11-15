@@ -564,7 +564,7 @@ def test_validate_rejects_excessive_but_parseable_nesting(endpoint):
 
 def test_response_render_failure_is_fixed_uncached_error(endpoint, monkeypatch):
     """Unexpected adapter output cannot escape as an unguarded render traceback."""
-    monkeypatch.setattr(pb9, "load_pb9_template", lambda *args, **kwargs: {"private": object()})
+    monkeypatch.setattr(pb9, "_operation", lambda *args, **kwargs: {"private": object()})
     response = endpoint.client.post("/api/pb9/template", json={},
                                     headers={"Authorization": "Bearer fixture-auth"})
     assert response.status_code == 503
@@ -572,3 +572,81 @@ def test_response_render_failure_is_fixed_uncached_error(endpoint, monkeypatch):
     assert response.headers["cache-control"] == "no-store"
     assert "private" not in response.text
     assert endpoint.app.state.pb9_requests.active == 0
+
+
+def test_editor_page_uses_authenticated_same_origin_mount(endpoint):
+    """The production HTML has the shared shell, local assets and no injected credentials."""
+    response = endpoint.client.get("/api/pb9/main_page", headers={"Authorization": "Bearer fixture-auth"})
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert 'id="sidebar-resize"' in response.text
+    assert "current:'v9_editor'" in response.text
+    assert "%%" not in response.text
+    assert "fixture-auth" not in response.text
+    assert "fixture-private-ini-value" not in response.text
+    assert '/app/js/pb9_editor.js?v=1' in response.text
+    assert not endpoint.snapshots
+
+
+def test_explicit_runtime_path_write_uses_atomic_slot_writer_without_extra_snapshot(endpoint, monkeypatch):
+    """Only the dedicated settings action can change paths, using its own locked parser."""
+    calls = []
+
+    def save(source, python, *, cancel_event):
+        """Retain the trusted owner's flag without modifying any actual INI."""
+        calls.append((source, python, cancel_event))
+        return {"configured": True, "detected": True, "pb9dir": source, "pb9venv": python}
+
+    monkeypatch.setattr(pb9, "save_pb9_runtime_paths", save)
+    response = endpoint.client.post("/api/pb9/runtime/paths", json={"pb9dir": "/fixture/pb9", "pb9venv": "/fixture/env/bin/python"},
+                                    headers={"Authorization": "Bearer fixture-auth"})
+    assert response.status_code == 200
+    assert response.json()["detected"] is True
+    assert len(calls) == 1
+    assert calls[0][2] is endpoint.app.state.pb9_requests.cancel_signal
+    assert not endpoint.snapshots
+
+
+@pytest.mark.parametrize("body", [{"pb9dir": "/fixture/pb9"}, {"pb9dir": None, "pb9venv": ""},
+                                  {"pb9dir": "", "pb9venv": "", "pb8dir": "/override"}])
+def test_runtime_path_write_rejects_other_keys_and_types(endpoint, body, monkeypatch):
+    """The path writer accepts exactly its own two string settings."""
+    def forbidden(*args, **kwargs):
+        """Invalid envelopes cannot reach persistence."""
+        pytest.fail("invalid path update reached persistence")
+
+    monkeypatch.setattr(pb9, "save_pb9_runtime_paths", forbidden)
+    response = endpoint.client.post("/api/pb9/runtime/paths", json=body,
+                                    headers={"Authorization": "Bearer fixture-auth"})
+    assert response.status_code == 422
+    assert not endpoint.snapshots
+
+
+def test_editor_page_renderer_retains_trusted_mounted_prefix(monkeypatch):
+    """Exercise the actual renderer under ASGI root_path, without browser fixture substitutions."""
+    app = FastAPI(root_path="/mounted")
+    app.include_router(pb9.router, prefix="/api/pb9")
+    monkeypatch.setattr(auth, "validate_token", lambda token: SimpleNamespace(user_id="fixture") if token == "fixture-auth" else None)
+    with TestClient(app) as client:
+        response = client.get("/api/pb9/main_page", headers={"Authorization": "Bearer fixture-auth"})
+    assert response.status_code == 200
+    assert 'window.API_BASE = "/mounted/api/pb9"' in response.text
+    assert 'src="/mounted/app/js/pb9_editor.js?v=1"' in response.text
+    assert 'href="/mounted/app/css/sidebar_layout.css?v=4"' in response.text
+    assert "%%" not in response.text
+
+
+@pytest.mark.parametrize("failure", [ValueError("invalid interpolation fixture-private-value"),
+                                     configparser.InterpolationSyntaxError("pb9dir", "main", "fixture-private-value")])
+def test_runtime_ini_input_errors_are_fixed_and_never_echo_paths(endpoint, monkeypatch, failure):
+    """INI interpolation rejection is an input error without secret-bearing diagnostic text."""
+    def reject(*args, **kwargs):
+        """Model a failed atomic INI mutation before publication."""
+        raise failure
+
+    monkeypatch.setattr(pb9, "save_pb9_runtime_paths", reject)
+    response = endpoint.client.post("/api/pb9/runtime/paths", json={"pb9dir": "/fixture/%bad", "pb9venv": "/fixture/python"},
+                                    headers={"Authorization": "Bearer fixture-auth"})
+    assert response.status_code == 422
+    assert response.headers["x-pbgui-error-codes"] == "runtime_paths_invalid"
+    assert "fixture-private-value" not in response.text

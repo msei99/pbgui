@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>PB9 Config Editor - PBGui</title>
+  <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
+  <link rel="stylesheet" href="/app/css/data_tip.css?v=1">
+  <style>
+    :root { --bg:#0e1117; --bg2:#161c27; --border:#293241; --text:#e2e8f0; --muted:#9aa9bc; --accent:#4da6ff; --sp-lg:20px; --sp-md:12px; }
+    * { box-sizing:border-box; }
+    html,body { height:100%; margin:0; }
+    body { display:flex; flex-direction:column; overflow:hidden; color:var(--text); background:var(--bg); font:14px system-ui,sans-serif; }
+    #topnav { flex-shrink:0; }
+    #page-body { display:flex; flex:1; min-height:0; overflow:hidden; }
+    #main-content { flex:1; min-width:0; min-height:0; overflow:auto; padding:var(--sp-lg); }
+    .editor-shell { display:flex; flex-direction:column; gap:12px; min-height:100%; }
+    .section-title { margin:0; padding-bottom:8px; border-bottom:1px solid var(--border); font-size:18px; }
+    .panel-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+    .form-row { display:grid; grid-template-columns:repeat(auto-fit,minmax(min(100%,260px),1fr)); gap:12px; }
+    .form-group { display:flex; flex-direction:column; gap:4px; min-width:0; }
+    .form-group input { min-width:0; width:100%; }
+    label,.muted { color:var(--muted); }
+    input,textarea,.btn { color:var(--text); background:var(--bg2); border:1px solid var(--border); border-radius:6px; font:inherit; }
+    input,.btn { min-height:32px; padding:6px 10px; }
+    .btn { cursor:pointer; }
+    .btn.primary { border-color:var(--accent); }
+    button:disabled { cursor:default; opacity:.5; }
+    :focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+    #config-json { width:100%; flex:1; min-height:350px; resize:vertical; padding:12px; font:13px/1.5 ui-monospace,monospace; tab-size:4; white-space:pre; }
+    #message { margin:0; min-height:22px; overflow-wrap:anywhere; }
+    #message[data-kind="error"] { color:#fca5a5; }
+    #message[data-kind="success"] { color:#86efac; }
+    #runtime-status,#document-status { overflow-wrap:anywhere; }
+    #runtime-fields { padding:12px 0; }
+    [hidden] { display:none!important; }
+    @media(max-width:760px) { #main-content { padding:var(--sp-md); } #config-json { min-height:300px; } }
+  </style>
+  <link rel="stylesheet" href="/app/css/sidebar_layout.css?v=4">
+  <script src="/app/js/sidebar_resize.js?v=3"></script>
+</head>
+<body>
+  <nav id="topnav"></nav>
+  <div id="page-body">
+    <aside id="sidebar" aria-label="PB9 configurations">
+      <div id="sidebar-sticky">
+        <div id="sidebar-header"><span class="sb-title">PB9 Configs</span></div>
+        <div id="sidebar-toolbar">
+          <button id="new-template" class="sb-btn primary" type="button">New from template</button>
+          <label class="sb-label" for="config-filter">Search configs</label>
+          <input id="config-filter" class="sb-input" type="search" autocomplete="off">
+        </div>
+      </div>
+      <div id="sidebar-inner"></div>
+      <div id="sidebar-resize"></div>
+    </aside>
+    <main id="main-content">
+      <div class="editor-shell">
+        <h1 class="section-title">PB9 Config Editor <span class="muted">Preview</span></h1>
+        <div class="panel-toolbar">
+          <span id="runtime-status" role="status">Checking PB9…</span>
+          <button id="runtime-toggle" class="btn" type="button" aria-expanded="false" aria-controls="runtime-fields">Runtime paths</button>
+        </div>
+        <section id="runtime-fields" hidden aria-label="PB9 runtime paths">
+          <div class="form-row">
+            <div class="form-group"><label for="pb9-source"><span tabindex="0" data-tip="Absolute path to a separate Passivbot v9 checkout.">Source directory</span></label><input id="pb9-source" autocomplete="off" spellcheck="false"></div>
+            <div class="form-group"><label for="pb9-python"><span tabindex="0" data-tip="Absolute path to the Python executable in a separate PB9 virtual environment.">Python interpreter</span></label><input id="pb9-python" autocomplete="off" spellcheck="false"></div>
+          </div>
+          <div class="panel-toolbar"><button id="save-paths" class="btn" type="button">Save paths</button></div>
+        </section>
+        <div class="form-row">
+          <div class="form-group"><label for="config-name">Filename</label><input id="config-name" placeholder="example.json" autocomplete="off" spellcheck="false"></div>
+          <div class="form-group"><label>Document</label><span id="document-status" role="status">No document loaded</span></div>
+        </div>
+        <div class="panel-toolbar">
+          <button id="validate-config" class="btn" type="button">Validate</button>
+          <button id="save-config" class="btn primary" type="button">Save</button>
+          <button id="open-stored" class="btn" type="button" hidden>Open stored version</button>
+        </div>
+        <p id="message" role="status" aria-live="polite"></p>
+        <label for="config-json">Raw JSON</label>
+        <textarea id="config-json" aria-label="PB9 configuration JSON" spellcheck="false" autocomplete="off"></textarea>
+      </div>
+    </main>
+  </div>
+  <script>
+    window.API_BASE = "%%API_BASE%%";
+    window.WS_BASE = "%%WS_BASE%%";
+    window.PBGUI_NAV_CONFIG = {subtitle:'PB9 Config Editor',current:'v9_editor',apiBase:window.API_BASE};
+  </script>
+  <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
+  <script src="/app/js/pbgui_dialogs.js?v=12"></script>
+  <script src="/app/js/data_tip.js?v=1"></script>
+  <script src="/app/js/pb9_editor.js?v=1"></script>
+</body>
+</html>
