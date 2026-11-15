@@ -8,7 +8,8 @@
 <script src="/app/plotly.min.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=12"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=13"></script>
+<script src="/app/js/backtest_v9_editor.js?v=2"></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
   <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
@@ -1112,8 +1113,8 @@ var PBGUI_VERSION = "%%VERSION%%";
 var PBGUI_SERIAL  = "%%SERIAL%%";
 var BACKTEST_VERSION = "%%BACKTEST_VERSION%%";
 var backtestEditorAdapter = window.PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION);
-var BACKTEST_SUBTITLE = backtestEditorAdapter.isV8 ? 'PBv8 BACKTEST' : 'PBv7 BACKTEST';
-var BACKTEST_NAV_CURRENT = backtestEditorAdapter.isV8 ? 'v8_backtest' : 'v7_backtest';
+var BACKTEST_SUBTITLE = backtestEditorAdapter.metadataDriven ? 'PBv9 BACKTEST' : backtestEditorAdapter.isV8 ? 'PBv8 BACKTEST' : 'PBv7 BACKTEST';
+var BACKTEST_NAV_CURRENT = backtestEditorAdapter.metadataDriven ? 'v9_backtest' : backtestEditorAdapter.isV8 ? 'v8_backtest' : 'v7_backtest';
 var backtestShell = null;
 
 /* ════════════════════════════════════════════════
@@ -1123,7 +1124,7 @@ var configs     = [];          // saved backtest configs
 var queueItems  = [];          // queue items from WS
 var _lastQueueHash = '';       // JSON hash of last queue state (skip re-render if unchanged)
 var results     = [];          // backtest results
-var resultsByVersion = { v7: [], v8: [] };
+var resultsByVersion = { v7: [], v8: [], v9: [] };
 var RESULTS_PAGE_SIZE = 0;
 var _resultsLoadGeneration = 0;
 var _selectedResultPaths = new Set();
@@ -1304,7 +1305,7 @@ function availableResultColumns(data, options) {
     if (definition.conditional === 'version') return !!options.showVersion;
     if (definition.conditional === 'strategy') {
       return !!options.showStrategy && data.some(function(item) {
-        return String(item && item.backtest_version || '').toLowerCase() === 'v8';
+        return ['v8', 'v9'].indexOf(String(item && item.backtest_version || '').toLowerCase()) >= 0;
       });
     }
     if (definition.conditional === 'coins') {
@@ -1464,7 +1465,7 @@ function apiFetchFrom(base, path, opts) {
 }
 
 function backtestApiBase(version) {
-  return String(API_BASE || '').replace(/\/backtest-v[78]$/, '/backtest-' + version);
+  return String(API_BASE || '').replace(/\/backtest-v[789]$/, '/backtest-' + version);
 }
 
 function archiveApiBase() {
@@ -1776,6 +1777,11 @@ function selectPanel(id, opts) {
   }
   if(currentPanel==='results'&&id!=='results'){cancelBacktestReads();_resultsLoadGeneration++;}
   currentPanel = id;
+  if (window.PBGuiBacktestV9 && window.PBGuiBacktestV9.active()) {
+    var destination = new URL(window.location.href);destination.searchParams.set('panel', id);
+    if (id !== 'configs') destination.searchParams.delete('config');
+    history.replaceState(null, '', destination);
+  }
   if (id !== 'results' && _resultsEmptyRetryTimer) {
     clearTimeout(_resultsEmptyRetryTimer);
     _resultsEmptyRetryTimer = null;
@@ -1800,7 +1806,7 @@ function selectPanel(id, opts) {
     } else {
       loadResults(new URL(location.href).searchParams.get('result_filter') || '', { keepVisible: results.length > 0 });
     }
-    if(!opts.deferArchivesLoad)loadArchives();
+    if(!opts.deferArchivesLoad && !(window.PBGuiBacktestV9 && window.PBGuiBacktestV9.active()))loadArchives();
   }
   if (id === 'archive' && archives.length === 0) loadArchives();
   if (id === 'legacy') { if (legacyResults.length === 0) loadLegacyResults(); else renderLegacyResults(); }
@@ -2026,18 +2032,18 @@ function renderConfigs() {
   }
   var html = '<table class="tbl"><thead><tr>' +
     thSort('Name', 'name') + thSort('Exchange', 'exchanges') +
-    (backtestEditorAdapter.isV8 ? thSort('Strategy', 'strategy') : '') + thSort('Coins', 'coins') +
+    ((backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven) ? thSort('Strategy', 'strategy') : '') + thSort('Coins', 'coins') +
     thSort('TWE L/S', 'twe_long') + thSort('Start', 'start_date') + thSort('End', 'end_date') +
     thSort('Results', 'results') + thSort('Modified', 'modified') +
     '<th>Actions</th></tr></thead><tbody>';
 
   sorted.forEach(function(c) {
-    var convertAction = backtestEditorAdapter.isV8 ? '' :
+    var convertAction = backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven ? '' :
       '<button class="act-btn convert-v8-btn" data-config-name="' + esc(c.name) + '" title="Convert to V8">V8</button> ';
     html += '<tr data-name="' + esc(c.name) + '">' +
       '<td title="' + esc(c.name) + '">' + esc(c.name) + '</td>' +
       '<td>' + esc(Array.isArray(c.exchanges) ? c.exchanges.join(', ') : c.exchanges) + '</td>' +
-      (backtestEditorAdapter.isV8 ? '<td>' + esc(c.strategy || '-') + '</td>' : '') +
+      ((backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven) ? '<td>' + esc(c.strategy || '-') + '</td>' : '') +
       '<td>' + c.coins + '</td>' +
       '<td>' + fmt(c.twe_long, 2) + ' / ' + fmt(c.twe_short, 2) + '</td>' +
       '<td>' + esc(c.start_date || '—') + '</td>' +
@@ -2093,6 +2099,7 @@ function editConfig(name) {
     if (generation !== editConfig.loadGeneration || currentPanel !== 'configs') return;
 
     if (generation !== editConfig.loadGeneration || currentPanel !== 'configs') return;
+    if (backtestEditorAdapter.metadataDriven) window._nativeConfigRevision = data.revision || null;
     editingConfig = data && data.name ? data.name : name;
     showConfigEditor(editingConfig, (data && data.config) || {}, null, (data && data.param_status) || {});
   }).catch(function(e) { toast('Load failed: ' + e.message, 'err'); });
@@ -2341,6 +2348,7 @@ async function newConfig() {
     console.warn('newConfig: failed to fetch template, using empty defaults', e);
   }
   if (currentPanel !== 'configs') return;
+  if (backtestEditorAdapter.metadataDriven) window._nativeConfigRevision = null;
   editingConfig = '__new__';
   showConfigEditor('', tmpl, null, tmplParamStatus);
 }
@@ -2411,12 +2419,13 @@ async function openInitialBacktestDraftFromUrl() {
       : await prepareImportedBacktestConfig(cfg);
     var name = getInitialBacktestDraftName(cfg, url.searchParams);
     var raw = JSON.stringify((prepared && prepared.config) || {}, null, 2);
+    if (backtestEditorAdapter.metadataDriven) window._nativeConfigRevision = null;
     editingConfig = '__new__';
     selectPanel('configs');
     _pendingMigrationReviewDraft = draft && draft.migration_report ? draft : null;
     _pendingMigrationReport = draft && draft.migration_report ? draft.migration_report : null;
     showConfigEditor(name, prepared.config, raw, prepared.param_status || draft.param_status || {});
-    clearInitialBacktestUrlParams(url, runDraftId ? ['draft_id', 'draft_name'] : ['opt_draft_id', 'draft_name']);
+    if (!backtestEditorAdapter.metadataDriven) clearInitialBacktestUrlParams(url, runDraftId ? ['draft_id', 'draft_name'] : ['opt_draft_id', 'draft_name']);
     return true;
   } catch (e) {
     toast((runDraftId ? 'Failed to open run draft: ' : 'Failed to open optimizer draft: ') + e.message, 'err');
@@ -2924,6 +2933,9 @@ function hasBacktestResultArrival(url) {
 async function initializeBacktestPageFromUrl(arrivalUrl) {
   initializeBacktestLoopReturn();
   var url = arrivalUrl || new URL(window.location.href);
+  if (backtestEditorAdapter.metadataDriven && url.searchParams.get('panel') === 'results') {
+    selectPanel('results', {deferResultsLoad:true});await loadResults(url.searchParams.get('result_filter') || '');return;
+  }
   var nativeLog=url.searchParams.get('native_log');
   if(backtestEditorAdapter.isV8&&nativeLog&&/^[0-9a-f-]{32,36}$/.test(nativeLog))showLog(nativeLog);
   if (backtestEditorAdapter.isV8 && url.searchParams.get('panel')==='results' && /^[0-9a-f]{32}$/.test(url.searchParams.get('result_loop')||'') && ['observer_holdout','observer_full_range','selected'].includes(url.searchParams.get('result_evaluation')) && (!url.hash||url.hash==='#results')) {
@@ -3342,6 +3354,7 @@ function pb8AdvancedFieldsValidate() {
 }
 
 function showConfigEditor(name, cfg, rawOverride, paramStatusOverride) {
+  if (backtestEditorAdapter.metadataDriven) return window.PBGuiBacktestV9.render(name, cfg);
   if (currentPanel !== 'configs') return;
   if (backtestEditorAdapter.isV8 &&
       (!Array.isArray(settings.exchange_options) || !settings.exchange_options.length) &&
@@ -4013,6 +4026,7 @@ function bindStructuredJsonFieldValidation() {
 }
 
 function ensureStructuredJsonFieldsValidForSave() {
+  if (backtestEditorAdapter.metadataDriven) return window.PBGuiBacktestV9.validate();
   var fields = [
     document.getElementById('cfg-bot-long'),
     document.getElementById('cfg-bot-short')
@@ -4133,6 +4147,7 @@ function cfgSyncExtraBtFields(bt) {
 }
 
 function cfgSyncEditorFromParsed(name, cfg) {
+  if (backtestEditorAdapter.metadataDriven) return window.PBGuiBacktestV9.populate(cfg);
   var bt = (cfg && cfg.backtest) || {};
   var bot = (cfg && cfg.bot) || {};
   var live = (cfg && cfg.live) || {};
@@ -5547,6 +5562,7 @@ function botSyncFromJson(side) {
 }
 
 function collectConfig() {
+  if (backtestEditorAdapter.metadataDriven) return window.PBGuiBacktestV9.collect();
   /* Build config from editor form fields */
   var rawEl = document.getElementById('cfg-raw-json');
   var cfg;
@@ -5766,6 +5782,7 @@ function putEditorConfig(name, cfg, oldName, overrideSnapshot) {
 }
 
 function saveEditor() {
+  if (backtestEditorAdapter.metadataDriven) return window.PBGuiBacktestV9.save(false);
   var name = document.getElementById('cfg-name').value.trim();
   if (!name) { toast('Config name is required', 'err'); return; }
   if (!ensureMigrationReviewDecisionsResolvedForSave()) return;
@@ -5813,6 +5830,7 @@ function saveEditor() {
 }
 
 function saveAndQueue() {
+  if (backtestEditorAdapter.metadataDriven) return window.PBGuiBacktestV9.save(true);
   var name = document.getElementById('cfg-name').value.trim();
   if (!name) { toast('Config name is required', 'err'); return; }
   if (!ensureMigrationReviewDecisionsResolvedForSave()) return;
@@ -5873,6 +5891,7 @@ function saveAndQueue() {
 }
 
 function closeEditor() {
+  if (backtestEditorAdapter.metadataDriven) window.PBGuiBacktestV9.close();
   window.PBGuiEditorShared.clearFixedValidationStatus();
   editingConfig = null;
   _pendingMigrationReport = null;
@@ -6303,6 +6322,11 @@ function loadResults(filterName, loadOptions) {
   if(evaluation)return loadLoopEvaluationResults(evaluation,typeof filterName==='string'?filterName:undefined,loadOptions);
   var selectedFilter = typeof filterName === 'string' ? filterName : (_pendingResultFilter ||
     (document.getElementById('results-config-filter') || {}).value || '');
+  if (selectedResultsVersion() === 'v9' && currentPanel === 'results') {
+    var destination = new URL(window.location.href);
+    if (selectedFilter) destination.searchParams.set('result_filter', selectedFilter);else destination.searchParams.delete('result_filter');
+    history.replaceState(null, '', destination);
+  }
   _pendingResultFilter = '';
   if (!loadOptions.emptyRetry) _resultsEmptyRetryCount = 0;
   if (_resultsEmptyRetryTimer) {
@@ -6332,7 +6356,7 @@ function loadResults(filterName, loadOptions) {
   }
 
   function renderLoadedPages() {
-    var applied = _applyResultsData(resultsByVersion.v7.concat(resultsByVersion.v8), selectedFilter);
+    var applied = _applyResultsData(selectedVersion === 'v9' ? resultsByVersion.v9 : resultsByVersion.v7.concat(resultsByVersion.v8), selectedFilter);
     displayedResultPage = true;
     var loaded = versions.reduce(function(total, version) { return total + progress[version].loaded; }, 0);
     var totalsKnown = versions.every(function(version) { return Number.isFinite(progress[version].total); });
@@ -6570,7 +6594,7 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
   });
   var showVersion = !!options.showVersion;
   var showStrategy = !!options.showStrategy && data.some(function(r) {
-    return String(r && r.backtest_version || '').toLowerCase() === 'v8';
+    return ['v8', 'v9'].indexOf(String(r && r.backtest_version || '').toLowerCase()) >= 0;
   });
   var selectedColumns = options.columnContext
     ? prepareResultColumns(options.columnContext, data, options)
@@ -6625,9 +6649,9 @@ function _renderResultsTableInto(el, data, chartsEl, rthFn, options) {
     (hasColumn('adg') ? rthFn('ADG USD', 'adg') : '') +
     (hasColumn('adg_w_usd') ? rthFn('ADG W USD', 'adg_w_usd') : '') +
     (hasColumn('gain') ? rthFn('Gain', 'gain') : '') +
-    (hasColumn('drawdown_worst') ? rthFn('Worst DD USD', 'drawdown_worst') : '') +
+    (hasColumn('drawdown_worst') ? rthFn(options.nativeV9 ? 'Worst DD Strategy' : 'Worst DD USD', 'drawdown_worst') : '') +
     (hasColumn('drawdown_worst_w_usd') ? rthFn('Worst DD W USD', 'drawdown_worst_w_usd') : '') +
-    (hasColumn('sharpe_ratio') ? rthFn('Sharpe USD', 'sharpe_ratio') : '') +
+    (hasColumn('sharpe_ratio') ? rthFn(options.nativeV9 ? 'Sharpe Strategy' : 'Sharpe USD', 'sharpe_ratio') : '') +
     (hasColumn('sharpe_ratio_w_usd') ? rthFn('Sharpe W USD', 'sharpe_ratio_w_usd') : '') +
     (hasColumn('starting_balance') ? rthFn('Start B.', 'starting_balance') : '') +
     (hasColumn('final_balance') ? rthFn('Final B.', 'final_balance') : '') +
@@ -6787,7 +6811,8 @@ function renderResults() {
       return 0;
     });
 
-    _renderResultsTableInto(el, filtered, chartsEl, rth, { showVersion: true, showStrategy: true, allowV8Convert: !backtestEditorAdapter.isV8, groupValidation: true, columnContext: 'results' });
+    _renderResultsTableInto(el, filtered, chartsEl, rth, { showVersion: true, showStrategy: true, allowV8Convert: !backtestEditorAdapter.isV8 && !backtestEditorAdapter.metadataDriven, groupValidation: true, columnContext: 'results', nativeV9: backtestEditorAdapter.metadataDriven });
+    if (backtestEditorAdapter.metadataDriven) window.PBGuiBacktestV9.restoreResults();
   } catch (e) {
     if (el) el.innerHTML = '\x3Cdiv class="empty-state">Failed to render results: ' + esc(e.message || e) + '\x3C/div>';
     toast('Render results failed: ' + (e.message || e), 'err');
@@ -7783,6 +7808,7 @@ function priceMarketOptionValue(market) {
 
 /* ── Chart rendering based on active icon buttons ── */
 function onResultActionsChanged() {
+  if (window.PBGuiBacktestV9 && window.PBGuiBacktestV9.active()) window.PBGuiBacktestV9.rememberResults();
   var chartsEl = _activeResultsCtx.chartsEl || document.getElementById('results-charts');
   var filtered = _activeResultsCtx.data || [];
 
@@ -8142,7 +8168,8 @@ function normalizeBE(csv, result) {
     /* New format: index is datetime string */
     rows.forEach(function(r) {
       be.time.push(r[indexKey] || '');
-      be.balance.push(parseFloat(r['usd_total_balance']) || 0);
+      var nativeBalance = parseFloat(r['usd_total_balance']);
+      be.balance.push(result.backtest_version === 'v9' ? (Number.isFinite(nativeBalance) ? nativeBalance : null) : (nativeBalance || 0));
       be.equity.push(parseFloat(r['usd_total_equity']) || 0);
       be.balance_btc.push(parseFloat(r['btc_total_balance']) || 0);
       be.equity_btc.push(parseFloat(r['btc_total_equity']) || 0);

@@ -183,18 +183,18 @@ def handle(request: dict) -> dict:
     if not isinstance(request, dict) or not isinstance(request.get("operation"), str):
         raise _HelperError("invalid_request")
     required = {"operation", "pb9_dir", "config_schema", "package_version"}
-    if isinstance(request, dict) and request.get("operation") in {"validate", "validate_live"}:
+    if isinstance(request, dict) and request.get("operation") in {"validate", "validate_live", "validate_backtest"}:
         required.add("config")
     if not isinstance(request, dict) or set(request) != required:
         raise _HelperError("invalid_request")
-    if not isinstance(request["operation"], str) or request["operation"] not in {"template", "metadata", "validate", "validate_live"} or any(
+    if not isinstance(request["operation"], str) or request["operation"] not in {"template", "metadata", "validate", "validate_live", "validate_backtest"} or any(
         not isinstance(request[key], str) or not request[key]
         for key in ("pb9_dir", "config_schema", "package_version")
     ):
         raise _HelperError("invalid_request")
-    if request["operation"] in {"validate", "validate_live"}:
+    if request["operation"] in {"validate", "validate_live", "validate_backtest"}:
         check_inline_config(request["config"], request["config_schema"],
-                            allow_inline_overrides=request["operation"] == "validate_live")
+                            allow_inline_overrides=request["operation"] in {"validate_live", "validate_backtest"})
     root = Path(request["pb9_dir"])
     if not root.is_absolute():
         raise _HelperError("invalid_request")
@@ -223,7 +223,7 @@ def handle(request: dict) -> dict:
                 raise _HelperError("native_metadata_failed") from exc
             return {**result, "config_schema": schema_version, "package_version": package_version,
                     "schema_module_file": schema_file, "version_module_file": version_file}
-        if request["operation"] in {"validate", "validate_live"}:
+        if request["operation"] in {"validate", "validate_live", "validate_backtest"}:
             try:
                 loader = importlib.import_module("config.load")
                 load_file = _module_path(loader, src)
@@ -277,7 +277,7 @@ def main() -> int:
     except Exception:
         # The PBGui owner logs this fixed error code, never native exception data.
         operation = request.get("operation") if isinstance(request, dict) else None
-        code = "native_validation_failed" if isinstance(operation, str) and operation in {"validate", "validate_live"} else "native_template_failed"
+        code = "native_validation_failed" if isinstance(operation, str) and operation in {"validate", "validate_live", "validate_backtest"} else "native_template_failed"
         response = {"ok": False, "error_code": code}
     try:
         encoded = json.dumps(response, allow_nan=False).encode("utf-8")

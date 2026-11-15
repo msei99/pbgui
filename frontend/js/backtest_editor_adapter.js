@@ -1,7 +1,49 @@
 ;(function () {
   'use strict';
 
+  function createV9() {
+    return {
+      version:'v9', isV8:false, metadataDriven:true,
+      metadataApiBase:function(base) { return String(base).replace(/\/backtest-v9$/, '/v9'); },
+      docsApiBase:function(base) { return String(base).replace(/\/backtest-v9$/, ''); },
+      archiveApiBase:function(base) { return base; },
+      websocketPath:'/api/backtest-v9/ws/bt9',
+      queueLogFile:function(id) { return 'backtests_v9/' + id + '.log'; },
+      navItems:function() { return [{panel:'configs',icon:'📋',label:'Configs'}, {panel:'queue',icon:'⏳',label:'Queue',badge:true}, {panel:'results',icon:'📊',label:'Results'}]; },
+      initialPanels:['configs','queue','results'],
+      configureUi:function() {
+        window.PBGuiBacktestV9.restoreSearch();
+        var versions=document.getElementById('results-version-filter');
+        versions.replaceChildren();var option=document.createElement('option');option.value='v9';option.textContent='PB9';versions.appendChild(option);
+        document.querySelectorAll('button[onclick]').forEach(function(button) {
+          var action=button.getAttribute('onclick') || '';
+          if (/^(?:openSettingsModal|optimizeFromResult|optimizePresetFromResult|strategyExplorerFromResult|goBalanceCalculatorFromResult|calcBalanceFromResult|addResultToArchive|pushArchive|convertConfigToV8|goBalanceCalculator|calcBalance|showOhlcvPreflight)/.test(action)) button.hidden=true;
+        });
+        var convert=document.getElementById('sb-btn-convert-v8');if(convert)convert.remove();
+        function openRun(config) {
+          var run=String(window.API_BASE).replace(/\/backtest-v9$/, '/v9');
+          var candidate=JSON.parse(JSON.stringify(config));candidate.pbgui={runtime:'pb9',enabled_on:'disabled'};
+          return fetch(run+'/draft',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:candidate})}).then(function(response){if(!response.ok)throw new Error('PB9 Run draft was rejected');return response.json();}).then(function(data){window.location.href=run+'/edit_page?new=1&draft_id='+encodeURIComponent(data.draft_id);});
+        }
+        window.addConfigToRunByName=function(name) {
+          window.apiFetch('/configs/'+encodeURIComponent(name)).then(function(data){return openRun(data.config);}).catch(function(error){window.toast(error.message,'err');});
+        };
+        window.addToRun=function() {
+          var selected=window.getSelectedResults();if(selected.length!==1){window.toast('Select exactly 1 result','err');return;}
+          window.apiFetch('/results/config?path='+encodeURIComponent(selected[0])).then(function(config) {
+            return openRun(config);
+          }).catch(function(error){window.toast(error.message,'err');});
+        };
+        window.rebacktestSelected=function() {
+          var selected=window.getSelectedResults();if(selected.length!==1){window.toast('Select exactly 1 result','err');return;}
+          window.apiFetch('/results/config?path='+encodeURIComponent(selected[0])).then(function(config){window.selectPanel('configs');window._nativeConfigRevision=null;window.editingConfig='__new__';window.showConfigEditor('',config);}).catch(function(error){window.toast(error.message,'err');});
+        };
+      }
+    };
+  }
+
   function create(version) {
+    if (String(version).toLowerCase() === 'v9') return createV9();
     var isV8 = String(version || '').toLowerCase() === 'v8';
 
     function installRunHandoff() {

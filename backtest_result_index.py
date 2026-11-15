@@ -84,7 +84,7 @@ def result_signature(analysis_path: Path) -> str:
         ["summary_schema", _SUMMARY_SCHEMA_VERSION],
         [analysis_path.name, *_file_signature(analysis_path)],
     ]
-    for name in _CONFIG_NAMES:
+    for name in (*_CONFIG_NAMES, "config.original.json", "pbgui.source.json", "balance_and_equity.npz", "result.json"):
         candidate = result_dir / name
         signature = _file_signature(candidate)
         if signature != (0, 0, 0):
@@ -101,7 +101,7 @@ def load_indexed_results(
 ) -> list[dict]:
     """Return cached summaries, rebuilding only new or changed result paths."""
     normalized_version = str(version or "").strip().lower()
-    if normalized_version not in {"v7", "v8"}:
+    if normalized_version not in {"v7", "v8", "v9"}:
         raise ValueError("Unsupported Backtest result index version")
     paths = [Path(path).resolve(strict=False) for path in analysis_paths]
     signatures = {str(path.parent): result_signature(path) for path in paths}

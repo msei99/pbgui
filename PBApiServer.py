@@ -118,6 +118,7 @@ from api.coin_data import (
 )
 from api.backtest_v7 import router as backtest_v7_router
 from api.backtest_v7 import startup as bt7_startup, shutdown as bt7_shutdown
+from api.backtest_v9 import router as backtest_v9_router, shutdown as bt9_shutdown
 from api.backtest_v8 import router as backtest_v8_router
 from api.backtest_v8 import startup as bt8_startup, shutdown as bt8_shutdown
 from api.cluster import router as cluster_router, shutdown as cluster_shutdown
@@ -1009,6 +1010,7 @@ async def _lifespan(app: FastAPI):
             ("storage", storage_shutdown),
             ("backtest-v7", bt7_shutdown),
             ("backtest-v8", bt8_shutdown),
+            ("backtest-v9", bt9_shutdown),
             ("optimize-v7", opt7_shutdown),
             ("optimize-v8", opt8_shutdown),
         )
@@ -1152,6 +1154,7 @@ app.include_router(balance_calc_router, prefix="/api/balance-calc", tags=["balan
 app.include_router(coin_data_router, prefix="/api/coin-data", tags=["coin-data"])
 app.include_router(backtest_v7_router, prefix="/api/backtest-v7", tags=["backtest-v7"])
 app.include_router(backtest_v8_router, prefix="/api/backtest-v8", tags=["backtest-v8"])
+app.include_router(backtest_v9_router, prefix="/api/backtest-v9", tags=["backtest-v9"])
 app.include_router(cluster_router, prefix="/api/cluster", tags=["cluster"])
 app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
 app.include_router(loop_optimizer_v8_router, prefix="/api/optimize-v8/loops", tags=["pb8-loops"])

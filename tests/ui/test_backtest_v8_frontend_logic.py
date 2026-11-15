@@ -58,7 +58,7 @@ def test_pb8_exposes_read_only_legacy_results_panel() -> None:
     page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
     adapter = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
 
-    assert "/app/js/backtest_editor_adapter.js?v=12" in page
+    assert "/app/js/backtest_editor_adapter.js?v=13" in page
     assert "items.push({ panel: 'legacy'" in adapter
     assert "initialPanels: ['configs', 'queue', 'results', 'archive', 'legacy']" in adapter
     assert "rebacktestSelectedLegacy" in adapter
@@ -737,7 +737,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
 
     assert '/app/css/backtest_shell.css?v=9' in v7_source
     assert '/app/js/backtest_shell.js?v=5' in v7_source
-    assert '/app/js/backtest_editor_adapter.js?v=12' in v7_source
+    assert '/app/js/backtest_editor_adapter.js?v=13' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
     assert "PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION)" in v7_source
     assert "sideConfig.risk" in adapter_source
@@ -1390,7 +1390,7 @@ def test_v8_backtest_result_can_open_pb8_optimize() -> None:
     assert "'/api/optimize-v8/main_page?opt_draft_id='" in adapter
     unsupported = adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
     assert "'optimizeFromResult'" not in unsupported
-    assert "/app/js/backtest_editor_adapter.js?v=12" in page
+    assert "/app/js/backtest_editor_adapter.js?v=13" in page
 
 
 def test_v8_result_add_to_run_uses_direct_canonical_draft() -> None:
@@ -2497,5 +2497,5 @@ def test_backtest_v8_configs_render_sortable_strategy_without_changing_v7_rows()
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
 
     assert "configs: ['name', 'exchanges', 'strategy', 'coins'" in source
-    assert "backtestEditorAdapter.isV8 ? thSort('Strategy', 'strategy') : ''" in source
-    assert "backtestEditorAdapter.isV8 ? '<td>' + esc(c.strategy || '-') + '</td>' : ''" in source
+    assert "(backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven) ? thSort('Strategy', 'strategy') : ''" in source
+    assert "(backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven) ? '<td>' + esc(c.strategy || '-') + '</td>' : ''" in source

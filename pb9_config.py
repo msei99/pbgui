@@ -71,10 +71,10 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
         "operation": operation, "pb9_dir": status["pb9dir"],
         "config_schema": status["config_schema"], "package_version": status["package_version"],
     }
-    if operation in {"validate", "validate_live"}:
+    if operation in {"validate", "validate_live", "validate_backtest"}:
         payload["config"] = config
     request = json.dumps(payload, allow_nan=False).encode("utf-8")
-    if len(request) > (MAX_VALIDATION_BYTES if operation in {"validate", "validate_live"} else 16384):
+    if len(request) > (MAX_VALIDATION_BYTES if operation in {"validate", "validate_live", "validate_backtest"} else 16384):
         raise PB9ConfigError("invalid_request")
     env = {key: value for key, value in os.environ.items() if key.upper() in _ENV_KEYS}
     env["PATH"] = os.pathsep.join((str(Path(status["pb9venv"]).parent), os.defpath))
@@ -179,11 +179,11 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
         raise PB9ConfigError("invalid_response")
     if operation == "template" and not isinstance(result.get("config"), dict):
         raise PB9ConfigError("invalid_response")
-    if operation in {"validate", "validate_live"} and result.get("valid") is not True:
+    if operation in {"validate", "validate_live", "validate_backtest"} and result.get("valid") is not True:
         raise PB9ConfigError("invalid_response")
     src = (Path(status["pb9dir"]) / "src").resolve()
     module_keys = ("schema_module_file", "version_module_file")
-    if operation in {"validate", "validate_live"}:
+    if operation in {"validate", "validate_live", "validate_backtest"}:
         module_keys += ("load_module_file",)
     elif operation == "metadata":
         module_keys += ("registry_module_file", "strategy_module_file")
@@ -202,7 +202,7 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
         "schema_module_file": result["schema_module_file"],
         "version_module_file": result["version_module_file"],
     }
-    if operation in {"validate", "validate_live"}:
+    if operation in {"validate", "validate_live", "validate_backtest"}:
         source["load_module_file"] = result["load_module_file"]
         return {"valid": True, "source": source}
     if operation == "metadata":
@@ -265,6 +265,12 @@ def validate_pb9_live_config(config, pb9dir, pb9venv, other_slots=None, *, timeo
                              config=config, cancel_event=cancel_event)
 
 
+def validate_pb9_backtest_config(config, pb9dir, pb9venv, other_slots=None, *, timeout=60, cancel_event=None):
+    """Check native backtest source with inline overrides without changing its sparse form."""
+    return _config_operation("validate_backtest", pb9dir, pb9venv, other_slots, timeout=timeout,
+                             config=config, cancel_event=cancel_event)
+
+
 def validate_pb9_config(config: dict, pb9dir: str | Path | None, pb9venv: str | Path | None,
                         other_slots: dict | None = None, *, timeout: float = 60,
                         cancel_event: threading.Event | PB9CancelSignal | None = None) -> dict:
@@ -281,7 +287,8 @@ def validate_pb9_config(config: dict, pb9dir: str | Path | None, pb9venv: str | 
 
 def validate_pb9_document(document: dict, pb9dir: str | Path | None, pb9venv: str | Path | None,
                           other_slots: dict | None = None, *, timeout: float = 60,
-                          cancel_event: threading.Event | PB9CancelSignal | None = None) -> dict:
+                          cancel_event: threading.Event | PB9CancelSignal | None = None,
+                          validation_target: str = "config") -> dict:
     """Validate an authored snapshot, keeping root GUI metadata out of native code.
 
     Return separate ``config``, ``pbgui`` and inspected ``source`` fields. Missing
@@ -313,7 +320,10 @@ def validate_pb9_document(document: dict, pb9dir: str | Path | None, pb9venv: st
         raise error from exc
     metadata = snapshot.pop("pbgui", None)
     options = {"cancel_event": cancel_event} if cancel_event is not None else {}
-    validation = validate_pb9_config(snapshot, pb9dir, pb9venv, other_slots, timeout=timeout, **options)
+    if validation_target not in {"config", "backtest"}:
+        raise PB9ConfigError("invalid_document")
+    validator = validate_pb9_backtest_config if validation_target == "backtest" else validate_pb9_config
+    validation = validator(snapshot, pb9dir, pb9venv, other_slots, timeout=timeout, **options)
     return {"config": snapshot, "pbgui": metadata, "source": validation["source"]}
 
 
@@ -330,7 +340,7 @@ def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: 
             raise PB9ConfigError("invalid_timeout")
         if not _SUPPORTED_PLATFORM:
             raise PB9ConfigError("unsupported_platform")
-        validating = operation in {"validate", "validate_live"}
+        validating = operation in {"validate", "validate_live", "validate_backtest"}
         if validating:
             check_inline_config(config, allow_inline_overrides=operation == "validate_live")
         status = (inspect_pb9_runtime(pb9dir, pb9venv, other_slots, cancel_event=cancel_event)

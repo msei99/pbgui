@@ -36,11 +36,14 @@ class PB9FileContext:
     other_slots: dict | None = None
     timeout: float = 60
     cancel_event: threading.Event | PB9CancelSignal | None = None
+    validation_target: str = "config"
 
 
 def _approved_root(context: PB9FileContext) -> Path:
     """Require an explicit absolute root before any file is opened."""
     if not isinstance(context, PB9FileContext) or not isinstance(context.approved_root, (str, Path)):
+        raise PB9ConfigError("invalid_storage_context")
+    if context.validation_target not in {"config", "backtest"}:
         raise PB9ConfigError("invalid_storage_context")
     if context.other_slots is not None and not isinstance(context.other_slots, dict):
         raise PB9ConfigError("invalid_storage_context")
@@ -64,7 +67,10 @@ def _check_cancel(context: PB9FileContext) -> None:
 
 def _native_options(context: PB9FileContext) -> dict:
     """Keep legacy keyword shapes intact when no owner supplies a stop flag."""
-    return {"cancel_event": context.cancel_event} if context.cancel_event is not None else {}
+    options = {"cancel_event": context.cancel_event} if context.cancel_event is not None else {}
+    if context.validation_target != "config":
+        options["validation_target"] = context.validation_target
+    return options
 
 
 def _config_name(name: str | Path) -> str:

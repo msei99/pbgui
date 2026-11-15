@@ -22,7 +22,7 @@ Save creates a new config version. Existing instances require the version you op
 
 After updating PBGui, restart the local API and PBRun services to load the new code. Use **System → PBGUI Services** for the individual services. The restart indicator shows services still running an older code serial.
 
-PB9 currently supports local operation. Remote hosts, backtests and Strategy Explorer require their own PB9 integration and are not offered as PB8 fallbacks. Changing a host assignment can start or stop trading; use only accounts and settings you intend to run.
+PB9 currently supports local operation. Use **Backtest** to pass the current editor config to the shared PB9 Backtest page. Remote hosts and Strategy Explorer still require their own PB9 integration. Changing a host assignment can start or stop trading; use only accounts and settings you intend to run.
 
 ## Backups and logs
 

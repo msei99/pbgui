@@ -22,10 +22,14 @@ Save erzeugt eine neue Konfigurationsversion. Bei vorhandenen Instanzen muss die
 
 Starte nach dem PBGui-Update die lokalen Dienste API und PBRun neu, damit sie den neuen Code laden. Die einzelnen Dienste findest du unter **System → PBGUI Services**. Die Neustartanzeige nennt Dienste, die noch mit einer älteren Code-Serial laufen.
 
-PB9 unterstützt derzeit lokalen Betrieb. Remote-Hosts, Backtests und Strategy Explorer benötigen eine eigene PB9-Anbindung und werden nicht auf PB8 umgeleitet. Eine geänderte Host-Zuordnung kann Trading starten oder stoppen; wähle nur beabsichtigte Konten und Einstellungen.
+PB9 unterstützt derzeit lokalen Betrieb. Backtest ist über den gleichnamigen Editor-Button angebunden. Remote-Hosts und Strategy Explorer benötigen weiterhin eine eigene PB9-Anbindung. Eine geänderte Host-Zuordnung kann Trading starten oder stoppen; wähle nur beabsichtigte Konten und Einstellungen.
 
 ## Backups und Logs
 
 Vorherige gespeicherte Versionen werden einschließlich PBGui-Begleitdatei gesichert. Öffne ein Backup als Editor-Entwurf oder stelle es als neue Version wieder her. Wiederherstellungen sind zunächst deaktiviert. Laufende Instanzen müssen vor dem Löschen gestoppt sein. Das gemeinsame Log-Panel zeigt lokale Laufzeitausgaben. Restart stoppt den exakt zugeordneten Prozess, damit PBRun ihn über die regulären Prüfungen neu starten kann.
 
 Die Liste aktualisiert sich automatisch. Browser-Neuladen erhält Suche, Sortierung und Navigationskontext. Guide öffnet sich über der aktuellen Seite; Information → Help öffnet die vollständige Dokumentation.
+
+## Backtest aus dem Editor
+
+**Backtest** übernimmt die aktuelle, auch ungespeicherte native Konfiguration als privaten Entwurf in die gemeinsame PB9-Backtest-Seite. Die Run-Instanz wird dabei nicht geändert. Details stehen im Guide **PB9 Backtest**.

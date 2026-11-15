@@ -2,6 +2,18 @@
 
 ## Development
 
+- Add manual local **PBv9 → Backtest** on the shared PB8 Backtest shell, with
+  current Run-editor drafts, native typed fields, sparse config round trips,
+  revision-protected saves and immutable queue snapshots. Isolate v9 configs,
+  caches, logs and results; record schema/source provenance, reject changed
+  snapshots or sources, and reuse the independent runner and shared slot/index
+  helpers. Keep original source/provenance beside successful results after
+  queue cleanup. Translate native NPZ equity timestamps for the existing charts
+  and retain missing balance samples as gaps.
+  Keep native jobs independent of API restarts and guard process control by
+  exact PID/create-time/command ownership. Cloud, automatic startup, archives
+  and optimizer handoffs remain unavailable for PB9.
+
 - Bring PB9 Add/Edit closer to the shared PB8 form: keep native basic live
   fields visible, group remaining settings under Advanced Settings, remove
   redundant side-activation checkboxes, and restore shared long/short JSON

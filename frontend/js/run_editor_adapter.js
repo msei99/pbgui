@@ -550,7 +550,7 @@
       inlineOverrides: true,
       sideActivation: true,
       userPath: V9_USER_PATH,
-      supportsBacktest: false,
+      supportsBacktest: true,
       supportsStrategyExplorer: false,
       supportsDynamicIgnore: false,
       supportsBalanceCalculator: true,
@@ -586,8 +586,9 @@
       saveBody: function (config, overrideConfigs, expectedVersion) {
         return { config: config, expected_version: Number(expectedVersion || 0) };
       },
-      backtestDraftRequest: function () {
-        return null;
+      backtestDraftRequest: function (apiBase, config) {
+        var base = String(apiBase).replace(/\/v9$/, '/backtest-v9');
+        return {url:base + '/optimize-draft', body:{config:config}, page:base + '/main_page'};
       },
       configureUi: function () {
         document.querySelectorAll('[data-v7-only], [data-v8-only], [data-not-v9]').forEach(function (element) {

@@ -30,6 +30,7 @@ SERVICE = "PB9Config"
 MAX_ACTIVE_REQUESTS = 2
 MAX_ACTIVE_RUN_REQUESTS = 8
 _NATIVE_OPERATIONS = frozenset({
+    "bt9_metadata", "bt9_new_config", "bt9_load", "bt9_prepare", "bt9_draft_create", "bt9_save", "bt9_enqueue", "bt9_start",
     "template", "validate", "config_load", "config_save", "run_new_config", "run_metadata",
     "run_prepare", "run_draft_create", "run_save", "run_forced_mode", "run_copy", "run_restore",
 })
@@ -140,6 +141,9 @@ def _operation(operation: str, cancel_event: PB9CancelSignal, payload: bytes | N
     """Inspect, load or validate using only settings selected on the server."""
     if cancel_event.is_set():
         raise PB9ConfigError("helper_cancelled")
+    if operation.startswith("bt9_"):
+        from api.backtest_v9 import _operation as backtest_operation
+        return backtest_operation(operation, cancel_event, payload)
     if operation.startswith("run_"):
         from api.v9_instances import _operation as run_operation
         return run_operation(operation, cancel_event, payload)
@@ -237,7 +241,7 @@ def _worker(operation: str, future: Future, cancel_event: PB9CancelSignal, paylo
         result = (_operation(operation, cancel_event, payload) if payload is not None
                   else _operation(operation, cancel_event))
     except HTTPException as exc:
-        if operation.startswith(("run_", "market_")):
+        if operation.startswith(("run_", "market_", "bt9_")):
             future.set_exception(exc)
         else:
             _log(SERVICE, "PB9 API operation failed", level="ERROR",
@@ -309,8 +313,8 @@ class PB9RequestOwner:
                 raise _error(503, "pb9_stopping", "PB9 inspection is stopping")
             if self._restart_pending():
                 raise _error(409, "api_restart_pending", "API restart is pending")
-            run_request = operation.startswith(("run_", "market_"))
-            run_count = sum(job.operation.startswith(("run_", "market_")) for job in self._jobs.values())
+            run_request = operation.startswith(("run_", "market_", "bt9_"))
+            run_count = sum(job.operation.startswith(("run_", "market_", "bt9_")) for job in self._jobs.values())
             native_count = sum(job.operation in _NATIVE_OPERATIONS for job in self._jobs.values())
             group_full = (run_count >= MAX_ACTIVE_RUN_REQUESTS if run_request
                           else len(self._jobs) - run_count >= MAX_ACTIVE_REQUESTS)

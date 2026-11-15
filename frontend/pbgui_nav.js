@@ -739,7 +739,8 @@
       { page: 'v8_pareto_explorer',   icon: '&#9733;',   label: 'Pareto Explorer'   }
     ]},
     { id: 'pbv9', label: 'PBv9', items: [
-      { page: 'v9_run', icon: '&#9654;', label: 'Run' }
+      { page: 'v9_run', icon: '&#9654;', label: 'Run' },
+      { page: 'v9_backtest', icon: '&#128202;', label: 'Backtest' }
     ]}
   ];
 
@@ -1842,6 +1843,7 @@
     'v7_strategy_explorer': '/api/strategy-explorer/main_page',
     'info_balance_calc':  '/api/balance-calc/main_page',
     'v9_run':             '/api/v9/main_page',
+    'v9_backtest':        '/api/backtest-v9/main_page',
     'v9_editor':          '/api/pb9/main_page',
     'v8_run':             '/api/v8/main_page',
     'v8_backtest':        '/api/backtest-v8/main_page',
@@ -1877,6 +1879,7 @@
     'v7_strategy_explorer':        '00_strategy_explorer_help',
     'info_balance_calc':           '38_balance_calc',
     'v9_run':                      '53_pbv9_run',
+    'v9_backtest':                 '54_pbv9_backtest',
     'v9_editor':                   '52_pbv9_editor',
     'v8_run':                      '44_pbv8_run',
     'v8_backtest':                 '42_pbv8_backtest',

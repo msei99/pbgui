@@ -20,8 +20,10 @@ from logging_helpers import human_log as _log, _redact_text
 SERVICE = "BacktestsV8"
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, runtime: str = "v8") -> int:
     """Run one PB8 CLI backtest and atomically publish its return code."""
+    if runtime not in {"v8", "v9"}:
+        raise ValueError("Unsupported backtest runtime")
     arguments = list(sys.argv[1:] if argv is None else argv)
     if len(arguments) != 7 or arguments[0] != "backtest":
         raise SystemExit("usage: pb8_backtest_runner.py backtest STATE OWNERSHIP READY CLI PB8_DIR CONFIG")
@@ -33,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
         ownership = {"pid": os.getpid(), "create_time": psutil.Process(os.getpid()).create_time()}
         atomic_write_private_text(Path(ownership_path), json.dumps(ownership, indent=4) + "\n")
         pbgui_dir = Path(__file__).resolve().parent
-        invalid_marker = pbgui_dir / "data" / "locks" / "pb8-runtime-invalid"
+        invalid_marker = pbgui_dir / "data" / "locks" / f"pb{runtime[1:]}-runtime-invalid"
         if invalid_marker.exists() or invalid_marker.is_symlink():
             raise RuntimeError("PB8 installation or update is incomplete")
         try:
@@ -45,6 +47,10 @@ def main(argv: list[str] | None = None) -> int:
             if invalid_marker.exists() or invalid_marker.is_symlink():
                 raise RuntimeError("PB8 installation or update is incomplete")
             sys.argv = [cli_path, config_path]
+            if runtime == "v9":
+                from pb9_backtest_runtime import prepare_native_import
+                prepare_native_import(Path(pb8_dir), Path(config_path))
+                sys.argv.extend(["--skip-rust-compile", "--fail-on-stale-rust"])
             backtest_module = importlib.import_module("backtest")
             atomic_write_private_text(Path(ready_path), f"{os.getpid()}\n")
         finally:
@@ -64,12 +70,19 @@ def main(argv: list[str] | None = None) -> int:
         detail = _redact_text(traceback.format_exc())
         sys.stderr.write(detail + "\n")
         sys.stderr.flush()
-        _log(SERVICE, error, level="ERROR", meta={"traceback": detail})
+        _log("BacktestsV9" if runtime == "v9" else SERVICE, error, level="ERROR", meta={"traceback": detail})
+    if runtime == "v9" and returncode == 0:
+        try:
+            from pb9_backtest_runtime import publish_result_source
+            publish_result_source(Path(config_path))
+        except Exception as exc:
+            returncode = 1
+            error = f"PB9 source publication failed: {type(exc).__name__}"
     if returncode and not error:
-        error = f"PB8 backtest exited with code {returncode}"
+        error = f"PB{runtime[1:]} backtest exited with code {returncode}"
     if error:
         error = _redact_text(error)
-        sys.stderr.write(f"[BacktestsV8] [ERROR] {error}\n")
+        sys.stderr.write(f"[Backtests{runtime.upper()}] [ERROR] {error}\n")
         sys.stderr.flush()
     payload = {
         "started_at": started_at,

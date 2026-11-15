@@ -86,7 +86,7 @@ def _managed_processes() -> dict[int, float]:
             command = [str(part) for part in process.info.get("cmdline") or []]
             names = [Path(part).name.lower() for part in command]
             is_pb7 = "backtest.py" in names
-            is_pb8 = "pb8_backtest_runner.py" in names and "backtest" in command
+            is_pb8 = any(name in names for name in ("pb8_backtest_runner.py", "pb9_backtest_runner.py")) and "backtest" in command
             if is_pb7 or is_pb8:
                 active[int(process.info["pid"])] = float(process.info["create_time"])
         except (ValueError, TypeError, psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
