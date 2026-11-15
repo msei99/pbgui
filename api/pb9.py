@@ -28,6 +28,11 @@ from pb9_config_storage import inspect_pb9_config_revision, reconcile_pb9_config
 
 SERVICE = "PB9Config"
 MAX_ACTIVE_REQUESTS = 2
+MAX_ACTIVE_RUN_REQUESTS = 8
+_NATIVE_OPERATIONS = frozenset({
+    "template", "validate", "config_load", "config_save", "run_new_config", "run_metadata",
+    "run_prepare", "run_draft_create", "run_save", "run_forced_mode", "run_copy", "run_restore",
+})
 MAX_VALIDATION_BODY_BYTES = MAX_DOCUMENT_BYTES
 MAX_JSON_DEPTH = 64
 _VALIDATION_ERRORS = frozenset({"invalid_request", "invalid_document", "invalid_config",
@@ -223,6 +228,7 @@ class _Job:
     future: Future
     cancel_event: PB9CancelSignal
     thread: threading.Thread | None = None
+    operation: str = ""
 
 
 def _worker(operation: str, future: Future, cancel_event: PB9CancelSignal, payload: bytes | None = None) -> None:
@@ -296,16 +302,21 @@ class PB9RequestOwner:
             return len(self._jobs)
 
     async def run(self, operation: str, payload: bytes | None = None) -> dict:
-        """Admit at most two operations and drain each worker before releasing ownership."""
+        """Bound UI reads separately while retaining at most two native operations."""
         start_failure = None
         with self._lock:
             if not self._accepting or self.cancel_signal.is_set():
                 raise _error(503, "pb9_stopping", "PB9 inspection is stopping")
             if self._restart_pending():
                 raise _error(409, "api_restart_pending", "API restart is pending")
-            if len(self._jobs) >= MAX_ACTIVE_REQUESTS:
+            run_request = operation.startswith(("run_", "market_"))
+            run_count = sum(job.operation.startswith(("run_", "market_")) for job in self._jobs.values())
+            native_count = sum(job.operation in _NATIVE_OPERATIONS for job in self._jobs.values())
+            group_full = (run_count >= MAX_ACTIVE_RUN_REQUESTS if run_request
+                          else len(self._jobs) - run_count >= MAX_ACTIVE_REQUESTS)
+            if group_full or operation in _NATIVE_OPERATIONS and native_count >= MAX_ACTIVE_REQUESTS:
                 raise _error(503, "pb9_busy", "PB9 inspection capacity is busy", busy=True)
-            job = _Job(Future(), self.cancel_signal)
+            job = _Job(Future(), self.cancel_signal, operation=operation)
             arguments = (operation, job.future, job.cancel_event)
             if payload is not None:
                 arguments += (payload,)

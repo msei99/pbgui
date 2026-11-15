@@ -2,6 +2,13 @@
 
 ## Development
 
+- Complete PB9 Run browser workflows against real native validation: retain the
+  saved instance URL after applying a backup, count TWE only for explicitly
+  enabled sides, and allow bounded parallel selector/status reads while keeping
+  native helper concurrency capped at two. Cover these findings with focused
+  regression tests; verify copy, inline overrides, strategy switching, rollback,
+  account conflicts, WebSocket updates and sidebar bounds using temporary data.
+
 - Add local **PBv9 → Run** using the shared PB7/PB8 instance list, structured
   editor, coin selectors, inline override editor, dialogs and log panel. Build
   typed PB9 controls from the native registry and preserve sparse inheritance.

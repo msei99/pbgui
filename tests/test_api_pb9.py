@@ -650,3 +650,72 @@ def test_runtime_ini_input_errors_are_fixed_and_never_echo_paths(endpoint, monke
     assert response.status_code == 422
     assert response.headers["x-pbgui-error-codes"] == "runtime_paths_invalid"
     assert "fixture-private-value" not in response.text
+
+
+def test_run_ui_reads_have_bounded_capacity_separate_from_native_helpers(monkeypatch):
+    """Parallel Run selectors do not starve native work or create an unbounded queue."""
+    release = threading.Event()
+    entered = []
+
+    def hold(operation, cancel_event=None):
+        """Hold registered fixture workers until all admission checks complete."""
+        entered.append(operation)
+        assert release.wait(5)
+        return {}
+
+    monkeypatch.setattr(pb9, '_operation', hold)
+
+    async def exercise():
+        """Own and drain all admitted threads on success and assertion failure."""
+        owner = pb9.PB9RequestOwner()
+        requests = []
+        try:
+            requests.extend(asyncio.create_task(owner.run('run_users'))
+                            for _ in range(pb9.MAX_ACTIVE_RUN_REQUESTS))
+            await _until(lambda: len(entered) == pb9.MAX_ACTIVE_RUN_REQUESTS)
+            with pytest.raises(HTTPException) as error:
+                await owner.run('run_users')
+            assert error.value.status_code == 503
+            requests.extend(asyncio.create_task(owner.run('template')) for _ in range(2))
+            await _until(lambda: len(entered) == pb9.MAX_ACTIVE_RUN_REQUESTS + 2)
+            assert owner.active == pb9.MAX_ACTIVE_RUN_REQUESTS + 2
+        finally:
+            release.set()
+            await asyncio.gather(*requests, return_exceptions=True)
+            await owner.shutdown()
+        assert owner.active == 0
+
+    asyncio.run(exercise())
+
+
+def test_native_run_and_library_operations_share_two_helper_slots(monkeypatch):
+    """A third native helper is refused even when its UI group has free capacity."""
+    release = threading.Event()
+    entered = []
+
+    def hold(operation, cancel_event=None):
+        """Model native work that must remain owned until released."""
+        entered.append(operation)
+        assert release.wait(5)
+        return {}
+
+    monkeypatch.setattr(pb9, '_operation', hold)
+
+    async def exercise():
+        """Check admission across both API surfaces and deterministic cleanup."""
+        owner = pb9.PB9RequestOwner()
+        requests = [asyncio.create_task(owner.run('run_metadata')), asyncio.create_task(owner.run('template'))]
+        try:
+            await _until(lambda: len(entered) == 2)
+            with pytest.raises(HTTPException) as error:
+                await owner.run('run_new_config')
+            assert error.value.status_code == 503
+            requests.append(asyncio.create_task(owner.run('run_hosts')))
+            await _until(lambda: len(entered) == 3)
+        finally:
+            release.set()
+            await asyncio.gather(*requests, return_exceptions=True)
+            await owner.shutdown()
+        assert owner.active == 0
+
+    asyncio.run(exercise())

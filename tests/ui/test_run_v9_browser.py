@@ -25,7 +25,7 @@ def editor():
         page = browser.new_page(viewport={'width': 1440, 'height': 1000})
         page.set_default_timeout(5000)
         state = SimpleNamespace(page=page, config=config, saved=[], errors=[], unexpected=[], metadata=metadata,
-                                hold_save=False, pending=[])
+                                hold_save=False, pending=[], drafts={})
         page.on('pageerror', lambda error: state.errors.append(str(error)))
 
         def respond(route):
@@ -42,7 +42,8 @@ def editor():
                                     'RUN_VERSION': 'v9', 'VERSION': 'fixture', 'SERIAL': '1',
                                     'MASTER_NAME': 'fixture-host', 'NAV_HASH': 'test', 'BASE_PREFIX': '',
                                     'INSTANCE': parse_qs(url.query).get('name', [''])[0],
-                                    'IS_NEW': 'true' if 'new=1' in url.query else 'false', 'DRAFT_ID': ''}.items():
+                                    'IS_NEW': 'true' if 'new=1' in url.query else 'false',
+                                    'DRAFT_ID': parse_qs(url.query).get('draft_id', [''])[0]}.items():
                     source = source.replace('"%%' + key + '%%"', json.dumps(value)).replace('%%' + key + '%%', value)
                 source = source.replace('%%RUN_LABEL%%', 'PBv9')
                 route.fulfill(content_type='text/html', body=source)
@@ -54,6 +55,9 @@ def editor():
                 route.fulfill(json={**metadata, 'runtime': {'detected': True}})
             elif path == '/api/v9/instances/new-config':
                 route.fulfill(json={'config': copy.deepcopy(state.config), 'param_status': {}, 'override_configs': {}})
+            elif path.startswith('/api/v9/draft/'):
+                route.fulfill(json={'config': copy.deepcopy(state.drafts[path.rsplit('/', 1)[1]]),
+                                    'param_status': {}, 'override_configs': {}})
             elif path == '/api/v9/users':
                 route.fulfill(json={'users': [{'name': 'fixture', 'exchange': 'bybit'}]})
             elif path == '/api/v9/hosts':
@@ -172,4 +176,24 @@ def test_automatic_return_update_preserves_edits_and_reload_context(editor):
     expect(page.locator('#f-note')).to_have_value('new remote note')
     assert page.locator('#' + section_id).get_attribute('class') == expected
     assert 'name=fixture' in page.url
+    assert editor.errors == []
+
+
+def test_backup_draft_save_clears_draft_navigation_before_reload(editor):
+    """Reload after applying a backup opens the new saved version, not its old draft."""
+    page = editor.page
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('1')
+    draft = copy.deepcopy(editor.config)
+    draft['pbgui']['note'] = 'backup draft'
+    editor.drafts['fixtureDraft'] = draft
+    page.goto('http://run9.test/api/v9/edit_page?name=fixture&draft_id=fixtureDraft')
+    expect(page.locator('#f-note')).to_have_value('backup draft')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('2')
+    assert 'draft_id' not in page.url
+    page.reload()
+    expect(page.locator('#f-version')).to_have_value('2')
+    expect(page.locator('#f-note')).to_have_value('backup draft')
     assert editor.errors == []

@@ -697,6 +697,8 @@ def _exposure_summary(native: dict[str, Any]) -> str:
     """Summarize only authored exposure values; sparse sources may omit them."""
     parts = []
     for side, prefix in (("long", "L"), ("short", "S")):
+        if _nested(native, "bot", side, "enabled") is not True:
+            continue
         values = {}
         for field in ("max_positions", "total_wallet_exposure_limit_ratio"):
             value = _nested(native, "bot", side, "risk", field)

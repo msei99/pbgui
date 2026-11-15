@@ -3225,6 +3225,16 @@ function collectConfig() {
 }
 
 /* ─── Save ─────────────────────────────────────────────────── */
+function updateSavedRunLocation(name) {
+  if (!runEditorAdapter.metadataDriven) return;
+  DRAFT_ID = '';
+  var savedUrl = new URL(window.location.href);
+  savedUrl.searchParams.set('name', name);
+  savedUrl.searchParams.delete('new');
+  savedUrl.searchParams.delete('draft_id');
+  history.replaceState(null, '', savedUrl);
+}
+
 async function resolveRunSaveTarget(name, wasNew, expectedVersion, config) {
   if (!(runEditorAdapter.isV8 || runEditorAdapter.metadataDriven) || !wasNew) {
     return { createOnly: wasNew, expectedVersion: expectedVersion };
@@ -3313,12 +3323,8 @@ async function saveConfig() {
         INSTANCE_NAME = name;
         IS_NEW = 'false';
         coinOvSetConfigName(name);
-        var pendingUrl = new URL(window.location.href);
-        pendingUrl.searchParams.set('name', name);
-        pendingUrl.searchParams.delete('new');
-        pendingUrl.searchParams.delete('draft_id');
-        history.replaceState(null, '', pendingUrl);
       }
+      updateSavedRunLocation(name);
       dirty = true;
       toast('Saved PB9 v' + data.version + '. Newer edits remain unsaved.', 'ok');
       return;
@@ -3341,14 +3347,8 @@ async function saveConfig() {
       INSTANCE_NAME = name;
       IS_NEW = 'false';
       coinOvSetConfigName(name);
-      if (runEditorAdapter.metadataDriven) {
-        var savedUrl = new URL(window.location.href);
-        savedUrl.searchParams.set('name', name);
-        savedUrl.searchParams.delete('new');
-        savedUrl.searchParams.delete('draft_id');
-        history.replaceState(null, '', savedUrl);
-      }
     }
+    updateSavedRunLocation(name);
     if (runEditorAdapter.isV8 && typeof coinOvAcknowledgePendingFiles === 'function') {
       coinOvAcknowledgePendingFiles(overrideSnapshot);
     }

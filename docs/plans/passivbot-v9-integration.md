@@ -811,3 +811,22 @@ keinen abschließenden Claude-Review. Weitere Claude-Aufrufe erfolgten nicht.
 Der Browser bleibt beim testbaren PB9-Editor. Nach der abschließenden Serial-
 Änderung müssen API und PBRun den neuen Code laden; weitere Dienste oder
 Browseraktionen werden nach dem Nutzerhinweis nicht mehr ausgelöst.
+
+Auf ausdrücklichen Wunsch wurde anschließend ein vollständiger manueller
+Browserlauf mit einem temporären lokalen QA-Server und echter nativer PB9-
+Validierung durchgeführt. Fiktive Konten und Instanzen lagen ausschließlich
+unter `/tmp`; kein PBRun-Supervisor oder echter Trading-Prozess lief dort.
+Geprüft: zwei native Saves mit erneutem Öffnen, erhaltene Filter und sparse
+Seitenwerte, Inline-Coin-Override, Kopie auf ein zweites Testkonto, beide
+Strategien, Backup-Entwurf und Rollback als neue deaktivierte Version,
+abgelehnte PB8/PB9-Kontokollision sowie automatische WebSocket-Aktualisierung.
+Sidebar bei 160 und 420 px ohne horizontalen Überlauf; danach 240 px.
+
+Der Lauf fand und korrigierte drei Probleme: TWE einer deaktivierten Seite,
+verbleibende Draft-ID nach Backup-Save und konkurrierende UI-Reads mit dem
+ursprünglichen Zwei-Worker-Limit. Native Arbeit bleibt auf zwei Operationen
+begrenzt; Run-/Market-Abfragen haben zusätzlich acht begrenzte Plätze.
+Legacy-Abfragen behalten ihre bisherige Zweiergrenze. Neue Evidenz:
+60 fokussierte Workflow-Regressionen und 140 API-/Owner-/Browser-Tests grün.
+Testtab und temporärer QA-Server wurden anschließend geschlossen. Der
+produktive API-/PBRun-Dienst wurde bei diesem QA-Lauf nicht neu gestartet.

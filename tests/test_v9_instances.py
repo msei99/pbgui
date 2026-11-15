@@ -178,3 +178,13 @@ def test_invalid_filter_preferences_are_rejected_without_storage(run_api, value)
     cfg['pbgui']['market_cap'] = value
     assert _save(run_api, cfg).status_code == 422
     assert not (run_api.root / 'data/run_v9/fixture').exists()
+
+
+@pytest.mark.parametrize('long,short,expected', [(True, False, 'L=1.5'), (False, True, 'S=1.5'),
+                                               (False, False, ''), (None, None, '')])
+def test_exposure_summary_requires_explicit_side_activation(long, short, expected):
+    """Inherited positive capacity never grants v9 side activation in the list."""
+    native = {'bot': {'global': {'risk': {'max_positions': 5, 'total_wallet_exposure_limit_ratio': 1.5}},
+                      'long': {} if long is None else {'enabled': long},
+                      'short': {} if short is None else {'enabled': short}}}
+    assert api._exposure_summary(native) == expected
