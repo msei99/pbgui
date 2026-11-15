@@ -6,6 +6,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import selectors
 import signal
 import subprocess
@@ -27,7 +28,7 @@ _ENV_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "SYSTEMROOT", "WINDIR
              "TMPDIR", "TMP", "TEMP", "TZ"}
 _HELPER_CODES = {"invalid_request", "runtime_identity_mismatch", "native_template_failed",
                  "helper_output_limit", "invalid_template", "invalid_config", "config_version_mismatch",
-                 "external_reference_rejected", "native_config_rejected", "native_validation_failed"}
+                 "external_reference_rejected", "native_config_rejected", "native_validation_failed", "native_metadata_failed"}
 
 
 class PB9ConfigError(RuntimeError):
@@ -70,10 +71,10 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
         "operation": operation, "pb9_dir": status["pb9dir"],
         "config_schema": status["config_schema"], "package_version": status["package_version"],
     }
-    if operation == "validate":
+    if operation in {"validate", "validate_live"}:
         payload["config"] = config
     request = json.dumps(payload, allow_nan=False).encode("utf-8")
-    if len(request) > (MAX_VALIDATION_BYTES if operation == "validate" else 16384):
+    if len(request) > (MAX_VALIDATION_BYTES if operation in {"validate", "validate_live"} else 16384):
         raise PB9ConfigError("invalid_request")
     env = {key: value for key, value in os.environ.items() if key.upper() in _ENV_KEYS}
     env["PATH"] = os.pathsep.join((str(Path(status["pb9venv"]).parent), os.defpath))
@@ -178,10 +179,14 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
         raise PB9ConfigError("invalid_response")
     if operation == "template" and not isinstance(result.get("config"), dict):
         raise PB9ConfigError("invalid_response")
-    if operation == "validate" and result.get("valid") is not True:
+    if operation in {"validate", "validate_live"} and result.get("valid") is not True:
         raise PB9ConfigError("invalid_response")
     src = (Path(status["pb9dir"]) / "src").resolve()
-    module_keys = ("schema_module_file", "version_module_file") + (("load_module_file",) if operation == "validate" else ())
+    module_keys = ("schema_module_file", "version_module_file")
+    if operation in {"validate", "validate_live"}:
+        module_keys += ("load_module_file",)
+    elif operation == "metadata":
+        module_keys += ("registry_module_file", "strategy_module_file")
     for key in module_keys:
         value = result.get(key)
         if not isinstance(value, str) or not Path(value).is_absolute() or not Path(value).resolve().is_relative_to(src):
@@ -197,9 +202,42 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
         "schema_module_file": result["schema_module_file"],
         "version_module_file": result["version_module_file"],
     }
-    if operation == "validate":
+    if operation in {"validate", "validate_live"}:
         source["load_module_file"] = result["load_module_file"]
         return {"valid": True, "source": source}
+    if operation == "metadata":
+        metadata = result.get("metadata")
+        if (not isinstance(metadata, dict) or metadata.get("contract_version") != 1
+                or not isinstance(metadata.get("template"), dict)
+                or metadata["template"].get("config_version") != status["config_schema"]
+                or not isinstance(metadata.get("prototype"), dict)
+                or metadata["prototype"].get("config_version") != status["config_schema"]
+                or not isinstance(metadata.get("fields"), list)
+                or len(metadata["fields"]) > 10000):
+            raise PB9ConfigError("invalid_response")
+        kinds = metadata.get("strategies")
+        if (not isinstance(kinds, list) or not kinds
+                or any(not isinstance(kind, str) or not re.fullmatch(r"[a-z][a-z0-9_]{0,63}", kind) for kind in kinds)
+                or len(kinds) != len(set(kinds))
+                or not isinstance(metadata.get("strategy_specs"), dict)
+                or set(metadata["strategy_specs"]) != set(kinds)
+                or not isinstance(metadata.get("strategy_defaults"), dict)):
+            raise PB9ConfigError("invalid_response")
+        for field in metadata["fields"]:
+            if (not isinstance(field, dict) or not isinstance(field.get("path"), list) or not field["path"]
+                    or any(not isinstance(part, str) or not part for part in field["path"])
+                    or not isinstance(field.get("types"), list) or not field["types"]
+                    or any(not isinstance(kind, str) or kind not in {"boolean", "integer", "float", "string", "array", "object"} for kind in field["types"])
+                    or type(field.get("nullable")) is not bool):
+                raise PB9ConfigError("invalid_response")
+        rust_file = result.get("rust_module_file")
+        environment = Path(status["pb9venv"]).absolute().parent.parent.resolve()
+        if not isinstance(rust_file, str) or not Path(rust_file).is_absolute() or not Path(rust_file).resolve().is_relative_to(environment):
+            raise PB9ConfigError("runtime_identity_mismatch")
+        source.update({key: result[key] for key in ("registry_module_file", "strategy_module_file", "rust_module_file")})
+        source["rust_source_agreement"] = "not_checked"
+        _require_json_value(metadata)
+        return {key: metadata[key] for key in ("contract_version", "template", "prototype", "fields", "strategies", "strategy_specs", "strategy_defaults")} | {"source": source}
     return {"config": result["config"], "source": source}
 
 
@@ -214,6 +252,17 @@ def load_pb9_template(pb9dir: str | Path | None, pb9venv: str | Path | None,
     Commit metadata describes the inspected declarations, not full-tree cleanliness.
     """
     return _config_operation("template", pb9dir, pb9venv, other_slots, timeout=timeout, cancel_event=cancel_event)
+
+
+def get_pb9_editor_metadata(pb9dir, pb9venv, other_slots=None, *, timeout=60, cancel_event=None) -> dict:
+    """Read the selected native field registry, strategy contracts and defaults."""
+    return _config_operation("metadata", pb9dir, pb9venv, other_slots, timeout=timeout, cancel_event=cancel_event)
+
+
+def validate_pb9_live_config(config, pb9dir, pb9venv, other_slots=None, *, timeout=60, cancel_event=None) -> dict:
+    """Validate native live source with inline overrides, never compile or launch it."""
+    return _config_operation("validate_live", pb9dir, pb9venv, other_slots, timeout=timeout,
+                             config=config, cancel_event=cancel_event)
 
 
 def validate_pb9_config(config: dict, pb9dir: str | Path | None, pb9venv: str | Path | None,
@@ -281,18 +330,22 @@ def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: 
             raise PB9ConfigError("invalid_timeout")
         if not _SUPPORTED_PLATFORM:
             raise PB9ConfigError("unsupported_platform")
-        if operation == "validate":
-            check_inline_config(config)
+        validating = operation in {"validate", "validate_live"}
+        if validating:
+            check_inline_config(config, allow_inline_overrides=operation == "validate_live")
         status = (inspect_pb9_runtime(pb9dir, pb9venv, other_slots, cancel_event=cancel_event)
                   if cancel_event is not None else inspect_pb9_runtime(pb9dir, pb9venv, other_slots))
         if cancel_event is not None and cancel_event.is_set():
             raise PB9ConfigError("helper_cancelled")
         if not status["detected"]:
             raise PB9ConfigError("runtime_not_detected")
-        if operation == "validate":
-            check_inline_config(config, status["config_schema"])
+        if validating:
+            check_inline_config(config, status["config_schema"], allow_inline_overrides=operation == "validate_live")
             options = {"cancel_event": cancel_event} if cancel_event is not None else {}
             raw = _run_helper(status, timeout, operation=operation, config=config, **options)
+        elif operation == "metadata":
+            options = {"cancel_event": cancel_event} if cancel_event is not None else {}
+            raw = _run_helper(status, timeout, operation=operation, **options)
         elif cancel_event is not None:
             raw = _run_helper(status, timeout, cancel_event=cancel_event)
         else:

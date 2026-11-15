@@ -2,6 +2,12 @@
 
 ## Development
 
+- Prepare PB9 Run to reuse the PB8 editor and live-bundle infrastructure:
+  expose native field/strategy metadata through the isolated PB9 helper,
+  validate inline live coin overrides without file references, and share
+  backup/publication helpers through explicit generation-specific stores.
+  Existing PB8 lifecycle and API contracts remain unchanged.
+
 - Add the first PB9 JSON config editor under **PBv9 → Config Editor** with
   separate runtime-path settings, native authored templates, inline validation,
   private revision-protected save/open and automatic file/status updates.

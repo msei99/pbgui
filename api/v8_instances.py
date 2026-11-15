@@ -22,6 +22,16 @@ from fastapi import APIRouter, BackgroundTasks, Body, Depends, HTTPException, Qu
 from fastapi.responses import HTMLResponse
 
 from api.auth import SessionToken, authenticated_push_websocket, require_auth
+from api import live_bundle_store
+from api.live_bundle_store import (
+    BundleStore,
+    backup_dirs_unlocked as _backup_dirs_unlocked,
+    coerce_version as _coerce_version,
+    prune_backups_unlocked as _prune_backups_unlocked,
+    validate_backup_id as _validate_backup_id,
+    validate_name as _validate_name,
+    validate_target as _validate_target,
+)
 from file_lock import _HELD_LOCKS, advisory_file_lock
 from logging_helpers import human_log as _log
 from master.cluster_state import (
@@ -334,31 +344,6 @@ def _master_hostname() -> str:
     return platform.node() or "local"
 
 
-def _validate_name(name: str) -> str:
-    """Validate one filesystem component used as an instance name."""
-
-    value = str(name or "")
-    if value != value.strip() or not value or value.startswith(".") or value in {".", ".."}:
-        raise HTTPException(status_code=400, detail="Invalid instance name")
-    if any(char in value for char in ("/", "\\", "\x00")) or any(ord(char) < 32 for char in value):
-        raise HTTPException(status_code=400, detail="Invalid instance name")
-    if len(value.encode("utf-8")) > 128:
-        raise HTTPException(status_code=400, detail="Instance name is too long")
-    return value
-
-
-def _validate_target(hostname: Any) -> str:
-    """Validate an exact enabled_on target without normalizing it silently."""
-
-    if not isinstance(hostname, str) or hostname != hostname.strip():
-        raise HTTPException(status_code=400, detail="Invalid enabled_on target")
-    if not hostname or hostname in {".", ".."} or any(char in hostname for char in ("/", "\\", "\x00")):
-        raise HTTPException(status_code=400, detail="Invalid enabled_on target")
-    if any(ord(char) < 32 for char in hostname):
-        raise HTTPException(status_code=400, detail="Invalid enabled_on target")
-    return hostname
-
-
 def _instance_dir(name: str) -> Path:
     """Resolve a validated instance directory below data/run_v8."""
 
@@ -383,14 +368,6 @@ def _validate_override_filename(filename: Any) -> str:
         or any(ord(char) < 32 for char in value)
     ):
         raise HTTPException(status_code=400, detail="Invalid override filename")
-    return value
-
-
-def _validate_backup_id(backup_id: Any) -> str:
-    """Validate an immutable numeric PB8 config-version backup ID."""
-    value = str(backup_id or "")
-    if not value.isdigit() or int(value) < 1:
-        raise HTTPException(status_code=400, detail="Invalid backup ID")
     return value
 
 
@@ -483,112 +460,61 @@ def _override_payloads_by_coin(instance_dir: Path, config: dict[str, Any]) -> di
     }
 
 
+def _backup_override_filenames(config: dict[str, Any]) -> list[str]:
+    """Return the sorted override sidecars one PB8 backup must contain."""
+    return sorted(set(_referenced_overrides(config).values()))
+
+
+def _backup_optional_logs(name: str, instance_dir: Path) -> dict[str, Path]:
+    """Return best-effort PB8 log sources keyed by their backup filename."""
+    optional_logs = {
+        "passivbot_err.log": instance_dir / "passivbot_err.log",
+        "passivbot_err.log.old": instance_dir / "passivbot_err.log.old",
+    }
+    runtime_dir = str(pbgui_purefunc.pb8dir() or "").strip()
+    if runtime_dir:
+        optional_logs["passivbot.log"] = Path(runtime_dir) / "logs" / f"{name}.log"
+    return optional_logs
+
+
+def _bundle_store() -> BundleStore:
+    """Build the PB8 store context from current module globals for one call."""
+    return BundleStore(
+        label="PB8",
+        service=SERVICE,
+        data_root=Path(PBGDIR) / "data",
+        backup_root=_backup_root(),
+        log=_log,
+        read_backup_metadata=read_pb8_backup_metadata,
+        native_errors=(PB8ConfigurationError,),
+        configuration_error=_configuration_http_error,
+        sidecar_filenames=_backup_override_filenames,
+        optional_logs=_backup_optional_logs,
+    )
+
+
 @contextmanager
 def _backup_lock():
     """Serialize PB8 backup settings, snapshots, retention, and deletion."""
-    root = _backup_root()
-    ensure_private_directory_tree(Path(PBGDIR) / "data", root.parent)
-    ensure_private_directory_tree(root.parent, root)
-    if root.is_symlink():
-        raise RuntimeError("PB8 backup root must not be a symlink")
-    with advisory_file_lock(root / ".write"):
+    with live_bundle_store.backup_lock(_bundle_store()):
         yield
 
 
 def _backup_settings_unlocked() -> dict[str, int]:
     """Load bounded PB8 backup settings while holding the backup lock."""
-    path = _backup_root() / "_settings.json"
-    if not path.exists():
-        return {"max_versions": 50}
-    if path.is_symlink() or not path.is_file():
-        raise HTTPException(status_code=409, detail="PB8 backup settings path is unsafe")
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        value = int(payload.get("max_versions", 50)) if isinstance(payload, dict) else 50
-    except (OSError, ValueError, json.JSONDecodeError) as exc:
-        _log(SERVICE, f"PB8 backup settings are invalid: {exc}", level="WARNING")
-        return {"max_versions": 50}
-    return {"max_versions": max(1, min(1000, value))}
-
-
-def _backup_dirs_unlocked(instance_root: Path) -> list[Path]:
-    """Return valid PB8 backup directories newest first."""
-    if not instance_root.is_dir() or instance_root.is_symlink():
-        return []
-    result = []
-    for entry in instance_root.iterdir():
-        if entry.is_symlink() or not entry.is_dir() or not entry.name.isdigit():
-            continue
-        config_path = entry / "config.json"
-        if config_path.is_file() and not config_path.is_symlink():
-            result.append(entry)
-    return sorted(result, key=lambda item: (int(item.name), item.stat().st_mtime_ns), reverse=True)
-
-
-def _prune_backups_unlocked(instance_root: Path, max_versions: int) -> None:
-    """Remove PB8 backup versions beyond retention while holding the lock."""
-    for entry in _backup_dirs_unlocked(instance_root)[max_versions:]:
-        shutil.rmtree(entry)
-    if instance_root.is_dir() and not any(instance_root.iterdir()):
-        instance_root.rmdir()
+    return live_bundle_store.backup_settings_unlocked(_bundle_store())
 
 
 def _snapshot_v8_bundle_unlocked(name: str, instance_dir: Path) -> str:
     """Atomically snapshot one exact current PB8 live bundle by config version."""
-    name = _validate_name(name)
-    if instance_dir.is_symlink() or not instance_dir.is_dir():
-        raise HTTPException(status_code=404, detail=f"PB8 instance '{name}' not found")
-    config_path = instance_dir / "config.json"
-    if config_path.is_symlink() or not config_path.is_file():
-        raise HTTPException(status_code=404, detail=f"PB8 instance '{name}' has no safe config.json")
-    try:
-        config = read_pb8_backup_metadata(config_path)
-    except PB8ConfigurationError as exc:
-        raise _configuration_http_error(f"Backing up PB8 instance '{name}'", exc) from exc
-    pbgui = config.get("pbgui") if isinstance(config.get("pbgui"), dict) else {}
-    version = _coerce_version(pbgui.get("version"))
-    if version < 1:
-        raise HTTPException(status_code=422, detail="PB8 backup requires a positive config version")
-
-    instance_root = _backup_root() / name
-    ensure_private_directory_tree(_backup_root(), instance_root)
-    target = instance_root / str(version)
-    if target.exists():
-        if target.is_symlink() or not target.is_dir() or not (target / "config.json").is_file():
-            raise HTTPException(status_code=409, detail=f"PB8 backup '{name}/{version}' is unsafe")
-        return str(version)
-
-    stage = instance_root / f".stage-{uuid.uuid4().hex}"
-    ensure_private_directory_tree(instance_root, stage)
-    try:
-        filenames = ["config.json", *sorted(set(_referenced_overrides(config).values()))]
-        for filename in filenames:
-            source = instance_dir / filename
-            if source.is_symlink() or not source.is_file():
-                raise HTTPException(status_code=422, detail=f"PB8 backup source '{filename}' is missing or unsafe")
-            destination = stage / filename
-            shutil.copy2(source, destination)
-            secure_private_file(destination)
-        optional_logs = {
-            "passivbot_err.log": instance_dir / "passivbot_err.log",
-            "passivbot_err.log.old": instance_dir / "passivbot_err.log.old",
-        }
-        runtime_dir = str(pbgui_purefunc.pb8dir() or "").strip()
-        if runtime_dir:
-            optional_logs["passivbot.log"] = Path(runtime_dir) / "logs" / f"{name}.log"
-        for filename, source in optional_logs.items():
-            if source.is_symlink() or not source.is_file():
-                continue
-            destination = stage / filename
-            shutil.copy2(source, destination)
-            secure_private_file(destination)
-        os.replace(stage, target)
-    except Exception:
-        shutil.rmtree(stage, ignore_errors=True)
-        raise
-    _prune_backups_unlocked(instance_root, _backup_settings_unlocked()["max_versions"])
-    _log(SERVICE, f"Backed up PB8 live instance '{name}' as version {version}", level="INFO")
-    return str(version)
+    return live_bundle_store.snapshot_bundle_unlocked(
+        _bundle_store(),
+        name,
+        instance_dir,
+        retain=lambda instance_root: _prune_backups_unlocked(
+            instance_root, _backup_settings_unlocked()["max_versions"]
+        ),
+    )
 
 
 def _snapshot_v8_bundle(name: str, instance_dir: Path) -> str:
@@ -667,21 +593,7 @@ def _flatten_leaf_metadata(value: dict[str, Any], prefix: str = "") -> dict[str,
 
 def _publish_staged_bundle(stage_dir: Path, target_dir: Path) -> None:
     """Atomically replace one complete live bundle, restoring on placement failure."""
-    previous_dir = target_dir.parent / f".pbgui-v8-old-{uuid.uuid4().hex}"
-    moved_previous = False
-    try:
-        if target_dir.exists():
-            if target_dir.is_symlink() or not target_dir.is_dir():
-                raise OSError("PB8 target directory is unsafe")
-            os.replace(target_dir, previous_dir)
-            moved_previous = True
-        os.replace(stage_dir, target_dir)
-    except OSError:
-        if moved_previous and previous_dir.is_dir() and not target_dir.exists():
-            os.replace(previous_dir, target_dir)
-        raise
-    if moved_previous:
-        shutil.rmtree(previous_dir, ignore_errors=True)
+    live_bundle_store.publish_staged_bundle(stage_dir, target_dir, generation_prefix=".pbgui-v8", label="PB8")
 
 
 @contextmanager
@@ -1123,17 +1035,6 @@ def _ensure_pb8_cluster_rollout_ready(identity: dict[str, Any]) -> None:
                    + " ".join(blockers),
         )
 
-
-
-def _coerce_version(value: Any) -> int:
-    """Return a non-negative integer config version."""
-
-    if isinstance(value, bool):
-        return 0
-    try:
-        return max(0, int(str(value).strip()))
-    except (TypeError, ValueError):
-        return 0
 
 
 def _current_version(name: str) -> int:

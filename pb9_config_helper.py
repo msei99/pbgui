@@ -46,12 +46,14 @@ def _module_path(module, src: Path) -> str:
     return str(path)
 
 
-def check_inline_config(config: dict, expected_schema: str | None = None) -> None:
+def check_inline_config(config: dict, expected_schema: str | None = None, *, allow_inline_overrides: bool = False) -> None:
     """Reject external-data and metadata inputs before any native config import.
 
     Shared with the client; this helper module has standard-library imports only.
-    Audited against v9 ref ad9d6ede: universe lists use resolve_files=False;
-    scalar file discovery, HSL override loading and symbolmap reads are excluded.
+    Base paths were audited at ad9d6ede; the canonical override path was
+    inspected with ec20de4 normalization/override modules. Canonical acceptance
+    is not launch acceptance: runtime projection owns override key/effective
+    checks. No runtime compilation or file-backed overrides are requested.
     """
     try:
         _require_json_value(config)
@@ -78,7 +80,14 @@ def check_inline_config(config: dict, expected_schema: str | None = None) -> Non
                 if key.endswith("override_config_path"):
                     raise _HelperError("external_reference_rejected")
                 if "coin_overrides" in parts and (leaf != "coin_overrides" or value != {}):
-                    raise _HelperError("external_reference_rejected")
+                    if not (allow_inline_overrides and node is config and key == "coin_overrides"
+                            and isinstance(value, dict) and all(isinstance(patch, dict) for patch in value.values())):
+                        raise _HelperError("external_reference_rejected")
+                    for coin in value:
+                        if (not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:/-]{0,127}", coin)
+                                or "://" in coin or ".." in coin.split("/")
+                                or coin.lower().endswith((".json", ".hjson", ".txt"))):
+                            raise _HelperError("external_reference_rejected")
                 if any(part in {"base_config_path", "organillo_csv", "fake_scenario_path"} for part in parts) and value not in (None, ""):
                     raise _HelperError("external_reference_rejected")
                 if "coin_sources" in parts and (leaf != "coin_sources" or value not in (None, {})):
@@ -117,20 +126,75 @@ def check_inline_config(config: dict, expected_schema: str | None = None) -> Non
         raise _HelperError("invalid_config") from exc
 
 
+def _editor_metadata(schema, src: Path) -> dict:
+    """Describe native fields and strategies without coupling to the PB8 schema."""
+    def arrays(value):
+        """Rust tuples serialize as arrays; preserve every other JSON type exactly."""
+        if isinstance(value, (tuple, list)):
+            return [arrays(item) for item in value]
+        if isinstance(value, dict):
+            return {key: arrays(item) for key, item in value.items()}
+        return value
+
+    registry = importlib.import_module("config.field_registry")
+    field_spec = importlib.import_module("config.field_spec")
+    strategy = importlib.import_module("config.strategy_spec")
+    rust = importlib.import_module("passivbot_rust")
+    registry_file = _module_path(registry, src)
+    strategy_file = _module_path(strategy, src)
+    _module_path(field_spec, src)
+    rust_file = Path(rust.__file__).resolve()
+    if not rust_file.is_relative_to(Path(sys.prefix).resolve()):
+        raise _HelperError("runtime_identity_mismatch")
+    fields = []
+    for field in registry.get_field_registry():
+        item = {
+            "path": list(field.path), "types": [kind.value for kind in field.types],
+            "nullable": bool(field.nullable), "description": field.description,
+            "unit": field.unit, "scope": field.scope, "order": field.order,
+        }
+        if field.default is not field_spec.NO_DEFAULT:
+            default = arrays(field.default)
+            _require_json_value(default)
+            item["default"] = default
+        if field.domain is not None:
+            domain = field.domain
+            item["domain"] = {key: getattr(domain, key) for key in (
+                "minimum", "maximum", "exclusive_minimum", "exclusive_maximum", "finite", "string_pattern")}
+            item["domain"]["choices"] = list(domain.choices)
+        if field.coin_override is not None:
+            item["coin_override"] = field.coin_override.value
+        fields.append(item)
+    kinds = list(strategy.get_supported_strategy_kinds())
+    metadata = {
+        "contract_version": 1, "template": schema.get_template_config(),
+        "prototype": schema.get_expanded_config_prototype(), "fields": fields,
+        "strategies": kinds, "strategy_specs": {kind: strategy.get_strategy_spec(kind) for kind in kinds},
+        "strategy_defaults": strategy.get_all_strategy_defaults(),
+    }
+    metadata = arrays(metadata)
+    _require_json_value(metadata)
+    return {"metadata": metadata, "registry_module_file": registry_file, "strategy_module_file": strategy_file,
+            "rust_module_file": str(rust_file)}
+
+
 def handle(request: dict) -> dict:
     """Return templates or validate in-memory native configs, never save or migrate."""
+    if not isinstance(request, dict) or not isinstance(request.get("operation"), str):
+        raise _HelperError("invalid_request")
     required = {"operation", "pb9_dir", "config_schema", "package_version"}
-    if isinstance(request, dict) and request.get("operation") == "validate":
+    if isinstance(request, dict) and request.get("operation") in {"validate", "validate_live"}:
         required.add("config")
     if not isinstance(request, dict) or set(request) != required:
         raise _HelperError("invalid_request")
-    if not isinstance(request["operation"], str) or request["operation"] not in {"template", "validate"} or any(
+    if not isinstance(request["operation"], str) or request["operation"] not in {"template", "metadata", "validate", "validate_live"} or any(
         not isinstance(request[key], str) or not request[key]
         for key in ("pb9_dir", "config_schema", "package_version")
     ):
         raise _HelperError("invalid_request")
-    if request["operation"] == "validate":
-        check_inline_config(request["config"], request["config_schema"])
+    if request["operation"] in {"validate", "validate_live"}:
+        check_inline_config(request["config"], request["config_schema"],
+                            allow_inline_overrides=request["operation"] == "validate_live")
     root = Path(request["pb9_dir"])
     if not root.is_absolute():
         raise _HelperError("invalid_request")
@@ -150,7 +214,16 @@ def handle(request: dict) -> dict:
                 or schema_version != request["config_schema"]
                 or package_version != request["package_version"]):
             raise _HelperError("runtime_identity_mismatch")
-        if request["operation"] == "validate":
+        if request["operation"] == "metadata":
+            try:
+                result = _editor_metadata(schema, src)
+            except _HelperError:
+                raise
+            except Exception as exc:
+                raise _HelperError("native_metadata_failed") from exc
+            return {**result, "config_schema": schema_version, "package_version": package_version,
+                    "schema_module_file": schema_file, "version_module_file": version_file}
+        if request["operation"] in {"validate", "validate_live"}:
             try:
                 loader = importlib.import_module("config.load")
                 load_file = _module_path(loader, src)
@@ -159,9 +232,10 @@ def handle(request: dict) -> dict:
             except Exception as exc:
                 raise _HelperError("native_validation_failed") from exc
             try:
+                options = {"live_only": True} if request["operation"] == "validate_live" else {}
                 prepared = loader.prepare_config(
                     request["config"], base_config_path="", verbose=False,
-                    target="canonical", runtime=None,
+                    target="canonical", runtime=None, **options,
                 )
                 if not isinstance(prepared, dict) or prepared.get("config_version") != schema_version:
                     raise _HelperError("runtime_identity_mismatch")
@@ -193,7 +267,7 @@ def main() -> int:
         if len(source) > MAX_VALIDATION_BYTES:
             raise _HelperError("invalid_request")
         request = json.loads(source)
-        if isinstance(request, dict) and request.get("operation") == "template" and len(source) > MAX_REQUEST_BYTES:
+        if isinstance(request, dict) and isinstance(request.get("operation"), str) and request.get("operation") in {"template", "metadata"} and len(source) > MAX_REQUEST_BYTES:
             raise _HelperError("invalid_request")
         response = {"ok": True, "result": handle(request)}
     except _HelperError as exc:
@@ -202,7 +276,8 @@ def main() -> int:
         response = {"ok": False, "error_code": "invalid_request"}
     except Exception:
         # The PBGui owner logs this fixed error code, never native exception data.
-        code = "native_validation_failed" if isinstance(request, dict) and request.get("operation") == "validate" else "native_template_failed"
+        operation = request.get("operation") if isinstance(request, dict) else None
+        code = "native_validation_failed" if isinstance(operation, str) and operation in {"validate", "validate_live"} else "native_template_failed"
         response = {"ok": False, "error_code": code}
     try:
         encoded = json.dumps(response, allow_nan=False).encode("utf-8")
