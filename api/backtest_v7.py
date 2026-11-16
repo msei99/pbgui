@@ -8,6 +8,7 @@ Provides:
 """
 
 import asyncio
+import base64
 import configparser
 import copy
 import csv
@@ -135,6 +136,9 @@ def _get_cached_archive_results(name: str) -> dict | None:
 
 
 def _set_cached_archive_results(name: str, results: list[dict], migration_status: dict) -> None:
+    if name not in _archive_results_cache and len(_archive_results_cache) >= 32:
+        oldest = min(_archive_results_cache, key=lambda key: _archive_results_cache[key].get('ts', 0))
+        _archive_results_cache.pop(oldest, None)
     _archive_results_cache[name] = {
         "ts": time.time(),
         "results": results,
@@ -466,7 +470,7 @@ def _opt_archive_configs_dir() -> Path:
     return Path(PBGDIR) / "data" / "opt_v7"
 
 
-def _normalize_archive_version(value: Any, *, default: str | None = None) -> str | None:
+def _normalize_archive_version(value: Any, *, default: str | None = None, allow_v9: bool = False) -> str | None:
     """Normalize a public archive generation selector."""
     if value is None or not isinstance(value, str):
         return default
@@ -474,8 +478,10 @@ def _normalize_archive_version(value: Any, *, default: str | None = None) -> str
     if not text:
         return default
     aliases = {"v7": "v7", "pb7": "v7", "v8": "v8", "pb8": "v8"}
+    if allow_v9:
+        aliases.update(v9="v9", pb9="v9")
     if text not in aliases:
-        raise HTTPException(400, "version must be v7 or v8")
+        raise HTTPException(400, "version must be v7, v8 or v9" if allow_v9 else "version must be v7 or v8")
     return aliases[text]
 
 
@@ -496,6 +502,16 @@ def _load_archived_backtest_config(result_dir: Path, archive_dir: Path) -> tuple
     version = _archived_backtest_version(result_dir, archive_dir)
     config_file = result_dir / "config.json"
     try:
+        if version == "v9":
+            from passivbot_runtime import generation_from_schema
+            for filename in ('pbgui.source.json', 'config.original.json', 'config.json'):
+                path = result_dir / filename
+                if path.exists() or path.is_symlink():
+                    config = _read_json_object_nofollow(path, archive_dir, required=True)
+                    schema = config.get('config_version')
+                    if not isinstance(schema, str) or generation_from_schema(schema) != 'pb9':
+                        raise ValueError('Invalid native PB9 source schema')
+                    return config, version, {}
         if version == "v8":
             from api import backtest_v8
             from pb8_config import load_pb8_config
@@ -513,12 +529,15 @@ def _load_archived_backtest_config(result_dir: Path, archive_dir: Path) -> tuple
 
 def _resolve_managed_backtest_result(path: str | Path, declared_version: str | None = None) -> tuple[Path, str]:
     """Resolve a local result under the managed root for its declared or inferred version."""
-    requested = _normalize_archive_version(declared_version)
-    versions = [requested] if requested else ["v7", "v8"]
+    requested = _normalize_archive_version(declared_version, allow_v9=True)
+    versions = [requested] if requested else ["v7", "v8", "v9"]
     last_error: HTTPException | None = None
     for version in versions:
         try:
-            if version == "v8":
+            if version == "v9":
+                from api import backtest_v9
+                result_dir = backtest_v9._result(str(path))
+            elif version == "v8":
                 from api import backtest_v8
 
                 result_dir = backtest_v8._resolve_result_dir(str(path), allow_archives=False)
@@ -537,7 +556,7 @@ def _resolve_managed_backtest_result(path: str | Path, declared_version: str | N
         return result_dir, version
     if requested and last_error and last_error.status_code == 404:
         raise last_error
-    raise HTTPException(400, "Source path is outside the managed PB7/PB8 result roots")
+    raise HTTPException(400, "Source path is outside the managed PB7/PB8/PB9 result roots")
 
 
 def _optimize_config_file(config_name: str, version: str) -> Path:
@@ -760,6 +779,8 @@ def _queue_archive_retest_run(
     schedule_target_id: str | None = None,
 ) -> dict:
     cfg, backtest_version, override_configs = _load_archived_backtest_config(result_dir, archive_dir)
+    if backtest_version == "v9":
+        raise HTTPException(409, "Native PB9 Retest & Replace is not yet available; use Backtest")
     run_id = uuid.uuid4().hex
     source_relative_path = result_dir.resolve().relative_to(archive_dir.resolve()).as_posix()
     archive_config_name = _archive_retest_config_name(result_dir, cfg)
@@ -1345,6 +1366,7 @@ def _mask_archive_secret(text: str, secret: str = "") -> str:
         return ""
     if secret:
         text = text.replace(secret, "***")
+        text = text.replace(base64.b64encode((secret + ":").encode()).decode(), "***")
     return text.strip()
 
 
@@ -1354,6 +1376,40 @@ def _archive_git_env() -> dict[str, str]:
     env["LC_ALL"] = "C"
     env["LANG"] = "C"
     env["LANGUAGE"] = "C"
+    return env
+
+
+def _archive_authenticated_git_env(dest: Path, command: list[str], token: str) -> dict[str, str]:
+    """Keep transient HTTP authentication out of URLs, argv and repository config."""
+    env = _archive_git_env()
+    if not token or len(command) < 2 or command[1] not in {'push', 'pull', 'fetch', 'ls-remote'}:
+        return env
+    from urllib.parse import urlsplit, urlunsplit
+    result = subprocess.run(['git', 'remote', 'get-url', 'origin'], cwd=str(dest),
+                            capture_output=True, text=True, timeout=10, env=env)
+    if result.returncode:
+        raise HTTPException(422, 'Archive origin could not be verified')
+    remote = urlsplit((result.stdout or '').strip())
+    if remote.scheme == 'http':
+        raise HTTPException(422, 'Stored archive tokens require HTTPS')
+    if remote.scheme != 'https':
+        return env
+    if not remote.hostname or remote.username is not None or remote.password is not None or remote.query or remote.fragment:
+        raise HTTPException(422, 'Archive origin must not contain credentials or query parameters')
+    origin = urlunsplit(remote)
+    if command[1] == 'push':
+        pushed = subprocess.run(['git', 'remote', 'get-url', '--push', 'origin'], cwd=str(dest),
+                                capture_output=True, text=True, timeout=10, env=env)
+        if pushed.returncode or (pushed.stdout or '').strip() != origin:
+            raise HTTPException(422, 'Archive push and fetch origins must match')
+    for key in list(env):
+        if key in {'GIT_CONFIG_COUNT', 'GIT_CONFIG_PARAMETERS'} or key.startswith(('GIT_CONFIG_KEY_', 'GIT_CONFIG_VALUE_', 'GIT_TRACE', 'GIT_CURL_VERBOSE')):
+            env.pop(key, None)
+    env['GIT_CONFIG_COUNT'] = '2'
+    env['GIT_CONFIG_KEY_0'] = 'http.' + origin + '.extraHeader'
+    env['GIT_CONFIG_VALUE_0'] = 'Authorization: Basic ' + base64.b64encode((token + ':').encode()).decode()
+    env['GIT_CONFIG_KEY_1'] = 'http.followRedirects'
+    env['GIT_CONFIG_VALUE_1'] = 'false'
     return env
 
 
@@ -1370,7 +1426,7 @@ def _run_archive_git_step(
     """Run one git step and write start/finish progress to ArchiveSync.log."""
     _log_archive(f"[{name}] {label} started")
     try:
-        result = subprocess.run(cmd, cwd=str(dest), capture_output=True, text=True, timeout=timeout, env=_archive_git_env())
+        result = subprocess.run(cmd, cwd=str(dest), capture_output=True, text=True, timeout=timeout, env=_archive_authenticated_git_env(dest, cmd, secret))
     except subprocess.TimeoutExpired:
         _log_archive(f"[{name}] {label} timed out after {timeout}s", level="ERROR")
         raise
@@ -1407,7 +1463,7 @@ def _run_archive_git_stream_step(
         proc = subprocess.Popen(
             cmd,
             cwd=str(dest),
-            env=_archive_git_env(),
+            env=_archive_authenticated_git_env(dest, cmd, secret),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -1501,18 +1557,7 @@ def _run_archive_git_stream_step(
 
 
 def _archive_push_url(dest: Path, access_token: str) -> str | None:
-    """Return an HTTPS remote URL with a transient token injected for push/fetch."""
-    if not access_token:
-        return None
-    url_result = subprocess.run(
-        ["git", "remote", "get-url", "origin"], cwd=str(dest),
-        capture_output=True, text=True, timeout=10, env=_archive_git_env(),
-    )
-    remote_url = (url_result.stdout or "").strip()
-    if remote_url.startswith("http://"):
-        return remote_url.replace("http://", f"http://{access_token}@", 1)
-    if remote_url.startswith("https://"):
-        return remote_url.replace("https://", f"https://{access_token}@", 1)
+    """Use origin; authentication belongs exclusively to the subprocess environment."""
     return None
 
 
@@ -1648,7 +1693,8 @@ def _compact_archive_history(name: str, dest: Path, body: dict) -> dict[str, Any
     """Replace archive git history with one root commit and force-push with lease."""
     username = str(body.get("username") or "")
     email = str(body.get("email") or "")
-    access_token = str(body.get("access_token") or "")
+    from github_archive import archive_access_token
+    access_token = str(body.get("access_token") or archive_access_token())
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     message = str(body.get("message") or f"Compact {name} archive at {timestamp}")
     log_lines: list[str] = []
@@ -2477,6 +2523,7 @@ _archive_retest_worker = ArchiveRetestWorker()
 # ── WebSocket ─────────────────────────────────────────────────
 
 _ws_clients: set[WebSocket] = set()
+_archive_ws_clients: set[WebSocket] = set()
 
 # ── Archive inotify watcher ────────────────────────────────────
 # Uses raw Linux inotify via ctypes (same approach as master/v7_config_sync.py).
@@ -2576,7 +2623,7 @@ async def _archive_watcher_loop() -> None:
                 pos += ev_size + name_len
                 if mask & (_IN_CREATE | _IN_MOVED_TO | _IN_DELETE | _IN_MOVE_SELF):
                     # Broadcast archive_update directly to all connected WS clients
-                    for _client in list(_ws_clients):
+                    for _client in list(_ws_clients | _archive_ws_clients):
                         try:
                             await _client.send_json({"type": "archive_update"})
                         except Exception:
@@ -4013,6 +4060,24 @@ def delete_legacy_result(path: str, session: SessionToken = Depends(require_auth
 
 # ── REST: Archives ────────────────────────────────────────────
 
+def _archive_public_remote_url(value):
+    """Present repository coordinates without embedded authentication or queries."""
+    from urllib.parse import urlsplit, urlunsplit
+    text = str(value or '')
+    try:
+        parsed = urlsplit(text)
+        if parsed.scheme:
+            host = parsed.netloc
+            if parsed.scheme in {'http', 'https'}:
+                host = host.rsplit('@', 1)[-1]
+            elif parsed.password is not None:
+                host = ((parsed.username or '') + '@' if parsed.username else '') + host.rsplit('@', 1)[-1]
+            return urlunsplit((parsed.scheme, host, parsed.path, '', ''))
+    except ValueError:
+        return '[invalid repository URL]'
+    return text
+
+
 @router.get("/archives")
 def list_archives(session: SessionToken = Depends(require_auth)):
     """List configured git archives."""
@@ -4042,7 +4107,7 @@ def list_archives(session: SessionToken = Depends(require_auth)):
                 archives.append({
                     "name": d.name,
                     "path": str(d),
-                    "url": url,
+                    "url": _archive_public_remote_url(url),
                     "configs": counts["configs"],
                     "results": counts["results"],
                     "optimize_configs": counts["optimize_configs"],
@@ -4056,7 +4121,7 @@ def list_archives(session: SessionToken = Depends(require_auth)):
 
 
 @router.get("/archives/{name}/results")
-def list_archive_results(name: str, session: SessionToken = Depends(require_auth)):
+def list_archive_results(name: str, session: SessionToken = Depends(require_auth), read_only: bool = False):
     """List results in an archive (same format as /results)."""
     _validate_name(name)
     archive_dir = _archives_dir() / name
@@ -4065,6 +4130,17 @@ def list_archive_results(name: str, session: SessionToken = Depends(require_auth
     cached = _get_cached_archive_results(name)
     if cached:
         return {"results": cached["results"], "migration_status": cached.get("migration_status") or archive_migration_status(archive_dir, fast=True), "cached": True}
+    if read_only:
+        with archive_transaction(archive_dir):
+            cached = _get_cached_archive_results(name)
+            if cached:
+                return {'results': cached['results'], 'migration_status': cached.get('migration_status') or {}, 'cached': True}
+            if not archive_dir.is_dir() or archive_dir.is_symlink():
+                raise HTTPException(404, f"Archive '{name}' not found")
+            results = score_archive_results(list_archive_backtest_results(archive_dir))
+            status = archive_migration_status(archive_dir, fast=True)
+            _set_cached_archive_results(name, results, status)
+            return {'results': results, 'migration_status': status, 'cached': False}
     with archive_transaction(archive_dir):
         if not archive_dir.exists() or not archive_dir.is_dir() or archive_dir.is_symlink():
             raise HTTPException(404, f"Archive '{name}' not found")
@@ -4091,6 +4167,10 @@ def create_archive(body: dict, session: SessionToken = Depends(require_auth)):
     if not name or not url:
         raise HTTPException(400, "name and url are required")
     _validate_name(name)
+    if not isinstance(url, str) or url.startswith('-') or any(ord(c) < 32 for c in url):
+        raise HTTPException(422, 'Invalid archive URL')
+    if _archive_public_remote_url(url) != url:
+        raise HTTPException(422, 'Use a repository URL without credentials or query parameters; configure its token in Setup')
 
     dest = _archives_dir() / name
     _archives_dir().mkdir(parents=True, exist_ok=True)
@@ -4235,6 +4315,8 @@ def rename_archive_backtest_config(name: str, body: dict, session: SessionToken 
             shutil.copytree(str(config_dir), str(staged_group), symlinks=True)
             _validate_directory_tree_no_symlinks(staged_group)
             for relative_path, original in config_payloads.items():
+                if config_version_info(original)['backtest_version'] == 'v9':
+                    continue  # native config/source/provenance remain immutable during rename
                 cfg = copy.deepcopy(original)
                 backtest = cfg.get("backtest")
                 if not isinstance(backtest, dict):
@@ -4356,7 +4438,7 @@ def pull_all_archives_stream(session: SessionToken = Depends(require_auth)):
 @router.post("/archives/{name}/push")
 def git_push(name: str, body: dict = None, session: SessionToken = Depends(require_auth)):
     """Git pull + add + commit + push for own archive.
-    Accepts optional access_token to inject into the HTTPS remote URL for auth.
+    Accepts an optional transient token through the subprocess environment.
     Pass dry_run=true to test credentials without actually pushing.
     """
     _validate_name(name)
@@ -4371,7 +4453,8 @@ def _git_push_locked(name: str, dest: Path, body: dict | None) -> dict:
     body = body or {}
     username = body.get("username", "")
     email = body.get("email", "")
-    access_token = body.get("access_token", "")
+    from github_archive import archive_access_token
+    access_token = body.get("access_token") or archive_access_token()
     timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     message = body.get("message", f"Update {name} at {timestamp}")
     dry_run = bool(body.get("dry_run", False))
@@ -4439,7 +4522,7 @@ def _git_push_locked(name: str, dest: Path, body: dict | None) -> dict:
             )
             log_lines.append(f"Git commit:\n{commit_out}")
 
-        # Build push command — inject access token into HTTPS URL when provided
+        # Authentication is supplied only through the transient Git environment.
         push_url = _archive_push_url(dest, access_token)
 
         push_cmd = ["git", "push"]
@@ -4475,7 +4558,8 @@ def compact_archive_history(name: str, body: dict = None, session: SessionToken 
         body = body or {}
         dry_run = bool(body.get("dry_run", True))
         if dry_run:
-            preview = _archive_compact_preview(name, dest, str(body.get("access_token") or ""))
+            from github_archive import archive_access_token
+            preview = _archive_compact_preview(name, dest, str(body.get("access_token") or archive_access_token()))
             return {"ok": True, "dry_run": True, **preview}
         return _compact_archive_history(name, dest, body)
 
@@ -4519,7 +4603,7 @@ async def add_config_to_archive(name: str, body: dict,
             if not source_path:
                 raise HTTPException(400, "source_path is required for every result")
             declared_version = _normalize_archive_version(
-                item.get("backtest_version") or item.get("version")
+                item.get("backtest_version") or item.get("version"), allow_v9=True
             )
             sources.append((source_path, declared_version))
         return await asyncio.to_thread(_add_configs_to_archive_sync, name, sources)
@@ -4528,7 +4612,7 @@ async def add_config_to_archive(name: str, body: dict,
     if not source_path:
         raise HTTPException(400, "source_path is required")
     declared_version = _normalize_archive_version(
-        (body or {}).get("backtest_version") or (body or {}).get("version")
+        (body or {}).get("backtest_version") or (body or {}).get("version"), allow_v9=True
     )
     if declared_version is None:
         return await asyncio.to_thread(_add_config_to_archive_sync, name, source_path)
@@ -4935,6 +5019,8 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
         if not is_inside_archive(result_dir, archive_dir):
             raise HTTPException(400, "Invalid result path")
         base_cfg, backtest_version, override_configs = _load_archived_backtest_config(result_dir, archive_dir)
+        if backtest_version == "v9":
+            raise HTTPException(422, "Queue native PB9 archive results through the PB9 endpoint")
         for exchange in exchange_runs:
             cfg = copy.deepcopy(base_cfg)
             backtest = cfg.setdefault("backtest", {})
@@ -5027,6 +5113,8 @@ def create_archive_retest_schedule(name: str, body: dict, session: SessionToken 
                 raise HTTPException(400, "Invalid result path")
             if not result_dir.exists():
                 raise HTTPException(404, f"Archive result not found: {result_dir}")
+            if _archived_backtest_version(result_dir, archive_dir) == 'v9':
+                raise HTTPException(409, 'Native PB9 retest schedules are not yet available; use Backtest')
             targets.append({
                 "id": uuid.uuid4().hex,
                 "relative_path": result_dir.relative_to(archive_dir).as_posix(),
@@ -5173,7 +5261,7 @@ def get_archive_settings(session: SessionToken = Depends(require_auth)):
         "generated_paths":   True,
         "username":          value("my_archive_username"),
         "email":             value("my_archive_email"),
-        "access_token":      value("my_archive_access_token"),
+        "has_access_token":  bool(value("my_archive_access_token")),
         "auto_pull_interval": auto_pull_interval,
         "readme_title":      readme_config.get("title", my_archive or "PBGui Config Archive"),
         "readme_static_markdown": readme_config.get("static_markdown", ""),
@@ -5198,10 +5286,12 @@ def save_archive_settings(body: dict, session: SessionToken = Depends(require_au
         "email":            "my_archive_email",
         "access_token":    "my_archive_access_token",
     }
-    ini_values = {}
+    ini_values = {'my_archive_access_token': ''} if body.get('clear_access_token') is True else {}
     for body_key, ini_key in mapping.items():
         if body_key in body:
-            ini_values[ini_key] = str(body[body_key])
+            if body_key == 'access_token' and not body[body_key] and body.get('clear_access_token') is not True:
+                continue
+            ini_values[ini_key] = '' if body_key == 'access_token' and body.get('clear_access_token') is True else str(body[body_key])
     if "auto_pull_interval" in body:
         try:
             interval = max(0, int(body["auto_pull_interval"]))

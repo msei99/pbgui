@@ -25,7 +25,7 @@ def backtest():
         state = SimpleNamespace(page=page, config=config, saved=[], queued=[], run_drafts=[], balance_requests=[], errors=[], unexpected=[], metadata=metadata, hold_symbols=False, pending_symbols=[], queue_fail_once=False,
                                 preflight_requests=[], hold_preflight=False, pending_preflight=[], lookups=[], lookup_stops=[], hold_lookup=False,
                                 preload_supported=False,preload_status='running',preload_gets=0,
-                                settings={'exchange_options':['binance','bybit'],'cpu':1,'cpu_max':4,'autostart':False}, settings_saved=[])
+                                settings={'exchange_options':['binance','bybit'],'cpu':1,'cpu_max':4,'autostart':False}, settings_saved=[], archives=[], archive_results=[], archived=[], archive_queued=[])
         page.on('pageerror', lambda error: state.errors.append(str(error)))
 
         def respond(route):
@@ -90,6 +90,25 @@ def backtest():
                 else:
                     route.fulfill(json={'job_id':'0123456789ab','status':'completed','result':{'start_date_options':{
                         'earliest':{'available':True,'start_date':'2025-01-05'},'all_markets':{'available':True,'start_date':'2025-02-01'},'pair_count':1,'known_pair_count':1}}})
+            elif '/archives' in path:
+                if path.endswith('/archives'):
+                    route.fulfill(json={'archives':state.archives,'my_archive':'own'})
+                elif path.endswith('/archives/settings'):
+                    route.fulfill(json={'my_archive':'own','has_access_token':False,'username':'','email':''})
+                elif path.endswith('/results/rebacktest'):
+                    state.archive_queued.append((path,route.request.post_data_json))
+                    route.fulfill(json={'ok':True,'queued':1})
+                elif path.endswith('/add-config'):
+                    state.archived.append(route.request.post_data_json)
+                    route.fulfill(json={'ok':True})
+                elif path.endswith('/results'):
+                    route.fulfill(json={'results':state.archive_results})
+                elif path.endswith('/optimize-configs'):
+                    route.fulfill(json={'configs':[]})
+                elif path.endswith('/retest-schedules'):
+                    route.fulfill(json={'schedules':[],'runs':[]})
+                else:
+                    route.fulfill(json={})
             elif path.endswith('/settings'):
                 if route.request.method == 'POST':
                     payload=route.request.post_data_json
@@ -869,3 +888,137 @@ def test_queue_settings_reuses_pb8_dialog_and_preserves_dirty_edits(backtest):
     expect(page.locator('#set-cpu-val')).to_have_value('2')
     expect(page.locator('#set-autostart')).to_be_checked()
     assert backtest.errors == backtest.unexpected == []
+
+
+def test_native_archive_reuses_shared_view_charts_and_version_owned_requeue(backtest):
+    """Native archive rows reuse charts, retain navigation and requeue through PB9 only."""
+    page = backtest.page
+    path = '/archive-fixture/own/pbgui/configs/v9.0.0/backtests/native-archived/bybit/result'
+    backtest.archives = [{'name':'own','is_own':True,'results':1}]
+    backtest.archive_results = [{'path':path,'backtest_version':'v9','config_version':'v9.0.0',
+        'config_name':'native-archived','result_name':'result','coins':['HYPE'],'coins_text':'HYPE',
+        'strategy':'ema_anchor','exchange_dir':'bybit','exchanges':['bybit'],
+        'start_date':'2025-01-01','end_date':'2025-01-02','gain':1.3,'final_balance':1200}]
+    reads = []
+    def results(route):
+        """Only the native result API may serve this archived row's numeric artifacts."""
+        url=urlparse(route.request.url);reads.append(url.path)
+        if url.path.endswith('/config'):
+            cfg=copy.deepcopy(backtest.config)
+            cfg['backtest'].update(start_date='2025-01-01',end_date='2025-01-02',exchanges=['bybit'])
+            route.fulfill(json=cfg)
+        elif url.path.endswith('/equity'):
+            route.fulfill(content_type='text/csv',body='timestamp,usd_total_balance,usd_total_equity\n2025-01-01T00:00:00Z,1000,1000\n2025-01-02T00:00:00Z,1200,1300\n')
+        elif url.path.endswith('/price'):
+            route.fulfill(json={'available':False,'reason':'No fixture candles'})
+        elif url.path.endswith('/fills'):
+            route.fulfill(content_type='text/csv',body='timestamp,symbol,pnl,fee_paid,balance\n')
+        else:
+            route.fulfill(json={})
+    page.route('**/api/backtest-v9/results/**',results)
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#sidebar-editor button[onclick="closeEditor()"]').click()
+    page.locator('#sidebar [data-panel="archive"]').click()
+    page.locator('#archive-list-container tbody tr').dblclick()
+    expect(page.locator('#archive-results-table')).to_contain_text('native-archived')
+    expect(page.locator('#arc-tab-optimize')).to_be_hidden()
+    expect(page.locator('#arc-tab-schedules')).to_be_hidden()
+    expect(page.locator('#archive-btn-retest-replace')).to_be_hidden()
+    page.locator('#archive-results-table .icon-btn[data-action="view"]').click()
+    page.wait_for_function('document.querySelector("#archive-charts .js-plotly-plot") !== null')
+    assert '/api/backtest-v9/results/equity' in reads
+    page.reload()
+    expect(page.locator('#archive-results-table')).to_contain_text('native-archived')
+    expect(page.locator('#sidebar [data-panel="archive"]')).to_have_class(__import__('re').compile('active'))
+    page.locator('#archive-results-table tbody tr').first.click()
+    page.locator('#archive-btn-rebacktest').click()
+    expect(page.locator('#rbt-start')).to_have_value('2025-01-01')
+    page.locator('#modal-btn-0').click()
+    page.wait_for_function('document.getElementById("modal-root").classList.contains("open") === false')
+    assert len(backtest.archive_queued) == 1
+    assert backtest.archive_queued[0][0] == '/api/backtest-v9/archives/own/results/rebacktest'
+    assert backtest.archive_queued[0][1]['paths'] == [path]
+    assert backtest.errors == backtest.unexpected == []
+
+
+def test_native_result_adds_to_existing_archive_endpoint(backtest):
+    """Add to Archive sends a native generation selector through the shared archive action."""
+    page = backtest.page
+    result={'path':'native/local/result','backtest_version':'v9','config_name':'native-local','result_name':'result'}
+    page.route('**/api/backtest-v9/results?*',lambda route:route.fulfill(json={'results':[result],'pagination':{'total':1,'has_more':False}}))
+    page.route('**/api/backtest-v9/results',lambda route:route.fulfill(json={'results':[result],'pagination':{'total':1,'has_more':False}}))
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#sidebar-editor button[onclick="closeEditor()"]').click()
+    page.locator('#sidebar [data-panel="results"]').click()
+    expect(page.locator('#results-list')).to_contain_text('native-local')
+    page.locator('#results-list tbody tr').click()
+    page.locator('#btn-result-add-archive').click()
+    expect(page.locator('#btn-result-add-archive')).to_be_enabled()
+    assert backtest.archived == [{'results':[{'source_path':'native/local/result','backtest_version':'v9'}]}]
+    assert backtest.errors == backtest.unexpected == []
+
+
+def test_mixed_archive_requeue_reports_partial_success_and_skips_completed_retry(backtest):
+    """A retry of a partial cross-version action cannot enqueue its successful group twice."""
+    page=backtest.page
+    backtest.archives=[{'name':'own','is_own':True,'results':2}]
+    backtest.archive_results=[{'path':'/archive/native','backtest_version':'v9','config_name':'native','result_name':'result'},
+                              {'path':'/archive/legacy','backtest_version':'v8','config_name':'legacy','result_name':'result'}]
+    calls={'native':[],'legacy':[]}
+    def native_queue(route):
+        """Fail the first native request while the legacy group succeeds."""
+        calls['native'].append(route.request.post_data_json)
+        if len(calls['native'])==1:
+            route.fulfill(status=503,json={'detail':'fixture native busy'})
+        else:
+            route.fulfill(json={'ok':True,'queued':1})
+    def legacy_queue(route):
+        """Record a successful legacy group, which must never be resent by retry."""
+        calls['legacy'].append(route.request.post_data_json)
+        route.fulfill(json={'ok':True,'queued':1})
+    page.route('**/api/backtest-v9/archives/own/results/rebacktest',native_queue)
+    page.route('**/api/backtest-v7/archives/own/results/rebacktest',legacy_queue)
+    page.route('**/results/config?*',lambda route:route.fulfill(json=backtest.config))
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#sidebar-editor button[onclick="closeEditor()"]').click()
+    page.locator('#sidebar [data-panel="archive"]').click()
+    page.locator('#archive-list-container tbody tr').dblclick()
+    expect(page.locator('#archive-results-table tbody tr')).to_have_count(2)
+    page.locator('#arc-btn-select-all').click()
+    page.locator('#archive-btn-rebacktest').click()
+    page.locator('#modal-btn-0').click()
+    page.wait_for_function('!!_archiveRequeueAttempt && !!_archiveRequeueAttempt.completed.legacy')
+    page.locator('#archive-btn-rebacktest').click()
+    page.locator('#modal-btn-0').click()
+    page.wait_for_function('_archiveRequeueAttempt === null')
+    assert len(calls['native'])==2 and len(calls['legacy'])==1
+    assert calls['native'][0]['operation_id']==calls['native'][1]['operation_id']
+    assert backtest.errors==backtest.unexpected==[]
+
+
+def test_archive_reload_restores_search_coin_config_and_selected_row(backtest):
+    """The real shared archive keeps its filters and selection when data returns after reload."""
+    page=backtest.page
+    backtest.archives=[{'name':'own','is_own':True,'results':2}]
+    backtest.archive_results=[{'path':'/archive/hype','backtest_version':'v9','config_name':'hype-native',
+        'result_name':'run','coins':['HYPE'],'coins_text':'HYPE'},
+        {'path':'/archive/btc','backtest_version':'v8','config_name':'btc-old','result_name':'run','coins':['BTC'],'coins_text':'BTC'}]
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#sidebar-editor button[onclick="closeEditor()"]').click()
+    page.locator('#sidebar [data-panel="archive"]').click()
+    page.locator('#archive-list-container tbody tr').dblclick()
+    expect(page.locator('#archive-results-table tbody tr')).to_have_count(2)
+    page.locator('#arc-results-filter').fill('hype')
+    page.locator('#arc-results-config-filter').select_option('hype-native')
+    page.locator('#arc-results-coin-filter').select_option('HYPE')
+    page.locator('#archive-results-table tbody tr').click()
+    page.reload()
+    expect(page.locator('#arc-results-filter')).to_have_value('hype')
+    expect(page.locator('#arc-results-config-filter')).to_have_value('hype-native')
+    expect(page.locator('#arc-results-coin-filter')).to_have_value('HYPE')
+    expect(page.locator('#archive-results-table tbody tr.selected')).to_have_count(1)
+    page.locator('#arc-btn-deselect').click()
+    page.reload()
+    expect(page.locator('#archive-results-table tbody tr.selected')).to_have_count(0)
+    expect(page.locator('#arc-results-filter')).to_have_value('hype')
+    assert backtest.errors==backtest.unexpected==[]

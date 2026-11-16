@@ -18,7 +18,7 @@ Each side initially shows **Full Config JSON**, including inherited defaults. Ed
 
 ## Run and inspect
 
-PB9 does not yet provide the PB8 **Strategy Explorer**, native optimization, archive integrations. Unconnected tools are hidden rather than forwarding native configs to PB7/PB8 handlers. The implemented editor, manual queue, result charts and cross-version Compare remain available.
+PB9 does not yet provide **Strategy Explorer** or native optimization. Unconnected tools are hidden rather than forwarding native configs to PB7/PB8 handlers. The implemented editor, manual queue, result charts and cross-version Compare remain available.
 
 Open **Queue** and use its row Start action, or open **Settings** to enable **Autostart** and choose **Backtest CPU Slots**. PB9 keeps its own queue settings; autostart defaults to off and the slot limit to one. Automatic jobs start oldest first. Slots are shared across running PB7/PB8/PB9 backtests. Disabling autostart or reducing the limit prevents further dispatches without stopping jobs already running. Queue settings update automatically in open tabs; unsaved dialog edits are preserved. PB9 needs a separate installed runtime, a clean source tree and a Rust extension matching that source. A source update or changed queue snapshot is rejected; enqueue a new job deliberately. Native caches and incidental files stay in the job's own working directory. The backtest is an independent local process and survives API restarts; API shutdown stops its request controllers, not the native job.
 
@@ -28,7 +28,7 @@ Filter preferences and notes survive Save, drafts, migration and result reuse. N
 
 Use Stop/Restart for the selected managed job and the shared log viewer for output. Stop is displayed as **stopped**. Restart creates a new job and output directory from the frozen snapshot, preserving the previous run. Deleting a config honours **Also delete results**, moving the selected data to managed trash. Queue cleanup removes its private workspace without following market-data links or removing results. On completion, open **Results** to inspect native metrics, fills and balance/equity charts. The chart translates PB9's numeric NPZ timestamps to UTC without treating them as PB8 minute counters. **Backtest** from a result opens its original config for a deliberate new run; it does not silently use the latest saved config. Each successful result retains a private copy of its original snapshot and provenance even after queue cleanup. Missing native balance samples remain gaps in the chart. Result filters, selections and opened chart views are retained on reload.
 
-This integration currently offers manual local PB9 jobs. Automatic queue startup, cloud/VPS execution, archives and optimizer handoffs are unavailable here. The existing PB7/PB8 workflows remain separate. Running a backtest never starts a live trading bot.
+This integration runs local native PB9 jobs, with optional queue autostart. Cloud/VPS execution and optimizer handoffs are not yet available. Running a backtest never starts a live trading bot.
 
 ## Start from a PB8 backtest
 
@@ -65,3 +65,14 @@ The default **ohlcv_source_dir** remains PBGui's shared candle directory. No can
 **1st** uses the earliest known first OHLCV date among the selected markets plus native PB9 warmup. **All** uses the common date for every selected exchange/coin pair plus warmup. Select explicit approved coins on an enabled side with positive exposure and positions; `all` and more than 200 exchange/coin pairs require a narrower selection. Progress and Stop use the same controller as PB8. A late result never changes the date after the editor inputs changed.
 
 Offline mode uses cached public exchange/inception metadata. With offline disabled, missing metadata can be fetched into a private temporary cache. Public metadata links are read-only; an online fallback removes them before writing private cache files. No shared metadata or candles are overwritten. Readiness checks coverage; the native backtest still verifies runtime, dataset and provenance at start. When **hlcvs_data_dir** selects a prepared dataset, raw-candle readiness does not apply and 1st/All is unavailable; use that dataset's dates.
+
+
+## Shared Archive
+
+**Add to Archive** under Results exports the selected PB9 result to the existing own archive configured in **Archive → Setup**. PB7, PB8 and PB9 share the same archive list, transactions, versioned layout and manifests. Native config/source/provenance, NPZ equity, fills and report files are retained as result artifacts; candle data is not copied. Export does not push Git changes or start a job.
+
+Open **Archive** in the sidebar to browse results. Native PB9 rows use the same summary formulas as local PB9 Results and load their charts, images, files, price overlay and source through the PB9 reader. Browsing from PB9 does not automatically migrate an archive. Selection, search/config/coin filters and the open archive survive browser reload, and the existing archive watcher updates the view automatically.
+
+**Backtest** on selected archive rows opens the existing date/balance/exchange dialog and queues a fresh native PB9 snapshot. Imported candle/dataset paths must remain below PBGui Market Data or the configured PB9 source; use the dialog’s PBGui data option or edit an unavailable foreign path. Shared mixed-generation selections route each result to its own queue. **Add to Run** opens a disabled PB9 Run draft. Renaming a native archive config group preserves its artifact and provenance bytes. Automated **Retest & Replace**, retest schedules and native optimizer archive settings are not yet connected for PB9 and cannot fall back to PB7.
+
+Archive Setup never returns a stored access token to the browser. An empty token input keeps the stored token; **Clear stored token** removes it explicitly. Git authentication stays server-side in the transient subprocess environment, over HTTPS, with matching push/fetch origins and no token in command arguments or repository URLs. Git push, pull and history compaction remain explicit user actions.

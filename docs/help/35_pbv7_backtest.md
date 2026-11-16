@@ -351,3 +351,5 @@ If Add to Run cannot create an editor draft, Backtest shows the server error and
 In the visual scenario editor, zoom stays within the configured dates. A successful retry clears earlier errors, and cancelling scenario replacement leaves the open editor unchanged.
 
 The Results view keeps matching rows and the selected config filter visible while reloading. If an initial result request fails or times out, the list shows the error instead of remaining on “Loading results…”. Large config-filter lists are updated together without changing the available results or sorting.
+
+Archive Setup keeps stored tokens server-side. An empty token input retains the saved token; **Clear stored token** removes it explicitly. Native PB9 archive rows use their own result reader and queue; automated PB9 Retest & Replace and schedules remain unavailable.

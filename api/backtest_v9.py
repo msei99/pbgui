@@ -38,6 +38,7 @@ from pb9_config import PB9ConfigError, PB9CancelSignal, get_pb9_editor_metadata,
 from pb9_config_helper import check_inline_config
 from pb9_backtest_runtime import launch_environment, source_identity, prepare_market_metadata
 from pb9_runtime import inspect_pb9_runtime
+from pb9_result_helpers import load_equity_arrays, summarize_native_result
 from pb7_config import load_pb7_config, save_pb7_config
 from pb9_config_storage import PB9FileContext
 from pbgui_purefunc import PBGDIR, PBGUI_VERSION, PBGUI_SERIAL, load_ini_section, save_ini_section
@@ -457,84 +458,82 @@ def _result(path):
     return result
 
 
+def _read_result(path):
+    """Allow native read-only results in managed local storage or validated archives."""
+    try:
+        return _result(path)
+    except HTTPException as exc:
+        if exc.status_code not in {404, 422}:
+            raise
+    from api.backtest_v7 import _archives_dir
+    from passivbot_runtime import generation_from_schema
+    root = Path(_archives_dir()).absolute()
+    if not isinstance(path, str) or not path or any(ord(c) < 32 for c in path) or not Path(path).is_absolute():
+        raise HTTPException(404, 'PB9 result not found')
+    directory = _safe(root, path)
+    if not directory.is_dir():
+        raise HTTPException(404, 'PB9 archived result not found')
+    config = _read(_safe(directory, 'config.json'))
+    schema = config.get('config_version')
+    if not isinstance(schema, str) or generation_from_schema(schema) != 'pb9':
+        raise HTTPException(422, 'Archived result does not belong to PB9')
+    return directory
+
+
 def _equity_arrays(directory):
-    """Validate the native numeric archive once before adapting its clock/quantities."""
-    import zipfile
-    path = _safe(directory, 'balance_and_equity.npz')
-    if not path.is_file():
-        raise HTTPException(404, 'Native PB9 equity artifact not found')
-    with zipfile.ZipFile(path) as archive:
-        if sum(item.file_size for item in archive.infolist()) > 256 * 1024 * 1024:
-            raise HTTPException(413, 'PB9 equity artifact exceeds display limit')
-    with np.load(path, allow_pickle=False) as archive:
-        if archive['schema_version'].shape != () or int(archive['schema_version']) != 1:
-            raise HTTPException(422, 'Unsupported native PB9 equity schema')
-        arrays = [archive[key] for key in ('timestamp_ms', 'usd_total_balance', 'usd_total_equity')]
-    times, balance, equity = arrays
-    if (any(array.ndim != 1 or len(array) != len(times) for array in arrays)
-            or times.dtype.kind not in 'iu' or np.any(np.diff(times) <= 0)
-            or any(array.dtype.kind != 'f' or np.isinf(array).any() for array in (balance, equity))
-            or not np.isfinite(equity).all()):
-        raise HTTPException(422, 'Invalid native PB9 equity shape, clock or values')
-    return times, balance, equity
+    """Use the shared bounded native reader for local and archived charts."""
+    return load_equity_arrays(_safe(directory, 'balance_and_equity.npz'))
 
 
 def _summaries(paths):
-    """Translate native v9 metrics to the shared result table without a v8 fallback."""
+    """Translate local native metrics through the same projector as archives."""
     items = []
     root = _root('results')
     for analysis_path in paths:
         directory = _result(str(analysis_path.parent.relative_to(root)))
         analysis = _read(_safe(directory, 'analysis.json'), 8 * 1024 * 1024)
         config = _read(_safe(directory, 'config.json'))
-        bt, bot = config.get('backtest', {}), config.get('bot', {})
-        metrics = {key: value for key, value in analysis.items() if isinstance(value, (float, int)) and math.isfinite(value)}
-        def metric(*keys, default=0):
-            return next((metrics[key] for key in keys if key in metrics), default)
-        source = _safe(directory, 'pbgui.source.json')
-        if not source.exists():
-            source = _safe(directory, 'config.original.json')
-        authored = _read(source) if source.exists() else config
-        coins = authored.get('bot', {}).get('global', {}).get('universe', {}).get('approved_coins', [])
-        parts = directory.relative_to(root).parts
-        final_balance = final_equity = adg = gain = None
-        if _safe(directory, 'balance_and_equity.npz').is_file():
-            times, balances, equities = _equity_arrays(directory)
-            if len(times):
-                final_balance = float(balances[-1]) if math.isfinite(float(balances[-1])) else None
-                final_equity = float(equities[-1])
-                start = float(bt.get('starting_balance') or 0)
-                gain = final_equity / start if start > 0 else None
-                days = (int(times[-1]) - int(times[0])) / 86400000
-                if days > 0 and equities[0] > 0 and final_equity > 0:
-                    exponent = math.log(final_equity / float(equities[0])) / days
-                    adg = math.expm1(exponent) if exponent < 700 else None
-        coins = sorted({coin for side in ('long', 'short')
-                        for coin in (authored.get('bot', {}).get(side, {}).get('universe', {}).get('approved_coins')
-                                     or authored.get('bot', {}).get('global', {}).get('universe', {}).get('approved_coins') or [])
-                        if isinstance(coin, str)})
-        item = {**metrics, 'path': str(directory), 'config_name': parts[0],
-                'backtest_version': 'v9', 'config_version': config.get('config_version'),
-                'strategy': bot.get('portfolio', {}).get('strategy_kind', ''),
-                'exchange': ', '.join(bt.get('exchanges', [])), 'exchange_dir': ', '.join(bt.get('exchanges', [])), 'exchanges': bt.get('exchanges', []),
-                'display_name': str(directory.relative_to(root)), 'result_name': directory.name, 'metrics': metrics, 'coins_text': ', '.join(coins),
-                'start_date': analysis.get('effective_start_date', bt.get('start_date')), 'end_date': analysis.get('effective_end_date', bt.get('end_date')), 'coins': coins,
-                'modified': dt.datetime.fromtimestamp(analysis_path.stat().st_mtime).isoformat(), 'result_time': directory.name,
-                'starting_balance': metric('starting_balance_usd', 'starting_balance', default=bt.get('starting_balance', 0)),
-                'final_balance': final_balance, 'final_equity': final_equity, 'gain': gain, 'adg': adg,
-                'sharpe_ratio': metric('sharpe_ratio_strategy_equity', default=None),
-                'drawdown_worst': metric('drawdown_max_fraction_strategy_equity', default=None),
-                'liquidated': analysis.get('liquidated') is True,
-                'analysis': analysis}
-        for side in ('long', 'short'):
-            values = {**authored.get('bot', {}).get('global', {}).get('risk', {}), **authored.get('bot', {}).get(side, {}).get('risk', {})}
-            enabled = authored.get('bot', {}).get(side, {}).get('enabled') is True
-            item['twe_' + side] = values.get('total_wallet_exposure_limit_ratio', 0) if enabled else 0
-            item['n_positions_' + side] = values.get('max_positions', 0) if enabled else 0
-            item['pos_' + side] = item['n_positions_' + side]
-        items.append(item)
+        authored = _result_source(directory)
+        arrays = _equity_arrays(directory) if _safe(directory, 'balance_and_equity.npz').is_file() else None
+        items.append(summarize_native_result(directory, config, authored, analysis, arrays,
+            config_name=directory.relative_to(root).parts[0], display_name=str(directory.relative_to(root)),
+            modified=dt.datetime.fromtimestamp(analysis_path.stat().st_mtime).isoformat()))
     return items
 
+
+def _archive_data_paths(config):
+    """Reuse the existing source-root policy before importing archived data paths."""
+    from api import pb8_ohlcv_tools as shared
+    paths = _paths()
+    def walk(value):
+        """Validate regular and scenario/dotted native source/dataset selections."""
+        if isinstance(value, list):
+            for child in value:
+                walk(child)
+        elif isinstance(value, dict):
+            for key, child in list(value.items()):
+                if key.rsplit('.', 1)[-1] in {'ohlcv_source_dir', 'hlcvs_data_dir'} and child not in (None, ''):
+                    if not isinstance(child, str):
+                        raise HTTPException(422, 'Invalid archived data path')
+                    try:
+                        _, selected, _ = shared.resolve_pb8_ohlcv_paths(
+                            {'backtest': {'ohlcv_source_dir': child}}, {'pb8dir': paths['pb9dir']})
+                    except shared.PB8OhlcvError:
+                        raise HTTPException(422, 'Archived data path must be below PBGui Market Data or the configured PB9 directory; choose PBGui Data or edit the source') from None
+                    value[key] = str(selected)
+                else:
+                    walk(child)
+    walk(config)
+    return config
+
+
+def _result_source(directory):
+    """Preserve result-owned authored input instead of a normalized legacy projection."""
+    for filename in ('pbgui.source.json', 'config.original.json', 'config.json'):
+        path = _safe(directory, filename)
+        if path.exists():
+            return _read(path)
+    raise HTTPException(404, 'PB9 result source is unavailable')
 
 
 def _result_reference(directory):
@@ -727,6 +726,47 @@ def _operation(operation, cancel, payload=None):
                             os.replace(destination, target)
                         raise
             return {'ok': True}
+        if operation == 'bt9_archive_requeue':
+            from api.backtest_v7 import _archives_dir, _load_archived_backtest_config
+            archive = _safe(Path(_archives_dir()), _name(args['name']))
+            paths = body.get('paths')
+            overrides = body.get('overrides') or {}
+            if not isinstance(paths, list) or not 1 <= len(paths) <= 100 or not isinstance(overrides, dict):
+                raise HTTPException(422, 'Expected between 1 and 100 archive results')
+            exchanges = overrides.get('exchanges')
+            if exchanges is not None and (not isinstance(exchanges, list) or not exchanges or len(exchanges) > 20
+                                           or any(not isinstance(value, str) for value in exchanges)):
+                raise HTTPException(422, 'Invalid exchange selection')
+            if len(paths) * len(exchanges or [None]) > 100:
+                raise HTTPException(422, 'At most 100 native archive jobs per request')
+            request_id = body.get('operation_id')
+            if request_id is not None:
+                request_id = _name(request_id)
+            prepared = []
+            for path in paths:
+                directory = _read_result(path)
+                _safe(archive, str(directory))
+                config, version, _ = _load_archived_backtest_config(directory, archive)
+                if version != 'v9':
+                    raise HTTPException(422, 'Expected a native PB9 archive result')
+                from api.archive_helpers import _config_name_from_result
+                name = _name(_config_name_from_result(directory, config, archive))
+                for exchange in exchanges or [None]:
+                    candidate = copy.deepcopy(config)
+                    bt = candidate.setdefault('backtest', {})
+                    for key in ('start_date', 'end_date', 'starting_balance'):
+                        if overrides.get(key) not in (None, ''):
+                            bt[key] = overrides[key]
+                    if exchange is not None:
+                        bt['exchanges'] = [exchange]
+                    if overrides.get('use_pbgui_market_data') is True:
+                        bt['ohlcv_source_dir'] = _pbgui_data_path()
+                    _archive_data_paths(candidate)
+                    _native(candidate, cancel)
+                    operation_id = hashlib.sha256(json.dumps([request_id, path, exchange]).encode()).hexdigest() if request_id else None
+                    prepared.append((name, candidate, operation_id))
+            queued = [_enqueue({'name': name, 'config': config, 'operation_id': operation_id}, cancel) for name, config, operation_id in prepared]
+            return {'ok': True, 'queued': len(queued), 'queue_items': [{**item, 'backtest_version': 'v9'} for item in queued]}
         if operation == 'bt9_enqueue':
             return _enqueue(body, cancel)
         if operation == 'bt9_queue':
@@ -795,9 +835,9 @@ def _operation(operation, cancel, payload=None):
                 raise HTTPException(404, 'Comparison result is unavailable')
             return {'results': [older[0], current[0]]}
         if operation == 'bt9_analysis':
-            return _read(_safe(_result(args['path']), 'analysis.json'), 8 * 1024 * 1024)
+            return _read(_safe(_read_result(args['path']), 'analysis.json'), 8 * 1024 * 1024)
         if operation == 'bt9_price':
-            config = _read(_safe(_result(args['path']), 'config.json'))
+            config = _read(_safe(_read_result(args['path']), 'config.json'))
             try:
                 return build_market_price_payload(config, exchange=args['exchange'], coin=args['coin'],
                                                   max_points=args['max_points'])
@@ -805,7 +845,7 @@ def _operation(operation, cancel, payload=None):
                 _log(SERVICE, 'PB9 result price request rejected', level='WARNING')
                 raise HTTPException(400, str(exc)) from None
         if operation == 'bt9_result_config':
-            directory = _result(args['path'])
+            directory = _read_result(args['path'])
             original = _safe(directory, 'pbgui.source.json')
             if not original.exists():
                 original = _safe(directory, 'config.original.json')
@@ -841,11 +881,11 @@ def _operation(operation, cancel, payload=None):
                         count += 1
             return {'ok': True, 'removed': count}
         if operation == 'bt9_files':
-            directory = _result(args['path'])
+            directory = _read_result(args['path'])
             return {'files': [str(p.relative_to(directory)) for p in directory.rglob('*')
                               if p.is_file() and not p.is_symlink() and _safe(directory, str(p.relative_to(directory)))]}
         if operation == 'bt9_equity':
-            times, balance, equity = _equity_arrays(_result(args['path']))
+            times, balance, equity = _equity_arrays(_read_result(args['path']))
             output = io.StringIO(); writer = csv.writer(output)
             writer.writerow(['timestamp', 'usd_total_balance', 'usd_total_equity'])
             stride = max(1, math.ceil(len(times) / 10000))
@@ -895,7 +935,7 @@ def _queue_settings():
     return {'autostart': str(values.get('autostart', 'False')).lower() == 'true',
             'cpu': max(1, min(cpu, maximum)), 'cpu_max': maximum, 'exchange_options': [],
             'capabilities': {'local': True, 'native_schema': 'v9', 'optimizer': False,
-                             'archive': False, 'autostart': True}}
+                             'archive': True, 'autostart': True}}
 
 
 @router.get('/settings')
@@ -1010,6 +1050,12 @@ def _pbgui_data_path():
     """Use the same shared OHLCV root as PB7/PB8, without a bot-slot dependency."""
     from market_data import get_market_data_root_dir
     return str(get_market_data_root_dir())
+
+
+@router.post('/archives/{name}/results/rebacktest')
+async def archive_requeue(name: str, request: Request, session: SessionToken = Depends(require_auth)):
+    """Queue immutable native snapshots under the existing cancellable PB9 owner."""
+    return await _call(request, 'archive_requeue', {'name': _name(name)}, body=True)
 
 
 @router.get('/pbgui_data_path')
@@ -1188,7 +1234,7 @@ async def delete_result(path: str, request: Request, session: SessionToken = Dep
 @router.get('/results/image')
 def image(path: str, filename: str, session: SessionToken = Depends(require_auth)):
     """Serve a native result report image only from the selected result directory."""
-    candidate = _safe(_result(path), filename)
+    candidate = _safe(_read_result(path), filename)
     if candidate.suffix.lower() != '.png' or not candidate.is_file():
         raise HTTPException(404, 'PB9 result image not found')
     return FileResponse(candidate, media_type='image/png')
@@ -1235,7 +1281,7 @@ async def equity(path: str, request: Request, session: SessionToken = Depends(re
 @router.get('/results/fills')
 def fills(path: str, session: SessionToken = Depends(require_auth)):
     """Reuse the shared fills chart contract for native CSV fills."""
-    candidate = _safe(_result(path), 'fills.csv')
+    candidate = _safe(_read_result(path), 'fills.csv')
     if not candidate.is_file():
         raise HTTPException(404, 'PB9 fills not found')
     return FileResponse(candidate, media_type='text/csv')
@@ -1259,6 +1305,8 @@ def log(job: str, session: SessionToken = Depends(require_auth)):
 async def websocket(websocket: WebSocket):
     """Push queue changes; all reads stay owned by PB9's bounded worker registry."""
     ws = websocket
+    from api.backtest_v7 import _archive_ws_clients
+    _archive_ws_clients.add(ws)
     previous = None
     try:
         while True:
@@ -1273,6 +1321,8 @@ async def websocket(websocket: WebSocket):
             await asyncio.sleep(2)
     except (WebSocketDisconnect, RuntimeError, HTTPException):
         pass
+    finally:
+        _archive_ws_clients.discard(ws)
 
 
 async def shutdown():

@@ -164,3 +164,5 @@ PBGui runs the official installed Passivbot `migrate-config-v9` converter in an 
 The original PB8 bundle stays unchanged. Local JSON coin overrides are copied into a temporary context and converted to inline PB9 overrides. External paths, credentials and legacy coin flags are rejected with a message. This entry point currently accepts local PB8 results, not archives or legacy roots. Source changes during review require a new preview. Cancel keeps you on the PB8 page; adoption opens an unsaved PB9 draft and never starts a job. Review the retained report and settings, then use the normal PB9 **Save** or **Save & Queue** workflow.
 
 After a new result conversion, PB9 retains this exact PB8 comparison reference. Open **Compare with PB8 source** on the completed PB9 result, or select both versions manually in PB9 Results using **All → Compare**. The existing comparison chart is reused.
+
+Archive Setup keeps stored tokens server-side. An empty token input retains the saved token; **Clear stored token** removes it explicitly. Native PB9 archive rows use their own result reader and queue; automated PB9 Retest & Replace and schedules remain unavailable.

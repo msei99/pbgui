@@ -30,7 +30,7 @@ SERVICE = "PB9Config"
 MAX_ACTIVE_REQUESTS = 2
 MAX_ACTIVE_RUN_REQUESTS = 8
 _NATIVE_OPERATIONS = frozenset({
-    "bt9_migrate_preview", "bt9_migrate_accept", "bt9_metadata", "bt9_new_config", "bt9_load", "bt9_prepare", "bt9_draft_create", "bt9_save", "bt9_enqueue", "bt9_start",
+    "bt9_migrate_preview", "bt9_migrate_accept", "bt9_metadata", "bt9_new_config", "bt9_load", "bt9_prepare", "bt9_draft_create", "bt9_save", "bt9_enqueue", "bt9_archive_requeue", "bt9_start",
     "template", "validate", "config_load", "config_save", "run_new_config", "run_metadata",
     "run_prepare", "run_draft_create", "run_save", "run_forced_mode", "run_copy", "run_restore",
 })

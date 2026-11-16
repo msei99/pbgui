@@ -16,7 +16,7 @@ OHLCV Readiness und 1st/All verwenden nun die gemeinsame Oberfläche und
 den Lookup-Controller mit einem nativen PB9-Adapter. Prüfungen laufen mit
 privaten Metadaten-Workspaces, direkter Candle-Quelle und PB9-Transport.
 
-Bewusst noch offen: native PB9-Anbindung für Strategy Explorer, außerdem Optimizer-, Archiv- und Remote-Abläufe.
+Bewusst noch offen: native PB9-Anbindung für Strategy Explorer, außerdem Optimizer-, automatische Archiv-Retests und Remote-Abläufe.
 Diese Funktionen dürfen nicht durch die PB7/PB8-Ausführungsengine als PB9
 angeboten werden. Die restliche historische Schrittfolge unten dokumentiert
 die bisherige Einführung und ist keine Aussage über den aktuellen UI-Umfang.
@@ -848,3 +848,8 @@ produktive API-/PBRun-Dienst wurde bei diesem QA-Lauf nicht neu gestartet.
 ### PB9 queue policy
 
 PB9 now reuses the Backtest Settings dialog and PB8 controller lifecycle with a separate `[backtest_v9]` policy (autostart disabled, one slot by default). Automatic dispatch is oldest-first, rechecks policy at final admission and uses the existing cross-version slots. Shutdown drains owned preparation without terminating published native jobs. Strategy Explorer remains last; native optimizer/archive integration is still pending.
+
+
+### Shared archive adapter
+
+Native9 exports, summaries, read-only browsing, native charts, Add to Run and manual requeues now reuse the shared archive infrastructure. Native result/provenance bytes survive archive copy and config-group rename. Replacement/scheduled retests and optimizer archive settings remain blocked for9. Archive credentials stay server-side; native browsing does not run migration. Strategy Explorer remains the final integration.

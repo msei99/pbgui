@@ -966,3 +966,230 @@ def test_cancelled_unpublished_start_returns_to_queue_after_confirmed_cleanup(na
     assert not bt._job_path(job, '.state.json').exists()
     assert not any(key in bt._read(bt._job_path(job)) for key in ['started_at', 'launch_command', 'status_override'])
     assert not (root/'data/locks/backtest-autostart.json').exists()
+
+
+@pytest.fixture
+def archived_native(native, monkeypatch):
+    """Create a native result and its real archive copy using temporary data only."""
+    from api import backtest_v7, archive_helpers
+    source, _, root = native
+    from api import pb8_ohlcv_tools
+    (root/'source').mkdir(exist_ok=True)
+    monkeypatch.setattr(pb8_ohlcv_tools, '_pbgui_market_data_root', lambda: root/'data/ohlcv')
+    backtest_v7._invalidate_archive_cache()
+    source['bot']['long'] = {'enabled': True, 'risk': {'max_positions': 2, 'total_wallet_exposure_limit_ratio': 3},
+                             'universe': {'approved_coins': ['HYPE']}}
+    source['backtest']['starting_balance'] = 1000
+    job = operation('enqueue', {'name': 'archive-sample', 'config': source})['filename']
+    config = bt._read(bt._job_path(job, '.config.json'))
+    local = Path(config['backtest']['base_dir']) / 'combined' / 'native-run'
+    local.mkdir(parents=True)
+    bt._write(local/'config.json', config)
+    bt._write(local/'pbgui.source.json', config)
+    bt._write(local/'analysis.json', {'sharpe_ratio_strategy_equity': 2.5,
+        'drawdown_max_fraction_strategy_equity': .2, 'liquidated': False})
+    np.savez(local/'balance_and_equity.npz', schema_version=np.int64(1),
+             timestamp_ms=np.array([1735689600000,1735776000000], dtype=np.int64),
+             usd_total_balance=np.array([1000.,1200.]), usd_total_equity=np.array([1000.,1300.]))
+    archive_root = root/'data/config_archives'
+    monkeypatch.setattr(backtest_v7, '_archives_dir', lambda: archive_root)
+    archive = archive_root/'own'
+    copied = archive_helpers.copy_backtest_result_to_archive(local, archive)
+    yield local, Path(copied['path']), archive, source
+    backtest_v7._invalidate_archive_cache()
+
+
+def test_archive_native_projection_matches_local_values_and_keeps_raw_artifacts(archived_native):
+    """Archive copy keeps native bytes and shares final balance/equity and risk formulas."""
+    from api import archive_helpers
+    local, archived, archive, _ = archived_native
+    before = bt._summaries([local/'analysis.json'])[0]
+    after = archive_helpers.summarize_backtest_result(archived, archive)
+    for key in ['gain','adg','final_balance','final_equity','sharpe_ratio','drawdown_worst',
+                'config_name','strategy','coins','twe_long','pos_long']:
+        assert after[key] == before[key], key
+    assert after['config_family'] == 'pb9'
+    assert after['backtest_version'] == 'v9'
+    assert after['config_name'] == 'archive-sample'
+    assert after['gain'] == 1.3 and after['final_balance'] == 1200
+    for file in local.iterdir():
+        assert (archived/file.name).read_bytes() == file.read_bytes()
+    analysis = bt._read(archived/'analysis.json')
+    config = bt._read(archived/'config.json')
+    assert archive_helpers.detect_liquidation(analysis, config) == (False, '')
+    assert 'v9.0.0/backtests/archive-sample' in str(archived)
+
+
+def test_archived_native_reads_are_version_owned_and_never_allow_local_delete(archived_native):
+    """Read-only archive support cannot widen native result-delete ownership."""
+    from api import backtest_v7
+    _, archived, archive, _ = archived_native
+    path = str(archived)
+    assert operation('result_config', path=path)['config_version'] == 'v9.0.0'
+    assert operation('analysis', path=path)['sharpe_ratio_strategy_equity'] == 2.5
+    assert '1300.0' in operation('equity', path=path)['csv']
+    config, version, overrides = backtest_v7._load_archived_backtest_config(archived, archive)
+    assert version == 'v9' and overrides == {} and config['config_version'] == 'v9.0.0'
+    with pytest.raises(HTTPException):
+        operation('delete_result', path=path)
+    assert (archived/'config.json').is_file()
+    foreign = archive/'foreign'; foreign.mkdir()
+    bt._write(foreign/'config.json', {'config_version': 'v8.6.0'})
+    with pytest.raises(HTTPException, match='PB9'):
+        operation('result_config', path=str(foreign))
+
+
+def test_archive_native_requeue_uses_only_native_queue_and_explicit_overrides(archived_native, monkeypatch):
+    """Reusing an archived result preserves sparse native params and queues a new snapshot."""
+    from api import backtest_v7
+    _, archived, _, _ = archived_native
+    monkeypatch.setattr(backtest_v7, 'add_to_queue', lambda *_a, **_k: pytest.fail('PB7 queue called'))
+    before = (archived/'config.json').read_bytes()
+    result = operation('archive_requeue', {'paths': [str(archived)], 'overrides': {
+        'start_date': '2025-01-01', 'end_date': '2025-01-02', 'starting_balance': 2000,
+        'exchanges': ['bybit'], 'use_pbgui_market_data': True}}, name='own')
+    assert result['queued'] == 1 and result['queue_items'][0]['backtest_version'] == 'v9'
+    snapshot = bt._read(bt._job_path(result['queue_items'][0]['filename'], '.config.json'))
+    assert snapshot['config_version'] == 'v9.0.0'
+    assert snapshot['backtest']['starting_balance'] == 2000
+    assert snapshot['backtest']['exchanges'] == ['bybit']
+    assert snapshot['backtest']['ohlcv_source_dir'] == bt._pbgui_data_path()
+    assert (archived/'config.json').read_bytes() == before
+
+
+def test_native_archive_cannot_fall_back_to_legacy_retest_or_another_archive(archived_native):
+    """Unconnected replacement routes reject native configs before any legacy conversion."""
+    from api import backtest_v7
+    _, archived, archive, _ = archived_native
+    with pytest.raises(HTTPException, match='PB9'):
+        backtest_v7.rebacktest_archive_results('own', {'paths': [str(archived)]})
+    with pytest.raises(HTTPException, match='not yet available'):
+        backtest_v7._queue_archive_retest_run('own', archive, archived, {})
+    with pytest.raises(HTTPException):
+        operation('archive_requeue', {'paths': [str(archived)]}, name='other')
+
+
+def test_archive_native_reader_rejects_equity_symlink(archived_native, tmp_path):
+    """An archived artifact cannot expose arbitrary files through the native NPZ reader."""
+    _, archived, _, _ = archived_native
+    target = tmp_path/'outside.npz'; target.write_bytes(b'not a numeric archive')
+    equity = archived/'balance_and_equity.npz'; equity.unlink(); equity.symlink_to(target)
+    with pytest.raises(HTTPException):
+        operation('equity', path=str(archived))
+    assert target.read_bytes() == b'not a numeric archive'
+
+
+def test_native_archive_rename_keeps_artifact_bytes_and_updates_display_group(archived_native, monkeypatch):
+    """Renaming the archive group must not rewrite native results or authored provenance."""
+    from api import backtest_v7, archive_helpers
+    _, archived, archive, _ = archived_native
+    monkeypatch.setattr(backtest_v7, '_own_archive_name', lambda: 'own')
+    before = {file.name:file.read_bytes() for file in archived.iterdir()}
+    response = backtest_v7.rename_archive_backtest_config('own', {'path':str(archived),'new_name':'renamed'})
+    renamed = Path(response['path'])
+    assert renamed.is_dir() and not archived.exists()
+    assert {file.name:file.read_bytes() for file in renamed.iterdir()} == before
+    assert archive_helpers.summarize_backtest_result(renamed, archive)['config_name'] == 'renamed'
+
+
+def test_native_archive_browse_read_only_never_migrates_or_writes_manifest(archived_native, monkeypatch):
+    """Opening PB9 archive results is a read, even for the configured own archive."""
+    from api import backtest_v7
+    _, archived, archive, _ = archived_native
+    monkeypatch.setattr(backtest_v7, '_get_cached_archive_results', lambda *_: None)
+    monkeypatch.setattr(backtest_v7, 'maybe_migrate_own_archive', lambda *_a, **_k: pytest.fail('read migrated archive'))
+    monkeypatch.setattr(backtest_v7, 'rebuild_archive_manifest', lambda *_: pytest.fail('read rewrote archive'))
+    monkeypatch.setattr(backtest_v7, 'archive_migration_status', lambda *_a, **_k: {})
+    response = backtest_v7.list_archive_results('own', read_only=True)
+    assert len(response['results']) == 1
+    assert response['results'][0]['backtest_version'] == 'v9'
+    assert not (archive/'pbgui/archive_manifest.json').exists()
+
+
+def test_archive_source_json_symlink_is_rejected_before_read(archived_native, tmp_path):
+    """The native archive resolver rejects source JSON links, not just linked NPZ files."""
+    _, archived, _, _ = archived_native
+    outside = tmp_path/'private.json'; outside.write_text('{"secret":"fixture-only"}')
+    source = archived/'pbgui.source.json'; source.unlink(); source.symlink_to(outside)
+    with pytest.raises(HTTPException):
+        operation('result_config', path=str(archived))
+    assert outside.read_text() == '{"secret":"fixture-only"}'
+
+
+def test_malformed_native_archive_result_does_not_hide_valid_results(archived_native):
+    """A bad foreign NPZ is skipped per result without dropping the shared archive list."""
+    from api import archive_helpers
+    _, archived, archive, _ = archived_native
+    bad = archived.parent/'broken'; bad.mkdir()
+    bt._write(bad/'config.json', bt._read(archived/'config.json'))
+    bt._write(bad/'analysis.json', {})
+    (bad/'balance_and_equity.npz').write_bytes(b'not a zip archive')
+    rows = archive_helpers.list_archive_backtest_results(archive)
+    assert len(rows) == 1 and rows[0]['path'] == str(archived)
+
+
+def test_archive_requeue_rejects_foreign_data_paths_before_native_import(archived_native, monkeypatch):
+    """A repository cannot steer native preparation outside approved market/runtime roots."""
+    _, archived, _, _ = archived_native
+    source = bt._read(archived/'pbgui.source.json')
+    source['backtest']['hlcvs_data_dir'] = '/outside-approved-roots/dataset'
+    bt._write(archived/'pbgui.source.json', source)
+    monkeypatch.setattr(bt, '_native', lambda *_a: pytest.fail('unapproved source reached native code'))
+    with pytest.raises(HTTPException, match='Archived data path'):
+        operation('archive_requeue', {'paths':[str(archived)]}, name='own')
+
+
+def test_native_npz_rejects_forged_array_shape_before_numpy_allocation(archived_native, monkeypatch):
+    """An untrusted NPY header cannot allocate beyond the verified ZIP member storage."""
+    import io
+    import zipfile
+    _, archived, _, _ = archived_native
+    path = archived/'balance_and_equity.npz'
+    with zipfile.ZipFile(path) as archive:
+        values = {name:archive.read(name) for name in archive.namelist()}
+    forged = io.BytesIO()
+    np.lib.format.write_array_header_1_0(forged, {'descr':'<i8','fortran_order':False,'shape':(10**12,)})
+    forged.write(b'\0'*8)
+    values['timestamp_ms.npy'] = forged.getvalue()
+    with zipfile.ZipFile(path, 'w') as archive:
+        for name, value in values.items():
+            archive.writestr(name, value)
+    monkeypatch.setattr(np, 'load', lambda *_a, **_k: pytest.fail('forged shape reached numpy allocation'))
+    with pytest.raises(HTTPException, match='Invalid native PB9 equity artifact'):
+        operation('equity', path=str(archived))
+
+
+def test_archive_requeue_lost_response_retry_reuses_native_snapshot(archived_native):
+    """One user operation remains idempotent after an uncertain HTTP response."""
+    _, archived, _, _ = archived_native
+    body = {'paths':[str(archived)], 'operation_id':'fixture-retry-id', 'overrides':{'exchanges':['bybit']}}
+    before = len(bt._queue())
+    first = operation('archive_requeue', body, name='own')
+    retry = operation('archive_requeue', body, name='own')
+    assert first['queue_items'][0]['filename'] == retry['queue_items'][0]['filename']
+    assert len(bt._queue()) == before + 1
+
+
+def test_native_archive_websocket_releases_watcher_subscription(native):
+    """Only a live native websocket may retain its shared archive-notification sink."""
+    import asyncio
+    from types import SimpleNamespace
+    from fastapi import WebSocketDisconnect
+    from api import backtest_v7
+    before = set(backtest_v7._archive_ws_clients)
+    class Owner:
+        """Provide a queue snapshot without touching any configured runtime."""
+        async def run(self, operation):
+            """Return the owned native queue/settings contract."""
+            assert operation == 'bt9_queue'
+            return {'queue':[], 'settings':{'autostart':False,'cpu':1}}
+    class Socket:
+        """Disconnect after the first native push, exercising the endpoint's finally."""
+        app = SimpleNamespace(state=SimpleNamespace(pb9_requests=Owner()))
+        async def send_json(self, payload):
+            """Verify subscription exists only while its endpoint is active."""
+            assert self in backtest_v7._archive_ws_clients
+            assert payload['type'] == 'queue_update'
+            raise WebSocketDisconnect()
+    asyncio.run(bt.websocket.__wrapped__(Socket()))
+    assert backtest_v7._archive_ws_clients == before

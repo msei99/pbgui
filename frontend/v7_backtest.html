@@ -8,7 +8,7 @@
 <script src="/app/plotly.min.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=18"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=19"></script>
 <script src="/app/js/backtest_v9_editor.js?v=18"></script>
 <script src="/app/js/backtest_v9_migration.js?v=1" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
@@ -971,14 +971,14 @@ textarea.json-invalid:focus {
             <button id="arc-tab-optimize" class="act-btn" onclick="setArchiveResultsMode('optimize')">Optimize Settings</button>
             <button id="arc-tab-schedules" class="act-btn" onclick="setArchiveResultsMode('schedules')">Retest Schedules</button>
             <label style="font-size:var(--fs-sm);color:var(--text-dim)">Config:</label>
-            <select id="arc-results-config-filter" class="sb-input" style="max-width:200px" onchange="renderArchiveResults(selectedArchiveName)">
+            <select id="arc-results-config-filter" class="sb-input" style="max-width:200px" onchange="archiveFiltersChanged();renderArchiveResults(selectedArchiveName)">
               <option value="">All configs</option>
             </select>
             <label id="arc-results-coin-label" style="font-size:var(--fs-sm);color:var(--text-dim)">Coin:</label>
-            <select id="arc-results-coin-filter" class="sb-input" style="max-width:160px" onchange="renderArchiveResults(selectedArchiveName)">
+            <select id="arc-results-coin-filter" class="sb-input" style="max-width:160px" onchange="archiveFiltersChanged();renderArchiveResults(selectedArchiveName)">
               <option value="">All coins</option>
             </select>
-            <input type="text" id="arc-results-filter" class="sb-input" style="max-width:200px" placeholder="Search name…" oninput="renderArchiveResults(selectedArchiveName)">
+            <input type="text" id="arc-results-filter" class="sb-input" style="max-width:200px" placeholder="Search name…" oninput="archiveFiltersChanged();renderArchiveResults(selectedArchiveName)">
             <span id="archive-results-count-label" class="results-count-label"></span>
             <details id="archive-results-columns-picker" class="result-columns-picker">
               <summary id="archive-results-columns-summary" class="act-btn">Columns</summary>
@@ -1742,6 +1742,7 @@ function loadStoredBacktestViewState() {
   var sorts = normalizeBacktestSortState(stored && stored.sorts);
   if (fromHash) {
     fromHash.sorts = sorts;
+    fromHash.archiveFilters = stored && stored.archiveFilters;
     return fromHash;
   }
   if (stored && ['configs', 'queue', 'results', 'archive', 'legacy'].indexOf(stored.panel) >= 0) {
@@ -1763,7 +1764,8 @@ function persistBacktestViewState() {
     panel: currentPanel || 'configs',
     archive: selectedArchiveName || '',
     archiveMode: archiveModeFromValue(archiveResultsMode),
-    sorts: currentBacktestSortState()
+    sorts: currentBacktestSortState(),
+    archiveFilters: typeof _archiveFilterState === 'undefined' ? null : _archiveFilterState
   };
   try { localStorage.setItem(BACKTEST_VIEW_STATE_KEY, JSON.stringify(state)); } catch (_e) {}
   history.replaceState(null, '', window.location.pathname + window.location.search + '#' + currentBacktestViewHash());
@@ -7213,6 +7215,7 @@ var _arcRowDragMode = null;
     }
   });
   document.addEventListener('mouseup', function() {
+    var changed=!!_arcRowDragStart;
     if (_arcRowDragStart && !_arcRowDragSelecting) {
       _arcRowDragStart.tr.classList.toggle('selected');
     }
@@ -7220,6 +7223,7 @@ var _arcRowDragMode = null;
     _arcRowDragSelecting = false;
     _arcRowDragMode = null;
     stopRowSelectAutoScroll();
+    if(changed) archiveFiltersChanged();
   });
 }());
 
@@ -7314,10 +7318,12 @@ function setSelectedResults(paths) {
 
 function selectAllArchiveResults() {
   document.querySelectorAll('#archive-results-table .tbl tbody tr').forEach(function(tr) { tr.classList.add('selected'); });
+  archiveFiltersChanged();
 }
 
 function deselectAllArchiveResults() {
   document.querySelectorAll('#archive-results-table .tbl tbody tr').forEach(function(tr) { tr.classList.remove('selected'); });
+  archiveFiltersChanged();
 }
 
 function getSelectedArchiveResults() {
@@ -9478,25 +9484,36 @@ function archiveConfigUsesPbguiMarketData(cfg, pbguiPath) {
   return !!sourceDir && !!marketDataDir && sourceDir === marketDataDir;
 }
 
+var _archiveRequeueAttempt = null;
+
 function rebacktestSelectedArchive() {
   var sel = getSelectedArchiveResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
   var today = new Date().toISOString().slice(0, 10);
+  var nativeSelected=sel.some(function(path){return archiveResultByPath(path).backtest_version==='v9';});
   var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
   Promise.all([
     archiveResultApiFetch(sel[0], '/results/config?path=' + encodeURIComponent(sel[0])),
-    apiFetch('/pbgui_data_path')
+    apiFetch('/pbgui_data_path'),
+    nativeSelected ? apiFetchFrom(backtestApiBase('v9'),'/editor/metadata') : Promise.resolve(null)
   ]).then(function(payload) {
     var cfg = payload[0] || {};
     var pbguiPath = (payload[1] || {}).path || '';
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
+    if(nativeSelected) {
+      allExchanges=Array.from(new Set((((payload[2] || {}).template || {}).backtest || {}).exchanges || []));
+      sel.forEach(function(path){var row=archiveResultByPath(path);if(row.backtest_version==='v9')allExchanges=allExchanges.concat(row.exchanges || []);});
+      allExchanges=Array.from(new Set(allExchanges)).filter(function(value){return typeof value==='string' && /^[a-z0-9_]+$/.test(value) && value!=='combined';});
+      defExchanges=defExchanges.filter(function(value){return allExchanges.indexOf(value)>=0;});
+      if(!defExchanges.length && allExchanges.length) defExchanges=[allExchanges[0]];
+    }
     var defStart = (cfg.backtest && cfg.backtest.start_date) || '2020-01-01';
     var defEnd = (cfg.backtest && cfg.backtest.end_date) || today;
     var defBalance = Number((cfg.backtest && cfg.backtest.starting_balance) || 1000);
     if (!Number.isFinite(defBalance)) defBalance = 1000;
     var usePbguiMarketData = archiveConfigUsesPbguiMarketData(cfg, pbguiPath);
     var exOpts = allExchanges.map(function(e) {
-      return '\x3Coption value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '\x3C/option>';
+      return '\x3Coption value="' + esc(e) + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + esc(e) + '\x3C/option>';
     }).join('');
     var body =
       '\x3Cdiv style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
@@ -9530,22 +9547,31 @@ function rebacktestSelectedArchive() {
         }
         if (!exchanges.length) { toast('Select at least one exchange', 'err'); return; }
         closeModal();
-        apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/results/rebacktest', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            paths: sel,
-            overrides: {
-              start_date: start,
-              end_date: end,
-              starting_balance: balance,
-              exchanges: exchanges,
-              use_pbgui_market_data: usePbguiData
-            }
-          })
-        }).then(function(d) {
-          toast('Queued ' + (d.queued || sel.length) + ' backtests', 'ok');
-          wsRefresh();
+        var groups = {v9:[], legacy:[]};
+        sel.forEach(function(path){groups[archiveResultByPath(path).backtest_version==='v9'?'v9':'legacy'].push(path);});
+        var overrides = {start_date:start,end_date:end,starting_balance:balance,exchanges:exchanges,use_pbgui_market_data: usePbguiData};
+        var endpoint='/archives/'+encodeURIComponent(selectedArchiveName)+'/results/rebacktest';
+        var signature=JSON.stringify({archive:selectedArchiveName,paths:sel.slice().sort(),overrides:overrides});
+        if(!_archiveRequeueAttempt || _archiveRequeueAttempt.signature!==signature) {
+          _archiveRequeueAttempt={signature:signature,id:'archive-'+Array.from(crypto.getRandomValues(new Uint32Array(4))).map(function(value){return value.toString(16);}).join('-'),completed:{}};
+        }
+        var attempt=_archiveRequeueAttempt;
+
+        Promise.allSettled(Object.keys(groups).filter(function(key){return groups[key].length;}).map(function(key){
+          if(attempt.completed[key]) return Promise.resolve({queued:0,already_queued:attempt.completed[key]});
+          var base=key==='v9'?backtestApiBase('v9'):archiveApiBase();
+          return apiFetchFrom(base,endpoint,{method:'POST',headers:{'Content-Type':'application/json'},
+            body:JSON.stringify({paths:groups[key],overrides:overrides,operation_id:attempt.id})})
+            .then(function(reply){attempt.completed[key]=reply.queued || groups[key].length;return reply;});
+        })).then(function(replies) {
+          var queued=0, already=0, failures=[];
+          replies.forEach(function(reply,index){
+            if(reply.status==='fulfilled') {queued+=reply.value.queued || 0;already+=reply.value.already_queued || 0;}
+            else failures.push(reply.reason && reply.reason.message || 'Queue request failed');
+          });
+          if(queued) wsRefresh();
+          if(!failures.length && _archiveRequeueAttempt===attempt) _archiveRequeueAttempt=null;
+          toast('Queued '+queued+' backtests'+(already?'; '+already+' already queued':'')+(failures.length?'; some requests failed: '+failures.join('; '):''),failures.length?'err':'ok');
         }).catch(function(e) { toast('Failed: ' + e.message, 'err'); });
       }},
       { text: 'Cancel', cls: '' }
@@ -10351,6 +10377,23 @@ async function addResultToArchive() {
    ════════════════════════════════════════════════ */
 var selectedArchiveName = '';
 var ownArchiveName = '';
+var _archiveFilterState = null;
+
+function normalizeArchiveFilterState(value) {
+  if(!value || typeof value!=='object' || typeof value.archive!=='string' || value.archive.length>255) return null;
+  function text(key){return typeof value[key]==='string'?value[key].slice(0,500):'';}
+  return {archive:value.archive,search:text('search'),config:text('config'),coin:text('coin'),
+    selected:Array.isArray(value.selected)?value.selected.filter(function(path){return typeof path==='string' && path.length<=4096;}).slice(0,1000):[]};
+}
+
+function archiveFiltersChanged() {
+  if(!selectedArchiveName) return;
+  function value(id){var node=document.getElementById(id);return node?node.value:'';}
+  _archiveFilterState=normalizeArchiveFilterState({archive:selectedArchiveName,
+    search:value('arc-results-filter'),config:value('arc-results-config-filter'),coin:value('arc-results-coin-filter'),
+    selected:getSelectedArchiveResults()});
+  persistBacktestViewState();
+}
 
 function ownArchiveHasPendingChanges() {
   var own = archives.find(function(archive) { return archive && archive.is_own; });
@@ -10434,6 +10477,8 @@ function renderArchiveList() {
 function viewArchive(name, opts) {
   opts = opts || {};
   selectedArchiveName = name;
+  if(!_archiveFilterState || _archiveFilterState.archive!==name) _archiveFilterState=normalizeArchiveFilterState({archive:name});
+  document.getElementById('arc-results-filter').value=_archiveFilterState.search;
   archiveResultsMode = archiveResultsMode || 'backtests';
   persistBacktestViewState();
   /* Only manipulate sidebar/views when actually on the archive panel */
@@ -10445,9 +10490,9 @@ function viewArchive(name, opts) {
     updateArchiveActionVisibility();
   }
   return Promise.all([
-    apiFetch('/archives/' + encodeURIComponent(name) + '/results'),
-    apiFetch('/archives/' + encodeURIComponent(name) + '/optimize-configs').catch(function() { return { configs: [] }; }),
-    apiFetch('/archives/' + encodeURIComponent(name) + '/retest-schedules').catch(function() { return { schedules: [], runs: [] }; })
+    apiFetch('/archives/' + encodeURIComponent(name) + '/results' + (backtestEditorAdapter.metadataDriven ? '?read_only=true' : '')),
+    (backtestEditorAdapter.metadataDriven ? Promise.resolve({configs:[]}) : apiFetch('/archives/' + encodeURIComponent(name) + '/optimize-configs')).catch(function() { return { configs: [] }; }),
+    (backtestEditorAdapter.metadataDriven ? Promise.resolve({schedules:[],runs:[]}) : apiFetch('/archives/' + encodeURIComponent(name) + '/retest-schedules')).catch(function() { return { schedules: [], runs: [] }; })
   ]).then(function(res) {
     var resultPayload = res[0] || {};
     archiveResults = resultPayload.results || [];
@@ -10514,6 +10559,7 @@ function updateArchiveActionVisibility() {
   var isBacktests = archiveResultsMode === 'backtests';
   var isOptimize = archiveResultsMode === 'optimize';
   var own = selectedArchiveIsOwn();
+  var nativePage = backtestEditorAdapter.metadataDriven;
   ['archive-btn-rebacktest', 'archive-btn-add-run', 'archive-btn-compare', 'archive-btn-balance-calc'].forEach(function(id) {
     var node = document.getElementById(id);
     if (node) node.style.display = isBacktests ? '' : 'none';
@@ -10523,7 +10569,7 @@ function updateArchiveActionVisibility() {
   var renameBtn = document.getElementById('archive-btn-rename-config');
   if (renameBtn) renameBtn.style.display = isBacktests && own ? '' : 'none';
   var replaceBtn = document.getElementById('archive-btn-retest-replace');
-  if (replaceBtn) replaceBtn.style.display = isBacktests && own ? '' : 'none';
+  if (replaceBtn) replaceBtn.style.display = isBacktests && own && !nativePage ? '' : 'none';
   var scoreBtn = document.getElementById('archive-btn-score-preview');
   if (scoreBtn) scoreBtn.style.display = isBacktests ? '' : 'none';
   ['archive-btn-opt-view', 'archive-btn-opt-open', 'archive-btn-opt-import'].forEach(function(id) {
@@ -10541,7 +10587,7 @@ function updateArchiveActionVisibility() {
 }
 
 function setArchiveResultsMode(mode) {
-  if (mode === 'schedules' && !selectedArchiveIsOwn()) mode = 'backtests';
+  if ((mode === 'schedules' && !selectedArchiveIsOwn()) || (backtestEditorAdapter.metadataDriven && mode !== 'backtests')) mode = 'backtests';
   archiveResultsMode = mode === 'optimize' || mode === 'schedules' ? mode : 'backtests';
   persistBacktestViewState();
   var backBtn = document.getElementById('arc-tab-backtests');
@@ -10583,10 +10629,10 @@ function loadLegacyResults() {
 }
 
 function renderArchiveResults(name) {
-  if (archiveResultsMode === 'schedules' && !selectedArchiveIsOwn()) archiveResultsMode = 'backtests';
+  if ((archiveResultsMode === 'schedules' && !selectedArchiveIsOwn()) || (backtestEditorAdapter.metadataDriven && archiveResultsMode !== 'backtests')) archiveResultsMode = 'backtests';
   var tableEl = document.getElementById('archive-results-table');
   var chartsEl = document.getElementById('archive-charts');
-  var selectedPaths = currentPanel === 'archive' && archiveResultsMode === 'backtests' ? getSelectedArchiveResults() : [];
+  var selectedPaths = currentPanel === 'archive' && archiveResultsMode === 'backtests' ? (_archiveFilterState && _archiveFilterState.archive===name ? _archiveFilterState.selected : getSelectedArchiveResults()) : [];
   updateArchiveStatusLine();
   updateArchiveActionVisibility();
   var cfgLabel = document.querySelector('#archive-results-toolbar label');
@@ -10618,7 +10664,7 @@ function renderArchiveResults(name) {
   /* Populate config filter dropdown */
   var cfgSel = document.getElementById('arc-results-config-filter');
   if (cfgSel) {
-    var cfgVal = cfgSel.value;
+    var cfgVal = _archiveFilterState && _archiveFilterState.archive===name ? _archiveFilterState.config : cfgSel.value;
     var cfgNames = [];
     archiveResults.forEach(function(r) { if (cfgNames.indexOf(r.config_name) < 0) cfgNames.push(r.config_name); });
     cfgNames.sort();
@@ -10628,7 +10674,7 @@ function renderArchiveResults(name) {
 
   var coinSel = document.getElementById('arc-results-coin-filter');
   if (coinSel) {
-    var coinVal = coinSel.value;
+    var coinVal = _archiveFilterState && _archiveFilterState.archive===name ? _archiveFilterState.coin : coinSel.value;
     var coinNames = [];
     archiveResults.forEach(function(r) {
       (Array.isArray(r.coins) ? r.coins : []).forEach(function(coin) {
@@ -11195,7 +11241,7 @@ function pushArchive() {
     var body = {
       username: s.username || '',
       email: s.email || '',
-      access_token: s.access_token || ''
+      use_stored_credentials:true
     };
     showArchiveLog();
     toast('Pushing ' + myArchive + '… watch Archive Sync Log for progress', 'info');
@@ -11225,7 +11271,7 @@ function compactArchiveHistory() {
       dry_run: true,
       username: s.username || '',
       email: s.email || '',
-      access_token: s.access_token || ''
+      use_stored_credentials:true
     };
     toast('Preparing compact-history dry run…', 'info');
     apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/compact', {
@@ -11313,7 +11359,8 @@ function setupArchive() {
       '</div>' +
       '<div class="form-group" style="margin-bottom:var(--sp-sm)">' +
         '<label><span data-tip="GitHub / GitLab personal access token for HTTPS push authentication.\nLeave empty if SSH keys are used.">Access Token</span></label>' +
-        '<input type="password" id="setup-arc-token" class="sb-input" value="' + esc(s.access_token || '') + '" placeholder="ghp_...">' +
+        '<input type="password" id="setup-arc-token" class="sb-input" value="" autocomplete="new-password" placeholder="' + (s.has_access_token ? 'Stored — leave blank to keep' : 'ghp_...') + '">' +
+        '<label><input type="checkbox" id="setup-arc-clear-token"> Clear stored token</label>' +
       '</div>' +
       '<div class="form-group" style="margin-bottom:var(--sp-sm)">' +
         '<label><span data-tip="Automatically pull all archives in the background every N minutes. Set to 0 to disable.">Auto Pull Interval (min, 0 = off)</span></label>' +
@@ -11381,6 +11428,7 @@ function _collectArchiveSetup() {
     username:            document.getElementById('setup-arc-user').value.trim(),
     email:               document.getElementById('setup-arc-email').value.trim(),
     access_token:        document.getElementById('setup-arc-token').value,
+    clear_access_token:  document.getElementById('setup-arc-clear-token').checked,
     auto_pull_interval:  parseInt(document.getElementById('setup-arc-interval').value, 10) || 0,
     readme_title:        document.getElementById('setup-arc-readme-title').value.trim(),
     readme_static_markdown: document.getElementById('setup-arc-readme-static').value
@@ -11580,6 +11628,7 @@ backtestEditorAdapter.configureUi();
 var initialBacktestUrl = new URL(window.location.href);
 var initialViewState = loadStoredBacktestViewState();
 applyBacktestSortState(initialViewState.sorts);
+_archiveFilterState=normalizeArchiveFilterState(initialViewState.archiveFilters);
 loadSettings().catch(function(error) { console.error('Failed to load Backtest settings:', error); });
 initBacktestOhlcvPreflightController();
 connectWS();

@@ -301,3 +301,5 @@ The AI drawer keeps provider selection and New in one dedicated row above model 
 Model table headers are keyboard-accessible sort buttons with direction indicators and `aria-sort`. Header clicks and the sort menu share one persisted ordering across List/Table; numeric values sort numerically and unknowns stay last in both directions. Sorting preserves the selected model and filters.
 
 Model catalogs do not run background privacy probes or display inferred privacy classifications. An explicit privacy-policy rejection during a model test may offer model-scoped consent through the shared confirmation dialog and one retry; never relax the policy automatically.
+
+PB9 uses the shared Archive view and export/rebacktest dialogs. Route result reads and requeues by each row’s generation; never use legacy config normalization for native9. Native browsing uses read_only=true and skips automatic archive migration. Native Retest & Replace, schedules and optimizer controls stay hidden until implemented. Stored archive tokens must never be prefilled or returned in settings responses; blank means retain, with an explicit Clear stored token control.

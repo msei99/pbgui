@@ -580,8 +580,9 @@ def config_version_info(config: dict, *, fingerprint: str | None = None) -> dict
     has_version = bool(_SAFE_VERSION_RE.fullmatch(raw_version))
     version_segment = raw_version if has_version else "unknown"
     is_v8 = bool(re.match(r"^v8(?:[._-]|$)", raw_version, re.IGNORECASE))
-    config_family = "pb8" if is_v8 else "pb7"
-    generation = "v8" if is_v8 else "v7"
+    is_v9 = bool(re.match(r"^v9(?:[._-]|$)", raw_version, re.IGNORECASE))
+    config_family = "pb9" if is_v9 else "pb8" if is_v8 else "pb7"
+    generation = "v9" if is_v9 else "v8" if is_v8 else "v7"
     return {
         "config_version": version_segment,
         "config_version_raw": raw_version,
@@ -623,10 +624,20 @@ def read_result_config(result_dir: Path) -> dict:
 
 def _config_name_from_result(result_dir: Path, config: dict, archive_root: Path | None = None) -> str:
     """Derive a stable config name for an archived backtest result."""
+    if archive_root is not None and config_version_info(config)['backtest_version'] == 'v9':
+        try:
+            parts = result_dir.resolve().relative_to(archive_root.resolve()).parts
+            if len(parts) >= 6 and parts[:2] == ('pbgui', 'configs') and parts[3] == 'backtests':
+                return safe_path_part(parts[4], 'config')
+        except ValueError:
+            pass
     backtest = (config or {}).get("backtest") or {}
     base_dir = str(backtest.get("base_dir") or "").strip()
     if base_dir:
-        return safe_path_part(Path(base_dir).name, "config")
+        base = Path(base_dir)
+        if config_version_info(config)['backtest_version'] == 'v9' and re.fullmatch(r'[0-9a-f-]{36}', base.name):
+            return safe_path_part(base.parent.name, 'config')
+        return safe_path_part(base.name, "config")
     if archive_root is not None:
         try:
             rel_parts = result_dir.resolve().relative_to(archive_root.resolve()).parts
@@ -827,6 +838,9 @@ def copy_backtest_result_to_archive(source_dir: Path, archive_root: Path) -> dic
 
 def detect_liquidation(analysis: dict, config: dict) -> tuple[bool, str]:
     """Detect whether an analysis/config pair represents a liquidated result."""
+    if config_version_info(config)['backtest_version'] == 'v9':
+        liquidated = analysis.get('liquidated') is True
+        return liquidated, 'analysis.liquidated' if liquidated else ''
     backtest = (config or {}).get("backtest") or {}
     drawdown = analysis.get("drawdown_worst_usd", analysis.get("drawdown_worst", 0))
     eqbal_diff = analysis.get("equity_balance_diff_neg_max_usd", analysis.get("equity_balance_diff_neg_max", 0))
@@ -854,6 +868,25 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
     analysis_file = result_dir / "analysis.json"
     analysis = _read_json_object_nofollow(analysis_file, archive_root, required=True)
     config = _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
+    version = config_version_info(config)
+    if version['backtest_version'] == 'v9':
+        from pb9_result_helpers import load_equity_arrays, summarize_native_result
+        authored = config
+        for filename in ('pbgui.source.json', 'config.original.json'):
+            source = result_dir / filename
+            if source.exists() or source.is_symlink():
+                authored = _read_json_object_nofollow(source, archive_root, required=True)
+                break
+        equity = result_dir / 'balance_and_equity.npz'
+        arrays = load_equity_arrays(equity) if equity.exists() or equity.is_symlink() else None
+        projected = summarize_native_result(result_dir, config, authored, analysis, arrays,
+            config_name=_config_name_from_result(result_dir, config, archive_root),
+            display_name=result_dir.resolve().relative_to(Path(archive_root).resolve()).as_posix(),
+            modified=datetime.datetime.fromtimestamp(analysis_file.stat().st_mtime).isoformat())
+        projected.update(config_family='pb9', pb7_config_version=version['pb7_config_version'],
+            pbgui_version=version['pbgui_version'], layout='current' if is_new_backtest_result_path(result_dir, archive_root) else 'legacy',
+            liquidated=analysis.get('liquidated') is True)
+        return projected
     backtest = config.get("backtest", {}) if isinstance(config, dict) else {}
     bot = config.get("bot", {}) if isinstance(config, dict) else {}
     live = config.get("live", {}) if isinstance(config, dict) else {}

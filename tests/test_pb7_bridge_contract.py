@@ -1184,6 +1184,8 @@ def test_archive_push_pre_pull_preserves_local_archive_content(
     def fake_run(cmd, cwd=None, capture_output=True, text=True, timeout=None, input=None, env=None):
         nonlocal pull_count
         commands.append(list(cmd))
+        if cmd == ["git", "remote", "get-url", "origin"]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="https://example.test/archive.git", stderr="")
         if cmd == ["git", "pull"]:
             pull_count += 1
             if pull_count == 1:
@@ -1780,6 +1782,8 @@ def test_archive_push_dry_run_holds_archive_transaction(
     monkeypatch.setattr(backtest_v7, "_run_archive_git_step", fake_git_step)
     monkeypatch.setattr(backtest_v7, "_log_archive", lambda *_args, **_kwargs: None)
 
+    import github_archive
+    monkeypatch.setattr(github_archive, "archive_access_token", lambda: "fixture-stored-token")
     response = backtest_v7.git_push("mine", {"dry_run": True}, session=None)
 
     assert response["ok"] is True

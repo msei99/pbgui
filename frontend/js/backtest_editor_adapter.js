@@ -6,21 +6,22 @@
       version:'v9', isV8:false, metadataDriven:true,
       metadataApiBase:function(base) { return String(base).replace(/\/backtest-v9$/, '/v9'); },
       docsApiBase:function(base) { return String(base).replace(/\/backtest-v9$/, ''); },
-      archiveApiBase:function(base) { return base; },
+      archiveApiBase:function(base) { return String(base).replace(/\/backtest-v9$/, "/backtest-v7"); },
       websocketPath:'/api/backtest-v9/ws/bt9',
       queueLogFile:function(id) { return 'backtests_v9/' + id + '.log'; },
-      navItems:function() { return [{panel:'configs',icon:'📋',label:'Configs'}, {panel:'queue',icon:'⏳',label:'Queue',badge:true}, {panel:'results',icon:'📊',label:'Results'}]; },
-      initialPanels:['configs','queue','results'],
+      navItems:function() { return [{panel:'configs',icon:'📋',label:'Configs'}, {panel:'queue',icon:'⏳',label:'Queue',badge:true}, {panel:'results',icon:'📊',label:'Results'}, {panel:'archive',icon:'🗄️',label:'Archive'}]; },
+      initialPanels:['configs','queue','results','archive'],
       configureUi:function() {
         var versions=document.getElementById('results-version-filter');
         versions.replaceChildren();[['v9','PB9'],['v8','PB8'],['v7','PB7'],['both','All']].forEach(function(item){var option=document.createElement('option');option.value=item[0];option.textContent=item[1];versions.appendChild(option);});
         window.PBGuiBacktestV9.restoreSearch();
         document.querySelectorAll('button[onclick]').forEach(function(button) {
           var action=button.getAttribute('onclick') || '';
-          if (/^(?:optimizeFromResult|optimizePresetFromResult|strategyExplorerFromResult|addResultToArchive|pushArchive|convertConfigToV8|goStrategyExplorer)/.test(action)) {
+          if (/^(?:optimizeFromResult|optimizePresetFromResult|strategyExplorerFromResult|convertConfigToV8|goStrategyExplorer)/.test(action)) {
             button.hidden=true;button.disabled=true;button.style.display='none';
           }
         });
+        ['archive-btn-retest-replace','arc-tab-schedules','arc-tab-optimize'].forEach(function(id){var node=document.getElementById(id);if(node){node.hidden=true;node.disabled=true;node.style.display='none';}});
         var readiness=document.getElementById('sb-btn-ohlcv-preflight');
         if (readiness) readiness.title='Check PB9 OHLCV readiness for the current config';
         ['goStrategyExplorer'].forEach(function(action) {
@@ -28,10 +29,10 @@
         });
         var openCalculator=window.openBalanceCalculatorWithConfig, inlineCalculator=window._showBalanceCalcModal;
         window.openBalanceCalculatorWithConfig=async function(config,exchange) {
-          return openCalculator(await window.PBGuiBacktestV9.balanceConfig(config),exchange);
+          return openCalculator(/^v9\./.test(String((config || {}).config_version)) ? await window.PBGuiBacktestV9.balanceConfig(config) : config,exchange);
         };
         window._showBalanceCalcModal=async function(config,exchange) {
-          try {return inlineCalculator(await window.PBGuiBacktestV9.balanceConfig(config),exchange);} catch(error) {window.toast(error.message,'err');}
+          try {return inlineCalculator(/^v9\./.test(String((config || {}).config_version)) ? await window.PBGuiBacktestV9.balanceConfig(config) : config,exchange);} catch(error) {window.toast(error.message,'err');}
         };
         var runButton=document.getElementById('sb-btn-add-to-run');if(runButton)runButton.title='Open this config in PB9 Run editor';
         var convert=document.getElementById('sb-btn-convert-v8');if(convert)convert.remove();
@@ -40,6 +41,15 @@
           var candidate=JSON.parse(JSON.stringify(config));candidate.pbgui=Object.assign({},candidate.pbgui || {},{runtime:'pb9',enabled_on:'disabled'});
           return fetch(run+'/draft',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:candidate})}).then(function(response){if(!response.ok)throw new Error('PB9 Run draft was rejected');return response.json();}).then(function(data){window.location.href=run+'/edit_page?new=1&draft_id='+encodeURIComponent(data.draft_id);});
         }
+        window.addToRunFromArchive=function() {
+          var selected=window.getSelectedArchiveResults();
+          if(selected.length!==1){window.toast('Select exactly 1 result','err');return;}
+          if(window.archiveResultByPath(selected[0]).backtest_version!=='v9'){
+            window.toast('Open this result from its own PB7/PB8 Backtest page to add it to Run.','err');return;
+          }
+          window.archiveResultApiFetch(selected[0],'/results/config?path='+encodeURIComponent(selected[0]))
+            .then(openRun).catch(function(error){window.toast(error.message,'err');});
+        };
         window.addConfigToRunByName=function(name) {
           if (window.currentPanel === 'configs' && window.editingConfig === name && document.getElementById('cfg-name')) {
             if (!window.PBGuiBacktestV9.validate() || !window.ensureRawJsonValidForSave()) return;

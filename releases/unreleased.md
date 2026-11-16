@@ -2,6 +2,21 @@
 
 ## Development
 
+- Integrate native PB9 Results with the shared PB7/PB8 Archive: version-owned
+  exports, native summaries/charts, Add to Run drafts and manual requeues through
+  the cancellable PB9 request owner. Preserve native artifacts and provenance
+  during export and group rename; keep unsupported replacement/scheduled retests
+  and optimizer archive controls blocked instead of using legacy conversion.
+- Browse native archives without automatic migration, reuse archive change
+  notifications and restore archive navigation, filters and row selection after reload. Share one bounded
+  NPZ reader and summary projection between local and archived PB9 results.
+  Validate NPY storage declarations before allocation and constrain imported
+  candle/dataset paths to the existing approved source roots.
+- Keep stored archive tokens out of settings responses and form HTML. Blank
+  inputs retain credentials; explicit clearing removes them. Git authentication
+  uses a transient, origin-scoped environment header with matching fetch/push
+  origins and disabled redirects, never credential-bearing command arguments.
+
 - Add PB9 queue Autostart and CPU slots through the existing Backtest Settings
   dialog, with separate native settings (default off / one slot), oldest-first
   dispatch, fresh pause checks and shared PB7/PB8/PB9 capacity. Push policy changes

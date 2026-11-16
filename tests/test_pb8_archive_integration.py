@@ -303,3 +303,96 @@ def test_v8_archive_retest_queues_immutable_snapshot(tmp_path: Path, monkeypatch
     assert snapshot_before["bot"]["long"]["risk"]["n_positions"] == 5
     assert json.loads((snapshot.parent / "BTC.json").read_text(encoding="utf-8")) == override
     assert not (tmp_path / "data/bt_v7_queue").exists()
+
+
+def test_pb9_schema_uses_native_archive_family_without_affecting_v7_v8():
+    """The archive generation follows config schema rather than package-version guesses."""
+    for schema in ('v9.0.0','v9.1.0'):
+        info = archive_helpers.config_version_info({'config_version': schema})
+        assert info['config_family'] == 'pb9'
+        assert info['backtest_version'] == info['optimize_version'] == 'v9'
+    assert archive_helpers.config_version_info({'config_version':'v8.6.0'})['backtest_version'] == 'v8'
+    assert archive_helpers.config_version_info({'config_version':'v7.12.0'})['backtest_version'] == 'v7'
+
+
+def test_archive_settings_never_return_stored_token_and_blank_save_keeps_it(monkeypatch):
+    """Stored secrets remain server-owned while users can explicitly replace or clear them."""
+    import configparser
+    parser = configparser.ConfigParser()
+    parser.read_dict({'config_archive': {'my_archive_access_token': 'fixture-private-token'}})
+    monkeypatch.setattr(backtest_v7, 'load_ini_snapshot', lambda: parser)
+    response = backtest_v7.get_archive_settings()
+    assert response['has_access_token'] is True
+    assert 'access_token' not in response
+    assert 'fixture-private-token' not in json.dumps(response)
+    saves = []
+    monkeypatch.setattr(backtest_v7, 'save_ini_section', lambda section, values: saves.append((section, values)))
+    backtest_v7.save_archive_settings({'username':'tester','access_token':''})
+    assert saves[-1][1] == {'my_archive_username':'tester'}
+    backtest_v7.save_archive_settings({'access_token':'', 'clear_access_token':True})
+    assert saves[-1][1] == {'my_archive_access_token':''}
+    backtest_v7.save_archive_settings({'access_token':'replacement-fixture-token'})
+    assert saves[-1][1] == {'my_archive_access_token':'replacement-fixture-token'}
+
+
+def test_archive_git_auth_stays_out_of_argv_and_remote_config(tmp_path, monkeypatch):
+    """A synthetic Git command receives transient credentials only through its environment."""
+    import base64
+    import subprocess
+    calls = []
+    def run(command, **kwargs):
+        """Return a fixed remote without contacting a server or invoking Git."""
+        calls.append((command, kwargs))
+        if command[1:3] == ['remote','get-url']:
+            return subprocess.CompletedProcess(command, 0, 'https://example.test/own/archive.git\n', '')
+        return subprocess.CompletedProcess(command, 0, 'ok', '')
+    monkeypatch.setattr(backtest_v7.subprocess, 'run', run)
+    monkeypatch.setattr(backtest_v7, '_log_archive', lambda *_a, **_k: None)
+    token = 'fixture-test-token'
+    backtest_v7._run_archive_git_step('own', tmp_path, 'push', ['git','push','--dry-run'], timeout=1, secret=token)
+    command, kwargs = calls[-1]
+    assert command == ['git','push','--dry-run']
+    assert all(token not in str(item[0]) for item in calls)
+    env = kwargs['env']
+    assert env['GIT_CONFIG_KEY_0'] == 'http.https://example.test/own/archive.git.extraHeader'
+    encoded = env['GIT_CONFIG_VALUE_0'].split()[-1]
+    assert base64.b64decode(encoded).decode() == token + ':'
+    assert token not in backtest_v7._mask_archive_secret(encoded, token)
+    assert backtest_v7._archive_push_url(tmp_path, token) is None
+
+
+def test_archive_clear_only_request_removes_the_stored_token(monkeypatch):
+    """Explicit clearing is sufficient without serializing any existing secret value."""
+    saves = []
+    monkeypatch.setattr(backtest_v7, 'save_ini_section', lambda section, values: saves.append(values))
+    backtest_v7.save_archive_settings({'clear_access_token':True})
+    assert saves[-1] == {'my_archive_access_token':''}
+    backtest_v7.save_archive_settings({'clear_access_token':True,'access_token':None})
+    assert saves[-1] == {'my_archive_access_token':''}
+
+
+def test_archive_token_requires_https_and_preserves_git_config_hardening(tmp_path, monkeypatch):
+    """Credential transport rejects cleartext HTTP and retains explicit config isolation."""
+    import subprocess
+    remote = ['http://example.test/archive.git']
+    monkeypatch.setattr(backtest_v7.subprocess, 'run', lambda cmd, **kwargs:
+        subprocess.CompletedProcess(cmd, 0, remote[0], ''))
+    with pytest.raises(HTTPException, match='HTTPS'):
+        backtest_v7._archive_authenticated_git_env(tmp_path,['git','pull'],'fixture-token')
+    remote[0] = 'https://example.test/archive.git'
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL','/fixture/global-disabled')
+    monkeypatch.setenv('GIT_CONFIG_NOSYSTEM','1')
+    env = backtest_v7._archive_authenticated_git_env(tmp_path,['git','pull'],'fixture-token')
+    assert env['GIT_CONFIG_GLOBAL'] == '/fixture/global-disabled'
+    assert env['GIT_CONFIG_NOSYSTEM'] == '1'
+    assert env['GIT_CONFIG_VALUE_1'] == 'false'
+
+
+@pytest.mark.parametrize('raw, public', [
+    ('https://fixture-token@example.test/archive.git?token=hidden#secret','https://example.test/archive.git'),
+    ('ssh://user:fixture-token@example.test/archive.git','ssh://user@example.test/archive.git'),
+    ('git@example.test:own/archive.git','git@example.test:own/archive.git'),
+])
+def test_archive_public_origin_never_reflects_credentials(raw, public):
+    """The shared archive list displays repository coordinates without stored auth."""
+    assert backtest_v7._archive_public_remote_url(raw) == public
