@@ -165,4 +165,4 @@ The original PB8 bundle stays unchanged. Local JSON coin overrides are copied in
 
 After a new result conversion, PB9 retains this exact PB8 comparison reference. Open **Compare with PB8 source** on the completed PB9 result, or select both versions manually in PB9 Results using **All → Compare**. The existing comparison chart is reused.
 
-Archive Setup keeps stored tokens server-side. An empty token input retains the saved token; **Clear stored token** removes it explicitly. Native PB9 archive rows use their own result reader and queue; automated PB9 Retest & Replace and schedules remain unavailable.
+Archive Setup keeps stored tokens server-side. An empty token input retains the saved token; **Clear stored token** removes it explicitly. Native PB9 archive rows use their own result reader and queue; **Retest & Replace** and daily/weekly **Retest Schedules** also support native PB9 results. Enable native PB9 Autostart for unattended execution.

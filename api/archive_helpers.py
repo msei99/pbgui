@@ -777,10 +777,15 @@ def _valid_backtest_fingerprint(result_dir: Path, archive_root: Path) -> str | N
         return None
 
 
-def _copy_backtest_result_to_archive_locked(source_dir: Path, archive_root: Path) -> dict:
+def _copy_backtest_result_to_archive_locked(source_dir: Path, archive_root: Path, *, config_name: str | None = None) -> dict:
     """Copy one result while its archive transaction lock is held."""
     source_dir = _validate_directory_tree_no_symlinks(source_dir)
     rel, meta = derive_backtest_archive_relative_path(source_dir, archive_root)
+    if config_name is not None:
+        if not isinstance(config_name, str) or config_name != safe_path_part(config_name, 'config'):
+            raise RuntimeError('Invalid archive destination config group')
+        rel = Path(*rel.parts[:4], config_name, *rel.parts[5:])
+        meta.update(config_name=config_name, relative_path=rel.as_posix())
     dest = _validate_archive_path(archive_root / rel, archive_root)
     source_fingerprint = meta["fingerprint"]
     copied = True
@@ -830,10 +835,10 @@ def _copy_backtest_result_to_archive_locked(source_dir: Path, archive_root: Path
     return {"ok": True, "path": str(dest), "relative_path": meta["relative_path"], "skipped": skipped, "meta": meta}
 
 
-def copy_backtest_result_to_archive(source_dir: Path, archive_root: Path) -> dict:
+def copy_backtest_result_to_archive(source_dir: Path, archive_root: Path, *, config_name: str | None = None) -> dict:
     """Copy a local backtest result into the versioned archive layout."""
     with archive_transaction(archive_root):
-        return _copy_backtest_result_to_archive_locked(source_dir, archive_root)
+        return _copy_backtest_result_to_archive_locked(source_dir, archive_root, config_name=config_name)
 
 
 def detect_liquidation(analysis: dict, config: dict) -> tuple[bool, str]:

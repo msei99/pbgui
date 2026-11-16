@@ -25,7 +25,7 @@ def backtest():
         state = SimpleNamespace(page=page, config=config, saved=[], queued=[], run_drafts=[], balance_requests=[], errors=[], unexpected=[], metadata=metadata, hold_symbols=False, pending_symbols=[], queue_fail_once=False,
                                 preflight_requests=[], hold_preflight=False, pending_preflight=[], lookups=[], lookup_stops=[], hold_lookup=False,
                                 preload_supported=False,preload_status='running',preload_gets=0,
-                                settings={'exchange_options':['binance','bybit'],'cpu':1,'cpu_max':4,'autostart':False}, settings_saved=[], archives=[], archive_results=[], archived=[], archive_queued=[])
+                                settings={'exchange_options':['binance','bybit'],'cpu':1,'cpu_max':4,'autostart':False}, settings_saved=[], archives=[], archive_results=[], archived=[], archive_queued=[], schedules=[], schedule_actions=[])
         page.on('pageerror', lambda error: state.errors.append(str(error)))
 
         def respond(route):
@@ -98,6 +98,9 @@ def backtest():
                 elif path.endswith('/results/rebacktest'):
                     state.archive_queued.append((path,route.request.post_data_json))
                     route.fulfill(json={'ok':True,'queued':1})
+                elif path.endswith('/results/retest-replace'):
+                    state.archive_queued.append((path,route.request.post_data_json))
+                    route.fulfill(json={'ok':True,'queued':1})
                 elif path.endswith('/add-config'):
                     state.archived.append(route.request.post_data_json)
                     route.fulfill(json={'ok':True})
@@ -106,7 +109,18 @@ def backtest():
                 elif path.endswith('/optimize-configs'):
                     route.fulfill(json={'configs':[]})
                 elif path.endswith('/retest-schedules'):
-                    route.fulfill(json={'schedules':[],'runs':[]})
+                    if route.request.method == 'POST':
+                        payload=route.request.post_data_json
+                        state.schedule_actions.append((path,payload))
+                        state.schedules.append(dict(payload,id='schedule-fixture',enabled=True,backtest_versions=['v9'],targets=[{'relative_path':'native-result','backtest_version':'v9'}]))
+                    route.fulfill(json={'schedules':state.schedules,'runs':[]})
+                elif '/retest-schedules/' in path:
+                    state.schedule_actions.append((path,route.request.method))
+                    if path.endswith('/toggle'):
+                        state.schedules[0]['enabled']=not state.schedules[0]['enabled']
+                    elif route.request.method == 'DELETE':
+                        state.schedules.clear()
+                    route.fulfill(json={'ok':True,'queued':1})
                 else:
                     route.fulfill(json={})
             elif path.endswith('/settings'):
@@ -922,8 +936,8 @@ def test_native_archive_reuses_shared_view_charts_and_version_owned_requeue(back
     page.locator('#archive-list-container tbody tr').dblclick()
     expect(page.locator('#archive-results-table')).to_contain_text('native-archived')
     expect(page.locator('#arc-tab-optimize')).to_be_hidden()
-    expect(page.locator('#arc-tab-schedules')).to_be_hidden()
-    expect(page.locator('#archive-btn-retest-replace')).to_be_hidden()
+    expect(page.locator('#arc-tab-schedules')).to_be_visible()
+    expect(page.locator('#archive-btn-retest-replace')).to_be_visible()
     page.locator('#archive-results-table .icon-btn[data-action="view"]').click()
     page.wait_for_function('document.querySelector("#archive-charts .js-plotly-plot") !== null')
     assert '/api/backtest-v9/results/equity' in reads
@@ -939,6 +953,49 @@ def test_native_archive_reuses_shared_view_charts_and_version_owned_requeue(back
     assert backtest.archive_queued[0][0] == '/api/backtest-v9/archives/own/results/rebacktest'
     assert backtest.archive_queued[0][1]['paths'] == [path]
     assert backtest.errors == backtest.unexpected == []
+
+
+def test_native_archive_retest_schedule_uses_shared_controls_and_owned_execution(backtest):
+    """Create/run/pause/delete and reload use the PB8 controls with native execution routing."""
+    page=backtest.page
+    path='/archive-fixture/own/pbgui/configs/v9.0.0/backtests/native-archived/bybit/result'
+    backtest.archives=[{'name':'own','is_own':True,'results':1}]
+    backtest.archive_results=[{'path':path,'backtest_version':'v9','config_name':'native-archived','exchange_dir':'bybit','exchanges':['bybit'],'coins':['HYPE']}]
+    page.route('**/api/backtest-v9/results/config?*',lambda route:route.fulfill(json=backtest.config))
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#sidebar-editor button[onclick="closeEditor()"]').click()
+    page.locator('#sidebar [data-panel="archive"]').click()
+    page.locator('#archive-list-container tbody tr').dblclick()
+    page.locator('#archive-results-table tbody tr').first.click()
+    page.locator('#archive-btn-retest-replace').click()
+    expect(page.locator('#arr-cadence')).to_have_value('daily')
+    page.locator('#arr-cadence').select_option('weekly')
+    expect(page.locator('#arr-weekday-wrap')).to_be_visible()
+    page.locator('#arr-weekday').select_option('2')
+    page.locator('#arr-time').fill('04:10')
+    page.locator('#modal-btn-1').click()
+    expect(page.locator('#archive-results-table')).to_contain_text('Weekly Wed 04:10')
+    assert backtest.schedule_actions[0][0]=='/api/backtest-v7/archives/own/retest-schedules'
+    assert backtest.schedule_actions[0][1]['paths']==[path]
+    page.reload()
+    expect(page.locator('#archive-results-table')).to_contain_text('Weekly Wed 04:10')
+    assert page.evaluate('location.hash').endswith(':schedules')
+    page.locator('.archive-sched-run').click()
+    page.wait_for_function('document.querySelector(".archive-sched-run") !== null')
+    page.locator('.archive-sched-toggle').click()
+    expect(page.locator('#archive-results-table')).to_contain_text('Disabled')
+    assert any(action[0]=='/api/backtest-v9/archives/own/retest-schedules/schedule-fixture/run' for action in backtest.schedule_actions)
+    page.locator('.archive-sched-delete').click()
+    page.locator('#modal-btn-1').click()
+    expect(page.locator('#archive-results-table')).to_contain_text('No retest schedules')
+    page.locator('#arc-tab-backtests').click()
+    page.locator('#arc-btn-deselect').click()
+    page.locator('#archive-results-table tbody tr').first.click()
+    page.locator('#archive-btn-retest-replace').click()
+    page.locator('#modal-btn-0').click()
+    page.wait_for_function('document.getElementById("modal-root").classList.contains("open") === false')
+    assert backtest.archive_queued[-1][0]=='/api/backtest-v9/archives/own/results/retest-replace'
+    assert backtest.errors==backtest.unexpected==[]
 
 
 def test_native_result_adds_to_existing_archive_endpoint(backtest):

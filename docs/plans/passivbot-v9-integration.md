@@ -1,6 +1,6 @@
 # Passivbot v9: gemeinsamer Entwicklungsplan
 
-Stand: 15. November 2026. Native PB9 Run- und Backtest-Editoren verwenden
+Stand: 16. November 2026. Native PB9 Run- und Backtest-Editoren verwenden
 inzwischen die gemeinsamen PB8-Seiten und Bedienelemente. Lokaler Run,
 Backtest-Queue mit optionalem Autostart, PB8-Migration, Ergebnisse und versionsübergreifendes
 Compare sind angebunden. Additional Parameters ergänzt unbekannte Felder;
@@ -16,7 +16,7 @@ OHLCV Readiness und 1st/All verwenden nun die gemeinsame Oberfläche und
 den Lookup-Controller mit einem nativen PB9-Adapter. Prüfungen laufen mit
 privaten Metadaten-Workspaces, direkter Candle-Quelle und PB9-Transport.
 
-Bewusst noch offen: native PB9-Anbindung für Strategy Explorer, außerdem Optimizer-, automatische Archiv-Retests und Remote-Abläufe.
+Bewusst noch offen: native PB9-Anbindung für Strategy Explorer, außerdem Optimizer- und Remote-Abläufe. Automatische Archiv-Retests sind jetzt angebunden.
 Diese Funktionen dürfen nicht durch die PB7/PB8-Ausführungsengine als PB9
 angeboten werden. Die restliche historische Schrittfolge unten dokumentiert
 die bisherige Einführung und ist keine Aussage über den aktuellen UI-Umfang.
@@ -852,4 +852,16 @@ PB9 now reuses the Backtest Settings dialog and PB8 controller lifecycle with a 
 
 ### Shared archive adapter
 
-Native9 exports, summaries, read-only browsing, native charts, Add to Run and manual requeues now reuse the shared archive infrastructure. Native result/provenance bytes survive archive copy and config-group rename. Replacement/scheduled retests and optimizer archive settings remain blocked for9. Archive credentials stay server-side; native browsing does not run migration. Strategy Explorer remains the final integration.
+Native9 exports, summaries, read-only browsing, native charts, Add to Run and manual requeues now reuse the shared archive infrastructure. Native result/provenance bytes survive archive copy and config-group rename. Replacement/scheduled retests now reuse the shared engine with native queue/provenance, exact-target verification and recoverable replacement; optimizer archive settings remain blocked for9. Archive credentials stay server-side; native browsing does not run migration. Strategy Explorer remains the final integration.
+
+### Native archive retests and schedules
+
+PB9 now uses the shared Retest & Replace dialog and daily/weekly schedule engine.
+Native queue/provenance and exact completion markers gate replacement; source
+changes and ambiguous suites fail closed. Original results remain as private
+recovery backups. Shared state transactions, per-target archive locks, durable
+cycle IDs and joined cancellation cover API restarts. Fable 5.2 medium reviewed
+a bounded sanitized excerpt once; finalization retries, scan isolation, partial
+batches, cleanup ordering, pre-move rollback and unchanged schedule cycles were
+verified and corrected with isolated regression tests. Different archive/backup
+filesystems are rejected before copying rather than risking partial retirement.

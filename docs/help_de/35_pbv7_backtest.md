@@ -352,4 +352,4 @@ Im visuellen Szenarioeditor bleibt der Zoom innerhalb der konfigurierten Daten. 
 
 Die Ergebnisansicht behält passende Zeilen und den gewählten Config-Filter beim Nachladen bei. Schlägt die erste Ergebnisabfrage fehl oder läuft sie in einen Timeout, zeigt die Liste den Fehler statt dauerhaft „Loading results…“. Auch große Config-Auswahllisten werden zusammen aktualisiert; verfügbare Ergebnisse und Sortierung bleiben erhalten.
 
-Archiv-Setup behält gespeicherte Token serverseitig. Ein leeres Tokenfeld erhält den gespeicherten Wert; **Clear stored token** entfernt ihn ausdrücklich. Native PB9-Archivzeilen verwenden ihren eigenen Ergebnisleser und ihre eigene Queue; automatisches PB9 Retest & Replace und Zeitpläne fehlen noch.
+Archiv-Setup behält gespeicherte Token serverseitig. Ein leeres Tokenfeld erhält den gespeicherten Wert; **Clear stored token** entfernt ihn ausdrücklich. Native PB9-Archivzeilen verwenden ihren eigenen Ergebnisleser und ihre eigene Queue; **Retest & Replace** und tägliche/wöchentliche **Retest Schedules** unterstützen auch native PB9-Ergebnisse. Aktiviere für unbeaufsichtigte Ausführung den nativen PB9-Autostart.

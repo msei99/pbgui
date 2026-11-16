@@ -165,4 +165,4 @@ Die ursprünglichen PB8-Dateien bleiben unverändert. Lokale JSON-Coin-Overrides
 
 Nach einer neuen Ergebnis-Konvertierung merkt sich PB9 dieses konkrete PB8-Vergleichsziel. Öffne beim fertigen PB9-Ergebnis **Compare with PB8 source** oder wähle beide Versionen manuell unter PB9 Results über **All → Compare**. Verwendet wird das bestehende Vergleichsdiagramm.
 
-Archiv-Setup behält gespeicherte Token serverseitig. Ein leeres Tokenfeld erhält den gespeicherten Wert; **Clear stored token** entfernt ihn ausdrücklich. Native PB9-Archivzeilen verwenden ihren eigenen Ergebnisleser und ihre eigene Queue; automatisches PB9 Retest & Replace und Zeitpläne fehlen noch.
+Archiv-Setup behält gespeicherte Token serverseitig. Ein leeres Tokenfeld erhält den gespeicherten Wert; **Clear stored token** entfernt ihn ausdrücklich. Native PB9-Archivzeilen verwenden ihren eigenen Ergebnisleser und ihre eigene Queue; **Retest & Replace** und tägliche/wöchentliche **Retest Schedules** unterstützen auch native PB9-Ergebnisse. Aktiviere für unbeaufsichtigte Ausführung den nativen PB9-Autostart.

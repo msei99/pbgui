@@ -22,6 +22,8 @@ def native(tmp_path, monkeypatch):
     source = copy.deepcopy(metadata['template'])
     status = {'detected':True, 'commit':'a'*40, 'config_schema':'v9.0.0', 'package_version':'8.2.0.dev0'}
     monkeypatch.setattr(bt,'PBGDIR',tmp_path)
+    from api import backtest_v7
+    monkeypatch.setattr(backtest_v7, '_archive_retests_dir', lambda: tmp_path/'archive-retest-state')
     monkeypatch.setattr(bt,'_pbgui_data_path',lambda:str(tmp_path/'data/ohlcv'))
     import logging_helpers
     monkeypatch.setattr(logging_helpers,'LOG_ROOT',tmp_path/'data/logs')
@@ -1063,7 +1065,7 @@ def test_native_archive_cannot_fall_back_to_legacy_retest_or_another_archive(arc
     _, archived, archive, _ = archived_native
     with pytest.raises(HTTPException, match='PB9'):
         backtest_v7.rebacktest_archive_results('own', {'paths': [str(archived)]})
-    with pytest.raises(HTTPException, match='not yet available'):
+    with pytest.raises(HTTPException, match='owned native endpoint'):
         backtest_v7._queue_archive_retest_run('own', archive, archived, {})
     with pytest.raises(HTTPException):
         operation('archive_requeue', {'paths': [str(archived)]}, name='other')
@@ -1193,3 +1195,362 @@ def test_native_archive_websocket_releases_watcher_subscription(native):
             raise WebSocketDisconnect()
     asyncio.run(bt.websocket.__wrapped__(Socket()))
     assert backtest_v7._archive_ws_clients == before
+
+
+@pytest.fixture
+def native_retest(archived_native, monkeypatch):
+    """Queue one real native retest with mocked native validation and private data roots."""
+    from api import backtest_v7
+    _, archived, archive, _ = archived_native
+    monkeypatch.setattr(backtest_v7, '_own_archive_name', lambda:'own')
+    monkeypatch.setattr(bt.subprocess, 'Popen', lambda *_a, **_k:pytest.fail('a retest enqueue started a process'))
+    response = backtest_v7._native_archive_retest('own', {'paths':[str(archived)]}, PB9CancelSignal())
+    assert response['queued']==1
+    return response['runs'][0], archived, archive
+
+
+def finish_native_retest(run, *, liquidated=False, balance=1200., equity=1300., state=True):
+    """Publish native completion exactly as the runner does, without running a backtest."""
+    from pb9_backtest_runtime import publish_result_source
+    snapshot=bt._job_path(run['queue_filename'],'.config.json')
+    config=bt._read(snapshot)
+    config['backtest']['starting_balance']=config['backtest'].get('starting_balance') or 1000
+    root=Path(config['backtest']['base_dir'])
+    directory=root/'combined'/'native-retest-completed'; directory.mkdir(parents=True)
+    bt._write(directory/'config.json',config)
+    bt._write(directory/'analysis.json', {'liquidated':liquidated,'sharpe_ratio_strategy_equity':2.5})
+    start=float(config['backtest']['starting_balance'])
+    np.savez(directory/'balance_and_equity.npz', schema_version=np.int64(1),
+        timestamp_ms=np.array([1735689600000,1735776000000],dtype=np.int64),
+        usd_total_balance=np.array([start,balance]), usd_total_equity=np.array([start,equity]))
+    publish_result_source(snapshot)
+    if state:
+        bt._write(bt._job_path(run['queue_filename'],'.state.json'), {'returncode':0})
+    return directory
+
+
+def test_native_retest_queue_is_native_and_private_control_metadata_never_enters_bot_input(native_retest):
+    """Date/exchange policy is shared, but native input and control provenance stay separate."""
+    from api import backtest_v7
+    run, original, _=native_retest
+    record=bt._read(bt._job_path(run['queue_filename']))
+    config=bt._read(bt._job_path(run['queue_filename'],'.config.json'))
+    assert run['backtest_version']=='v9' and run['config_family']=='pb9'
+    assert record['archive_retest']['id']==run['id']
+    assert run['snapshot_sha256']==record['snapshot_sha256']
+    assert config['backtest']['end_date']==run['date']['end_date']
+    assert 'pbgui' not in config and 'archive_retest' not in config
+    assert original.exists()
+    with pytest.raises(HTTPException,match='already pending'):
+        backtest_v7._native_archive_retest('own',{'paths':[str(original)]},PB9CancelSignal())
+    assert len(backtest_v7._load_archive_retest_runs())==1
+
+
+def test_successful_native_retest_replaces_archive_with_immutable_artifacts_and_recoverable_original(native_retest):
+    """Completion copies verified native output, updates the shared run and retires only its job."""
+    from api import backtest_v7, archive_helpers
+    run, original, archive=native_retest
+    before={file.name:file.read_bytes() for file in original.iterdir()}
+    output=finish_native_retest(run)
+    produced={file.name:file.read_bytes() for file in output.iterdir()}
+    backtest_v7._process_archive_retest_completions()
+    stored=backtest_v7._load_archive_retest_runs()[0]
+    assert stored['status']=='complete'
+    new=Path(stored['result']['new_path'])
+    assert new.is_dir() and not original.exists()
+    assert {file.name:file.read_bytes() for file in new.iterdir()}==produced
+    backup=Path(stored['result']['backup'])
+    assert {file.name:file.read_bytes() for file in backup.iterdir()}==before
+    assert archive_helpers.summarize_backtest_result(new,archive)['config_name']=='archive-sample'
+    assert not bt._job_path(run['queue_filename']).exists()
+    assert stored['result']['cleanup']['complete'] is True
+
+
+@pytest.mark.parametrize('failure',['failed','liquidated','changed_source','changed_provenance','changed_original','ambiguous'])
+def test_native_retest_failures_keep_the_original_archive_unchanged(native_retest,failure):
+    """No failed, altered or ambiguous native run can replace the queued original."""
+    from api import backtest_v7
+    run, original, _=native_retest
+    output=finish_native_retest(run,liquidated=failure=='liquidated')
+    if failure=='failed':
+        bt._write(bt._job_path(run['queue_filename'],'.state.json'),{'returncode':1})
+    elif failure=='changed_source':
+        source=bt._read(output/'pbgui.source.json');source['backtest']['starting_balance']+=1
+        bt._write(output/'pbgui.source.json',source)
+    elif failure=='changed_provenance':
+        proof=bt._read(output/'pbgui.provenance.json');proof['snapshot_sha256']='f'*64
+        bt._write(output/'pbgui.provenance.json',proof)
+    elif failure=='changed_original':
+        (original/'note.txt').write_text('user change after enqueue')
+    elif failure=='ambiguous':
+        import shutil
+        shutil.copytree(output,output.with_name('another-result'))
+    before={file.name:file.read_bytes() for file in original.iterdir()}
+    backtest_v7._process_archive_retest_completions()
+    assert backtest_v7._load_archive_retest_runs()[0]['status']=='error'
+    assert {file.name:file.read_bytes() for file in original.iterdir()}==before
+
+
+def test_native_retest_recovery_reconstructs_run_without_guessing_other_jobs(native_retest):
+    """A crash between immutable enqueue and shared state save cannot orphan the retest."""
+    from api import backtest_v7
+    from pb9_archive_retests import recover_runs
+    run, _, _=native_retest
+    backtest_v7._save_archive_retest_runs([])
+    recover_runs(); recover_runs()
+    recovered=backtest_v7._load_archive_retest_runs()
+    assert len(recovered)==1 and recovered[0]['id']==run['id']
+    assert recovered[0]['queue_filename']==run['queue_filename']
+
+
+def test_native_retest_checkpoint_recovers_after_archive_move_and_local_cleanup(native_retest,monkeypatch):
+    """A restart after the replacement is copied/finalized does not lose successful completion."""
+    from api import backtest_v7, archive_helpers
+    from pb9_archive_retests import replace_result
+    run, original, _=native_retest
+    finish_native_retest(run)
+    result=replace_result(run)
+    assert not original.exists() and not bt._job_path(run['queue_filename']).exists()
+    # Shared runs still say queued, as if the API died before its final state write.
+    backtest_v7._process_archive_retest_completions()
+    restored=backtest_v7._load_archive_retest_runs()[0]
+    assert restored['status']=='complete'
+    assert restored['result']['new_relative_path']==result['new_relative_path']
+    assert Path(restored['result']['new_path']).is_dir()
+
+
+def test_native_schedule_creation_run_completion_and_target_relink_use_existing_engine(archived_native,monkeypatch):
+    """Daily/weekly controls create native queued jobs and follow replacement paths."""
+    from api import backtest_v7
+    _, original, _, _=archived_native
+    monkeypatch.setattr(backtest_v7,'_own_archive_name',lambda:'own')
+    created=backtest_v7.create_archive_retest_schedule('own',{'paths':[str(original)],'cadence':'weekly','weekday':2,'time':'04:10'})['schedule']
+    assert created['backtest_versions']==['v9'] and created['cadence']=='weekly'
+    response=backtest_v7._native_schedule_run('own',created['id'],PB9CancelSignal())
+    run=response['runs'][0]
+    assert run['schedule_id']==created['id']
+    finish_native_retest(run)
+    backtest_v7._process_archive_retest_completions()
+    schedule=backtest_v7._load_archive_retest_schedules()[0]
+    assert schedule['targets'][0]['relative_path']!=run['source_relative_path']
+    assert schedule['last_status']=='complete'
+    backtest_v7.toggle_archive_retest_schedule('own',created['id'],{'enabled':False})
+    assert backtest_v7._load_archive_retest_schedules()[0]['enabled'] is False
+    backtest_v7.delete_archive_retest_schedule('own',created['id'])
+    assert backtest_v7._load_archive_retest_schedules()==[]
+
+
+def test_native_due_schedule_is_supervised_and_does_not_start_a_backtest(archived_native,monkeypatch):
+    """The existing schedule tick only enqueues a native snapshot and advances its period."""
+    from api import backtest_v7
+    _, original, _, _=archived_native
+    monkeypatch.setattr(backtest_v7,'_own_archive_name',lambda:'own')
+    monkeypatch.setattr(bt.subprocess,'Popen',lambda *_a,**_k:pytest.fail('schedule launched a bot'))
+    schedule=backtest_v7.create_archive_retest_schedule('own',{'paths':[str(original)]})['schedule']
+    schedule['next_run_at']='2000-01-01T00:00:00'
+    backtest_v7._save_archive_retest_schedules([schedule])
+    backtest_v7._queue_due_archive_retest_schedules(PB9CancelSignal())
+    assert len(backtest_v7._load_archive_retest_runs())==1
+    assert backtest_v7._load_archive_retest_schedules()[0]['next_run_at']!='2000-01-01T00:00:00'
+    backtest_v7._queue_due_archive_retest_schedules(PB9CancelSignal())
+    assert len(backtest_v7._load_archive_retest_runs())==1
+
+
+def test_native_retest_requires_job_level_completion_marker(native_retest):
+    """Partial publications never retire the original, even with a terminal queue state."""
+    from api import backtest_v7
+    run, original, _=native_retest
+    result=finish_native_retest(run)
+    (result.parents[1]/'pbgui.completion.json').unlink()
+    backtest_v7._process_archive_retest_completions()
+    assert original.is_dir()
+    assert backtest_v7._load_archive_retest_runs()[0]['status']=='error'
+
+
+def test_native_due_cycle_resumes_remaining_targets_after_cancellation(archived_native,monkeypatch):
+    """A partially queued daily cycle resumes without duplicating its first target."""
+    import shutil
+    from api import backtest_v7
+    _, original, _, _=archived_native
+    other=original.with_name('second-original');shutil.copytree(original,other)
+    monkeypatch.setattr(backtest_v7,'_own_archive_name',lambda:'own')
+    schedule=backtest_v7.create_archive_retest_schedule('own',{'paths':[str(original),str(other)]})['schedule']
+    schedule['next_run_at']='2000-01-01T00:00:00'
+    backtest_v7._save_archive_retest_schedules([schedule])
+    cancel=PB9CancelSignal();queue=backtest_v7._queue_archive_retest_run
+    def interrupt(*args,**kwargs):
+        """Cancel after one persisted native enqueue, as during API shutdown."""
+        run=queue(*args,**kwargs);cancel.set();return run
+    monkeypatch.setattr(backtest_v7,'_queue_archive_retest_run',interrupt)
+    backtest_v7._queue_due_archive_retest_schedules(cancel)
+    assert len(backtest_v7._load_archive_retest_runs())==1
+    assert backtest_v7._load_archive_retest_schedules()[0]['next_run_at']==schedule['next_run_at']
+    backtest_v7.toggle_archive_retest_schedule('own',schedule['id'],{'enabled':False})
+    backtest_v7.toggle_archive_retest_schedule('own',schedule['id'],{'enabled':True})
+    assert backtest_v7._load_archive_retest_schedules()[0]['next_run_at']==schedule['next_run_at']
+    monkeypatch.setattr(backtest_v7,'_queue_archive_retest_run',queue)
+    backtest_v7._queue_due_archive_retest_schedules(PB9CancelSignal())
+    runs=backtest_v7._load_archive_retest_runs()
+    assert len(runs)==2 and len({run['schedule_target_id'] for run in runs})==2
+    assert len({run['schedule_cycle'] for run in runs})==1
+
+
+def test_archive_retest_worker_stop_joins_preparation_and_resets_cancellation(native,monkeypatch):
+    """API shutdown signals and joins preparation without touching detached native jobs."""
+    import asyncio
+    import threading
+    from api import backtest_v7
+    entered=threading.Event();exited=threading.Event()
+    worker=backtest_v7.ArchiveRetestWorker()
+    monkeypatch.setattr(backtest_v7,'_process_archive_retest_completions',lambda:None)
+    def prepare(cancel):
+        """Model a native helper that cooperatively exits on its owner's signal."""
+        entered.set()
+        deadline=time.monotonic()+3
+        while not cancel.is_set() and time.monotonic()<deadline:
+            time.sleep(.01)
+        assert cancel.is_set();exited.set()
+    monkeypatch.setattr(backtest_v7,'_queue_due_archive_retest_schedules',prepare)
+    async def scenario():
+        """Run two lifetimes with separate cancellation signals."""
+        worker.start()
+        assert await asyncio.to_thread(entered.wait,3)
+        first=worker._cancel
+        await worker.stop()
+        assert exited.is_set() and first.is_set() and worker._task is None
+        entered.clear();exited.clear();worker.start()
+        assert worker._cancel is not first and not worker._cancel.is_set()
+        assert await asyncio.to_thread(entered.wait,3)
+        await worker.stop()
+    asyncio.run(scenario())
+
+
+def test_concurrent_native_schedule_creates_preserve_both_updates(archived_native,monkeypatch):
+    """The shared RMW transaction serializes competing API schedule creations."""
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from api import backtest_v7
+    _, original, _, _=archived_native
+    monkeypatch.setattr(backtest_v7,'_own_archive_name',lambda:'own')
+    entered=threading.Event();release=threading.Event();save=backtest_v7._save_archive_retest_schedules
+    def hold_first(schedules):
+        """Hold the first write while another request attempts its transaction."""
+        if not entered.is_set():
+            entered.set();assert release.wait(3)
+        save(schedules)
+    monkeypatch.setattr(backtest_v7,'_save_archive_retest_schedules',hold_first)
+    with ThreadPoolExecutor(2) as pool:
+        first=pool.submit(backtest_v7.create_archive_retest_schedule,'own',{'paths':[str(original)],'time':'01:00'})
+        assert entered.wait(3)
+        second=pool.submit(backtest_v7.create_archive_retest_schedule,'own',{'paths':[str(original)],'time':'03:00'})
+        release.set();first.result(5);second.result(5)
+    schedules=backtest_v7._load_archive_retest_schedules()
+    assert len(schedules)==2 and {item['time'] for item in schedules}=={'01:00','03:00'}
+
+
+@pytest.mark.parametrize('failure',[RuntimeError('manifest unavailable'),HTTPException(409,'busy'),OSError('disk unavailable')])
+def test_native_replacement_finalization_errors_retry_without_losing_success(native_retest,monkeypatch,failure):
+    """Any transient finalization failure after oldmove retains the checkpoint for retry."""
+    from api import archive_helpers,backtest_v7
+    run,original,_=native_retest
+    finish_native_retest(run)
+    rebuild=archive_helpers.rebuild_archive_manifest
+    def fail(*args,**kwargs):
+        """Inject a finalization failure after the original was retained in backup."""
+        raise failure
+    monkeypatch.setattr(archive_helpers,'rebuild_archive_manifest',fail)
+    backtest_v7._process_archive_retest_completions()
+    assert backtest_v7._load_archive_retest_runs()[0]['status']=='processing'
+    assert not original.exists()
+    monkeypatch.setattr(archive_helpers,'rebuild_archive_manifest',rebuild)
+    backtest_v7._process_archive_retest_completions()
+    assert backtest_v7._load_archive_retest_runs()[0]['status']=='complete'
+
+
+def test_native_recovery_failure_does_not_block_existing_completions(native_retest,monkeypatch):
+    """A damaged recovery scan cannot stop the shared completion controller."""
+    from api import backtest_v7
+    import pb9_archive_retests as adapter
+    run,_,_=native_retest;finish_native_retest(run)
+    def fail():
+        """Model an unavailable recovery root without touching a real path."""
+        raise OSError('temporary recovery scan failure')
+    monkeypatch.setattr(adapter,'recover_runs',fail)
+    backtest_v7._process_archive_retest_completions()
+    assert backtest_v7._load_archive_retest_runs()[0]['status']=='complete'
+
+
+def test_native_schedule_continues_after_bad_target_and_run_now_preserves_cycle(archived_native,monkeypatch):
+    """One rejected target cannot drop the rest of a mixed schedule batch."""
+    import shutil
+    from api import backtest_v7
+    _,original,_,_=archived_native
+    other=original.with_name('second-original');shutil.copytree(original,other)
+    monkeypatch.setattr(backtest_v7,'_own_archive_name',lambda:'own')
+    schedule=backtest_v7.create_archive_retest_schedule('own',{'paths':[str(original),str(other)]})['schedule']
+    schedule['targets'][0]['backtest_version']='v8'
+    before=schedule['next_run_at'];backtest_v7._save_archive_retest_schedules([schedule])
+    result=backtest_v7._native_schedule_run('own',schedule['id'],PB9CancelSignal())
+    assert result['queued']==1 and len(result['errors'])==1
+    saved=backtest_v7._load_archive_retest_schedules()[0]
+    assert saved['last_status']=='partial' and saved['next_run_at']==before
+
+
+def test_native_cleanup_interrupted_companion_removal_retains_terminal_record(native_retest,monkeypatch):
+    """Crash recovery can still identify cleanup after terminal state was already removed."""
+    from api import backtest_v7
+    run,_,_=native_retest;finish_native_retest(run)
+    unlink=Path.unlink
+    def fail_ready(path,*args,**kwargs):
+        """Fail after companion state deletion but before removing the queue record."""
+        if path==bt._job_path(run['queue_filename'],'.ready'):
+            raise OSError('interrupted cleanup')
+        return unlink(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'unlink',fail_ready)
+    backtest_v7._process_archive_retest_completions()
+    assert backtest_v7._load_archive_retest_runs()[0]['status']=='processing'
+    assert bt._job_path(run['queue_filename']).exists()
+    assert bt._job_status(run['queue_filename'])[0]=='stopped'
+    monkeypatch.setattr(Path,'unlink',unlink)
+    backtest_v7._process_archive_retest_completions()
+    assert backtest_v7._load_archive_retest_runs()[0]['status']=='complete'
+    assert not bt._job_path(run['queue_filename']).exists()
+
+
+def test_native_oldmove_failure_rolls_back_only_verified_new_copy(native_retest,monkeypatch):
+    """A failure before retiring the original leaves no duplicate replacement in the archive."""
+    from api import backtest_v7
+    import pb9_archive_retests as adapter
+    run,original,archive=native_retest;finish_native_retest(run)
+    replace=adapter.os.replace
+    def fail_oldmove(source,destination,*args,**kwargs):
+        """Reject exactly the old-result move, preserving all other atomic writes."""
+        if Path(source)==original:
+            raise OSError('oldmove failed')
+        return replace(source,destination,*args,**kwargs)
+    monkeypatch.setattr(adapter.os,'replace',fail_oldmove)
+    backtest_v7._process_archive_retest_completions()
+    assert backtest_v7._load_archive_retest_runs()[0]['status']=='error'
+    assert original.exists() and list(archive.rglob('analysis.json'))==[original/'analysis.json']
+    assert not adapter.has_replacement(run)
+
+
+def test_completed_native_retest_cleanup_failure_never_downgrades_success(native_retest,monkeypatch):
+    """Late cleanup errors retain completed replacement status and retry separately."""
+    from api import backtest_v7
+    import pb9_archive_retests as adapter
+    run,_,_=native_retest;finish_native_retest(run)
+    cleanup=adapter.cleanup
+    monkeypatch.setattr(adapter,'cleanup',lambda *args:{'complete':False,'errors':['waiting']})
+    backtest_v7._process_archive_retest_completions()
+    assert backtest_v7._load_archive_retest_runs()[0]['status']=='complete'
+    def fail(*args):
+        """Model a late queue cleanup failure after successful archive replacement."""
+        raise HTTPException(409,'temporarily busy')
+    monkeypatch.setattr(adapter,'cleanup',fail)
+    backtest_v7._process_archive_retest_completions()
+    saved=backtest_v7._load_archive_retest_runs()[0]
+    assert saved['status']=='complete' and saved['result']['cleanup']['complete'] is False
+    monkeypatch.setattr(adapter,'cleanup',cleanup)
+    backtest_v7._process_archive_retest_completions()
+    assert backtest_v7._load_archive_retest_runs()[0]['result']['cleanup']['complete'] is True

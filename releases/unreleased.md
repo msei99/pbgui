@@ -2,11 +2,22 @@
 
 ## Development
 
+- Add native PB9 Retest & Replace and daily/weekly Retest Schedules through the
+  existing shared archive dialog and scheduler. Native jobs keep their own queue,
+  immutable snapshot and completion provenance; failed, altered or ambiguous
+  results leave the archived original intact. Retain a recovery backup and
+  resume interrupted enqueue/replacement stages after API restarts. Keep completed
+  replacements recoverable when finalization fails, continue schedule batches
+  after individual target errors, and retain terminal queue records until their
+  companion cleanup finishes.
+- Serialize shared retest/schedule state updates, join cancellable preparation
+  on API shutdown, and push archive-state changes automatically. Native unattended
+  execution uses the existing PB9 queue Autostart setting.
+
 - Integrate native PB9 Results with the shared PB7/PB8 Archive: version-owned
   exports, native summaries/charts, Add to Run drafts and manual requeues through
   the cancellable PB9 request owner. Preserve native artifacts and provenance
-  during export and group rename; keep unsupported replacement/scheduled retests
-  and optimizer archive controls blocked instead of using legacy conversion.
+  during export and group rename; keep unsupported optimizer archive controls blocked instead of using legacy conversion.
 - Browse native archives without automatic migration, reuse archive change
   notifications and restore archive navigation, filters and row selection after reload. Share one bounded
   NPZ reader and summary projection between local and archived PB9 results.

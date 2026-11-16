@@ -8,7 +8,7 @@
 <script src="/app/plotly.min.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=19"></script>
+<script src="/app/js/backtest_editor_adapter.js?v=20"></script>
 <script src="/app/js/backtest_v9_editor.js?v=18"></script>
 <script src="/app/js/backtest_v9_migration.js?v=1" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
@@ -9484,6 +9484,19 @@ function archiveConfigUsesPbguiMarketData(cfg, pbguiPath) {
   return !!sourceDir && !!marketDataDir && sourceDir === marketDataDir;
 }
 
+function archiveExchangeChoices(config, paths, metadata) {
+  var defaults=(config.backtest && config.backtest.exchanges) || ['bybit'];
+  var options=['binance','bybit','bitget','okx','hyperliquid','kucoin','combined'];
+  if(metadata) {
+    options=((((metadata || {}).template || {}).backtest || {}).exchanges || []).slice();
+    paths.forEach(function(path){var row=archiveResultByPath(path);if(row.backtest_version==='v9')options=options.concat(row.exchanges || []);});
+    options=Array.from(new Set(options)).filter(function(value){return typeof value==='string' && /^[a-z0-9_]+$/.test(value) && value!=='combined';});
+    defaults=defaults.filter(function(value){return options.indexOf(value)>=0;});
+    if(!defaults.length && options.length) defaults=[options[0]];
+  }
+  return {options:options,selected:defaults};
+}
+
 var _archiveRequeueAttempt = null;
 
 function rebacktestSelectedArchive() {
@@ -9500,13 +9513,8 @@ function rebacktestSelectedArchive() {
     var cfg = payload[0] || {};
     var pbguiPath = (payload[1] || {}).path || '';
     var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
-    if(nativeSelected) {
-      allExchanges=Array.from(new Set((((payload[2] || {}).template || {}).backtest || {}).exchanges || []));
-      sel.forEach(function(path){var row=archiveResultByPath(path);if(row.backtest_version==='v9')allExchanges=allExchanges.concat(row.exchanges || []);});
-      allExchanges=Array.from(new Set(allExchanges)).filter(function(value){return typeof value==='string' && /^[a-z0-9_]+$/.test(value) && value!=='combined';});
-      defExchanges=defExchanges.filter(function(value){return allExchanges.indexOf(value)>=0;});
-      if(!defExchanges.length && allExchanges.length) defExchanges=[allExchanges[0]];
-    }
+    var exchangeChoices=archiveExchangeChoices(cfg,sel,payload[2]);
+    allExchanges=exchangeChoices.options;defExchanges=exchangeChoices.selected;
     var defStart = (cfg.backtest && cfg.backtest.start_date) || '2020-01-01';
     var defEnd = (cfg.backtest && cfg.backtest.end_date) || today;
     var defBalance = Number((cfg.backtest && cfg.backtest.starting_balance) || 1000);
@@ -9622,14 +9630,16 @@ function retestReplaceSelectedArchive() {
   if (!selectedArchiveIsOwn()) { toast('Retest & Replace is only available for your own archive', 'err'); return; }
   var sel = getSelectedArchiveResults();
   if (!sel.length) { toast('Nothing selected', 'err'); return; }
-  var allExchanges = ['binance', 'bybit', 'bitget', 'okx', 'hyperliquid', 'kucoin', 'combined'];
-  archiveResultApiFetch(sel[0], '/results/config?path=' + encodeURIComponent(sel[0])).then(function(cfg) {
-    var defExchanges = (cfg.backtest && cfg.backtest.exchanges) || ['bybit'];
+  var nativeSelected=sel.some(function(path){return archiveResultByPath(path).backtest_version==='v9';});
+  Promise.all([archiveResultApiFetch(sel[0], '/results/config?path=' + encodeURIComponent(sel[0])),
+    nativeSelected?apiFetchFrom(backtestApiBase('v9'),'/editor/metadata'):Promise.resolve(null)]).then(function(data) {
+    var cfg=data[0], choices=archiveExchangeChoices(cfg,sel,data[1]), allExchanges=choices.options;
+    var defExchanges = choices.selected;
     var defBalance = Number((cfg.backtest && cfg.backtest.starting_balance) || 1000);
     if (!Number.isFinite(defBalance)) defBalance = 1000;
     var defDays = archiveRetestDefaultDays(cfg);
     var exOpts = allExchanges.map(function(e) {
-      return '\x3Coption value="' + e + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + e + '\x3C/option>';
+      return '\x3Coption value="' + esc(e) + '"' + (defExchanges.indexOf(e) >= 0 ? ' selected' : '') + '>' + esc(e) + '\x3C/option>';
     }).join('');
     var body =
       '\x3Cdiv style="display:flex;flex-direction:column;gap:var(--sp-md);height:100%;min-width:0">' +
@@ -9666,7 +9676,7 @@ function retestReplaceSelectedArchive() {
         var payload = collectArchiveRetestPayload(sel);
         if (!payload) return;
         closeModal();
-        apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/results/retest-replace', {
+        apiFetchFrom(nativeSelected?backtestApiBase('v9'):archiveApiBase(),'/archives/' + encodeURIComponent(selectedArchiveName) + '/results/retest-replace', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -10492,7 +10502,7 @@ function viewArchive(name, opts) {
   return Promise.all([
     apiFetch('/archives/' + encodeURIComponent(name) + '/results' + (backtestEditorAdapter.metadataDriven ? '?read_only=true' : '')),
     (backtestEditorAdapter.metadataDriven ? Promise.resolve({configs:[]}) : apiFetch('/archives/' + encodeURIComponent(name) + '/optimize-configs')).catch(function() { return { configs: [] }; }),
-    (backtestEditorAdapter.metadataDriven ? Promise.resolve({schedules:[],runs:[]}) : apiFetch('/archives/' + encodeURIComponent(name) + '/retest-schedules')).catch(function() { return { schedules: [], runs: [] }; })
+    apiFetch('/archives/' + encodeURIComponent(name) + '/retest-schedules').catch(function() { return { schedules: [], runs: [] }; })
   ]).then(function(res) {
     var resultPayload = res[0] || {};
     archiveResults = resultPayload.results || [];
@@ -10569,7 +10579,7 @@ function updateArchiveActionVisibility() {
   var renameBtn = document.getElementById('archive-btn-rename-config');
   if (renameBtn) renameBtn.style.display = isBacktests && own ? '' : 'none';
   var replaceBtn = document.getElementById('archive-btn-retest-replace');
-  if (replaceBtn) replaceBtn.style.display = isBacktests && own && !nativePage ? '' : 'none';
+  if (replaceBtn) replaceBtn.style.display = isBacktests && own ? '' : 'none';
   var scoreBtn = document.getElementById('archive-btn-score-preview');
   if (scoreBtn) scoreBtn.style.display = isBacktests ? '' : 'none';
   ['archive-btn-opt-view', 'archive-btn-opt-open', 'archive-btn-opt-import'].forEach(function(id) {
@@ -10587,7 +10597,7 @@ function updateArchiveActionVisibility() {
 }
 
 function setArchiveResultsMode(mode) {
-  if ((mode === 'schedules' && !selectedArchiveIsOwn()) || (backtestEditorAdapter.metadataDriven && mode !== 'backtests')) mode = 'backtests';
+  if ((mode === 'schedules' && !selectedArchiveIsOwn()) || (backtestEditorAdapter.metadataDriven && mode === 'optimize')) mode = 'backtests';
   archiveResultsMode = mode === 'optimize' || mode === 'schedules' ? mode : 'backtests';
   persistBacktestViewState();
   var backBtn = document.getElementById('arc-tab-backtests');
@@ -10629,7 +10639,7 @@ function loadLegacyResults() {
 }
 
 function renderArchiveResults(name) {
-  if ((archiveResultsMode === 'schedules' && !selectedArchiveIsOwn()) || (backtestEditorAdapter.metadataDriven && archiveResultsMode !== 'backtests')) archiveResultsMode = 'backtests';
+  if ((archiveResultsMode === 'schedules' && !selectedArchiveIsOwn()) || (backtestEditorAdapter.metadataDriven && archiveResultsMode === 'optimize')) archiveResultsMode = 'backtests';
   var tableEl = document.getElementById('archive-results-table');
   var chartsEl = document.getElementById('archive-charts');
   var selectedPaths = currentPanel === 'archive' && archiveResultsMode === 'backtests' ? (_archiveFilterState && _archiveFilterState.archive===name ? _archiveFilterState.selected : getSelectedArchiveResults()) : [];
@@ -10793,7 +10803,9 @@ function renderArchiveRetestSchedules() {
 
 function runArchiveRetestSchedule(id) {
   if (!selectedArchiveIsOwn()) { toast('Schedule controls are only available for your own archive', 'err'); return; }
-  apiFetch('/archives/' + encodeURIComponent(selectedArchiveName) + '/retest-schedules/' + encodeURIComponent(id) + '/run', { method: 'POST' })
+  var schedule=archiveRetestSchedules.find(function(item){return item.id===id;}) || {};
+  var nativeSchedule=(schedule.backtest_versions || []).indexOf('v9')>=0 || (schedule.targets || []).some(function(target){return target.backtest_version==='v9';});
+  apiFetchFrom(nativeSchedule?backtestApiBase('v9'):archiveApiBase(),'/archives/' + encodeURIComponent(selectedArchiveName) + '/retest-schedules/' + encodeURIComponent(id) + '/run', { method: 'POST' })
     .then(function(d) { toast('Queued ' + (d.queued || 0) + ' archive retest(s)', 'ok'); viewArchive(selectedArchiveName); wsRefresh(); })
     .catch(function(e) { toast('Run failed: ' + e.message, 'err'); });
 }

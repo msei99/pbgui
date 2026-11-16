@@ -396,3 +396,11 @@ def test_archive_token_requires_https_and_preserves_git_config_hardening(tmp_pat
 def test_archive_public_origin_never_reflects_credentials(raw, public):
     """The shared archive list displays repository coordinates without stored auth."""
     assert backtest_v7._archive_public_remote_url(raw) == public
+
+
+@pytest.fixture(autouse=True)
+def isolate_shared_retest_recovery(tmp_path, monkeypatch):
+    """Keep shared retest locks and native recovery scans away from production data."""
+    from api import backtest_v9
+    monkeypatch.setattr(backtest_v7, '_archive_retests_dir', lambda: tmp_path/'archive-retest-state')
+    monkeypatch.setattr(backtest_v9, 'PBGDIR', tmp_path)

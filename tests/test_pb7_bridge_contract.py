@@ -2471,3 +2471,11 @@ def test_archive_optimize_routes_reject_symlink_paths(
     assert exc_info.value.status_code == 400
     assert linked.is_symlink()
     assert outside.exists()
+
+
+@pytest.fixture(autouse=True)
+def isolate_shared_retest_recovery(tmp_path, monkeypatch):
+    """Keep shared retest locks and native recovery scans away from production data."""
+    from api import backtest_v9
+    monkeypatch.setattr(backtest_v7, '_archive_retests_dir', lambda: tmp_path/'archive-retest-state')
+    monkeypatch.setattr(backtest_v9, 'PBGDIR', tmp_path)

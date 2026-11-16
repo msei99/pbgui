@@ -21,7 +21,7 @@
             button.hidden=true;button.disabled=true;button.style.display='none';
           }
         });
-        ['archive-btn-retest-replace','arc-tab-schedules','arc-tab-optimize'].forEach(function(id){var node=document.getElementById(id);if(node){node.hidden=true;node.disabled=true;node.style.display='none';}});
+        ['arc-tab-optimize'].forEach(function(id){var node=document.getElementById(id);if(node){node.hidden=true;node.disabled=true;node.style.display='none';}});
         var readiness=document.getElementById('sb-btn-ohlcv-preflight');
         if (readiness) readiness.title='Check PB9 OHLCV readiness for the current config';
         ['goStrategyExplorer'].forEach(function(action) {

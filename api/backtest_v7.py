@@ -31,6 +31,7 @@ import threading
 import time
 import traceback
 import uuid
+from functools import wraps
 from pathlib import Path, PurePath
 from shutil import rmtree
 from typing import Any, Callable, Optional
@@ -53,6 +54,7 @@ from api.archive_helpers import (
     cleanup_empty_parents,
     copy_backtest_result_to_archive,
     config_version_info,
+    _config_name_from_result,
     detect_liquidation,
     ensure_config_version,
     is_inside_archive,
@@ -92,7 +94,7 @@ from api.pb7_ohlcv_tools import (
     start_ohlcv_preload_job,
     stop_ohlcv_preload_job,
 )
-from backtest_autostart import claim_backtest_slot, publish_backtest_process, release_backtest_slot
+from backtest_autostart import BacktestQueueWorker, claim_backtest_slot, publish_backtest_process, release_backtest_slot
 from backtest_result_index import invalidate_result as invalidate_result_index, load_indexed_results
 from logging_helpers import human_log as _log
 from pareto_preset_generator import OPTIMIZE_PRESET_DIRECTIONS, build_optimize_preset
@@ -665,6 +667,15 @@ def _apply_pbgui_market_data_override(cfg: dict, enabled: bool) -> tuple[bool, s
     return True, target_path
 
 
+def _archive_retest_transaction(function):
+    """Serialize shared run/schedule read-modify-write operations before archive locks."""
+    @wraps(function)
+    def locked(*args, **kwargs):
+        with advisory_file_lock(_archive_retests_dir() / 'state'):
+            return function(*args, **kwargs)
+    return locked
+
+
 def _load_archive_retest_runs() -> list[dict]:
     data = load_json_file(_archive_retest_runs_path())
     runs = data.get("runs") if isinstance(data, dict) else []
@@ -777,13 +788,14 @@ def _queue_archive_retest_run(
     *,
     schedule_id: str | None = None,
     schedule_target_id: str | None = None,
+    schedule_cycle: str = "",
+    cancel=None,
 ) -> dict:
     cfg, backtest_version, override_configs = _load_archived_backtest_config(result_dir, archive_dir)
-    if backtest_version == "v9":
-        raise HTTPException(409, "Native PB9 Retest & Replace is not yet available; use Backtest")
     run_id = uuid.uuid4().hex
     source_relative_path = result_dir.resolve().relative_to(archive_dir.resolve()).as_posix()
-    archive_config_name = _archive_retest_config_name(result_dir, cfg)
+    archive_config_name = (_config_name_from_result(result_dir, cfg, archive_dir) if backtest_version == 'v9'
+                           else _archive_retest_config_name(result_dir, cfg))
     queue_name = _archive_retest_queue_name(archive_config_name, run_id)
     date_meta = _apply_archive_retest_date_policy(cfg, options)
 
@@ -794,6 +806,14 @@ def _queue_archive_retest_run(
         backtest["exchanges"] = options["exchanges"]
     if options.get("use_pbgui_market_data") is True:
         _apply_pbgui_market_data_override(cfg, True)
+    if backtest_version == 'v9':
+        from pb9_archive_retests import queue_retest
+        now = utc_now_iso()
+        run = {'id':run_id, 'archive_name':archive_name, 'source_relative_path':source_relative_path,
+            'archive_config_name':archive_config_name, 'queue_name':queue_name, 'backtest_version':'v9',
+            'schedule_id':schedule_id or '', 'schedule_target_id':schedule_target_id or '', 'schedule_cycle':schedule_cycle,
+            'status':'queued', 'created_at':now, 'queued_at':now, 'date':date_meta, 'options':options}
+        return queue_retest(run, cfg, archive_dir, result_dir, cancel)
     _normalize_backtest_base_dir(cfg, queue_name)
 
     pbgui = cfg.setdefault("pbgui", {})
@@ -853,6 +873,7 @@ def _queue_archive_retest_run(
         "config_family": "pb8" if backtest_version == "v8" else "pb7",
         "schedule_id": schedule_id or "",
         "schedule_target_id": schedule_target_id or "",
+        "schedule_cycle": schedule_cycle,
         "status": "queued",
         "created_at": now,
         "queued_at": now,
@@ -866,7 +887,10 @@ def _find_archive_retest_local_result(run: dict) -> Path | None:
     run_id = str(run.get("id") or "")
     if not queue_name or not run_id:
         return None
-    version = _normalize_archive_version(run.get("backtest_version"), default="v7")
+    version = _normalize_archive_version(run.get("backtest_version"), default="v7", allow_v9=True)
+    if version == 'v9':
+        from pb9_archive_retests import find_result
+        return find_result(run)
     if version == "v8":
         from api import backtest_v8
 
@@ -916,6 +940,9 @@ def _stage_archive_retest_result(result_dir: Path, run: dict) -> tuple[Path, Pat
 
 def _cleanup_archive_retest_local_artifacts(run: dict, local_result: Path | None) -> dict:
     """Best-effort cleanup after a retest result was safely copied into the archive."""
+    if run.get('backtest_version') == 'v9':
+        from pb9_archive_retests import cleanup
+        return cleanup(run, local_result)
     removed: list[str] = []
     errors: list[str] = []
 
@@ -1007,6 +1034,9 @@ def _cleanup_archive_retest_local_artifacts(run: dict, local_result: Path | None
 
 
 def _replace_archive_result_from_local(run: dict) -> dict:
+    if run.get('backtest_version') == 'v9':
+        from pb9_archive_retests import replace_result
+        return replace_result(run)
     archive_name = str(run.get("archive_name") or "")
     archive_dir = _archives_dir() / archive_name
     with archive_transaction(archive_dir):
@@ -2236,6 +2266,11 @@ _archive_sync_worker = ArchiveSyncWorker()
 
 
 def _queue_status(filename: str, version: str = "v7") -> str:
+    if _normalize_archive_version(version, default='v7', allow_v9=True) == 'v9':
+        from api import backtest_v9
+        if not backtest_v9._job_path(filename).exists():
+            return 'missing'
+        return backtest_v9._job_status(filename)[0]
     if _normalize_archive_version(version, default="v7") == "v8":
         from api import backtest_v8
 
@@ -2249,6 +2284,7 @@ def _queue_status(filename: str, version: str = "v7") -> str:
     return "missing"
 
 
+@_archive_retest_transaction
 def _mark_archive_retest_schedule_result(run: dict, status: str, message: str = "", new_relative_path: str = "") -> None:
     schedule_id = str(run.get("schedule_id") or "")
     target_id = str(run.get("schedule_target_id") or "")
@@ -2274,71 +2310,92 @@ def _mark_archive_retest_schedule_result(run: dict, status: str, message: str = 
         _save_archive_retest_schedules(schedules)
 
 
+@_archive_retest_transaction
 def _process_archive_retest_completions() -> None:
+    from pb9_archive_retests import recover_runs, has_replacement, RetestFinalizePending
+    try:
+        recover_runs()
+    except Exception:
+        _log(ARCHIVE_RETEST_SERVICE, 'Native retest recovery will retry', level='WARNING', meta={'traceback':traceback.format_exc()})
     runs = _load_archive_retest_runs()
     changed = False
     for run in runs:
-        if run.get("status") == "complete" and not ((run.get("result") or {}).get("cleanup")):
-            result = run.get("result") if isinstance(run.get("result"), dict) else {}
-            result["cleanup"] = _cleanup_archive_retest_local_artifacts(
-                run,
-                _find_archive_retest_local_result(run),
+        try:
+            cleanup_state = (run.get('result') or {}).get('cleanup')
+            if run.get("status") == "complete" and (not cleanup_state or run.get('backtest_version') == 'v9' and not cleanup_state.get('complete', False)):
+                result = run.get("result") if isinstance(run.get("result"), dict) else {}
+                try:
+                    result["cleanup"] = _cleanup_archive_retest_local_artifacts(run, _find_archive_retest_local_result(run))
+                except Exception as exc:
+                    if run.get('backtest_version') != 'v9':
+                        raise
+                    result['cleanup'] = {'complete':False, 'errors':[str(exc)]}
+                    _log(ARCHIVE_RETEST_SERVICE, 'Completed native retest cleanup will retry', level='WARNING', meta={'traceback':traceback.format_exc()})
+                run["result"] = result
+                changed = True
+                continue
+            if run.get("status") not in {"queued", "processing"}:
+                continue
+            status = _queue_status(
+                str(run.get("queue_filename") or ""),
+                str(run.get("backtest_version") or "v7"),
             )
-            run["result"] = result
-            changed = True
-            continue
-        if run.get("status") not in {"queued", "processing"}:
-            continue
-        status = _queue_status(
-            str(run.get("queue_filename") or ""),
-            str(run.get("backtest_version") or "v7"),
-        )
-        if status in {"queued", "running", "backtesting", "unknown"}:
-            continue
-        if status == "missing":
-            local_result = _find_archive_retest_local_result(run)
-            if local_result and (local_result / "analysis.json").exists():
-                status = "complete"
-            else:
+            if status in {"queued", "running", "backtesting", "unknown"}:
+                continue
+            if run.get('backtest_version') == 'v9' and has_replacement(run):
+                status = 'complete'
+            if status == "missing":
+                local_result = _find_archive_retest_local_result(run)
+                if local_result and (local_result / "analysis.json").exists():
+                    status = "complete"
+                else:
+                    run["status"] = "error"
+                    run["error"] = "Queue item is missing before completion"
+                    run["completed_at"] = utc_now_iso()
+                    _mark_archive_retest_schedule_result(run, "error", run["error"])
+                    changed = True
+                    continue
+            if status in {"error", "stopped"}:
                 run["status"] = "error"
-                run["error"] = "Queue item is missing before completion"
+                run["error"] = "Backtest queue item failed"
                 run["completed_at"] = utc_now_iso()
                 _mark_archive_retest_schedule_result(run, "error", run["error"])
                 changed = True
                 continue
-        if status in {"error", "stopped"}:
-            run["status"] = "error"
-            run["error"] = "Backtest queue item failed"
-            run["completed_at"] = utc_now_iso()
-            _mark_archive_retest_schedule_result(run, "error", run["error"])
+            if status != "complete":
+                continue
+            run["status"] = "processing"
+            try:
+                result = _replace_archive_result_from_local(run)
+                run["status"] = "complete"
+                run["completed_at"] = utc_now_iso()
+                run["result"] = result
+                _mark_archive_retest_schedule_result(run, "complete", "", result.get("new_relative_path", ""))
+                _log(
+                    ARCHIVE_RETEST_SERVICE,
+                    f"Replaced archive result {result.get('old_relative_path')} -> {result.get('new_relative_path')}",
+                    level="INFO",
+                )
+            except RetestFinalizePending as exc:
+                run["status"] = "processing"
+                run["error"] = str(exc)
+            except Exception as exc:
+                run["status"] = "error"
+                run["error"] = str(exc)
+                run["completed_at"] = utc_now_iso()
+                _mark_archive_retest_schedule_result(run, "error", str(exc))
+                _log(
+                    ARCHIVE_RETEST_SERVICE,
+                    f"Archive retest replacement failed: {exc}",
+                    level="WARNING",
+                    meta={"traceback": traceback.format_exc()},
+                )
             changed = True
-            continue
-        if status != "complete":
-            continue
-        run["status"] = "processing"
-        try:
-            result = _replace_archive_result_from_local(run)
-            run["status"] = "complete"
-            run["completed_at"] = utc_now_iso()
-            run["result"] = result
-            _mark_archive_retest_schedule_result(run, "complete", "", result.get("new_relative_path", ""))
-            _log(
-                ARCHIVE_RETEST_SERVICE,
-                f"Replaced archive result {result.get('old_relative_path')} -> {result.get('new_relative_path')}",
-                level="INFO",
-            )
         except Exception as exc:
-            run["status"] = "error"
-            run["error"] = str(exc)
-            run["completed_at"] = utc_now_iso()
-            _mark_archive_retest_schedule_result(run, "error", str(exc))
-            _log(
-                ARCHIVE_RETEST_SERVICE,
-                f"Archive retest replacement failed: {exc}",
-                level="WARNING",
-                meta={"traceback": traceback.format_exc()},
-            )
-        changed = True
+            run['status']='error'; run['error']=str(exc); run['completed_at']=utc_now_iso()
+            _mark_archive_retest_schedule_result(run, 'error', str(exc))
+            _log(ARCHIVE_RETEST_SERVICE, 'Archive retest evidence validation failed', level='WARNING', meta={'traceback':traceback.format_exc()})
+            changed=True
     if changed:
         _save_archive_retest_runs(runs)
 
@@ -2397,7 +2454,8 @@ def _has_pending_archive_retest_run(runs: list[dict], schedule_id: str) -> bool:
     )
 
 
-def _queue_archive_retest_schedule(schedule: dict, *, force: bool = False) -> dict:
+@_archive_retest_transaction
+def _queue_archive_retest_schedule(schedule: dict, *, force: bool = False, cancel=None) -> dict:
     archive_name = str(schedule.get("archive_name") or "")
     if archive_name != _own_archive_name():
         raise RuntimeError("Scheduled archive retests are only allowed for the configured own archive")
@@ -2405,50 +2463,77 @@ def _queue_archive_retest_schedule(schedule: dict, *, force: bool = False) -> di
     if not archive_dir.exists():
         raise RuntimeError(f"Archive '{archive_name}' not found")
 
+    from pb9_archive_retests import recover_runs
+    recover_runs()
+    cycle = ('manual-' + uuid.uuid4().hex) if force else str(schedule.get('next_run_at') or '')
     runs = _load_archive_retest_runs()
-    if not force and _has_pending_archive_retest_run(runs, str(schedule.get("id") or "")):
+    if not force and any(run.get('schedule_id') == schedule.get('id') and run.get('status') in {'queued','processing'}
+                         and run.get('schedule_cycle') != cycle for run in runs):
         schedule["last_status"] = "skipped"
         schedule["last_message"] = "Previous scheduled retest is still pending"
         return {"queued": 0, "skipped": True, "reason": schedule["last_message"]}
 
     queued = []
+    errors = []
     for target in schedule.get("targets") or []:
-        rel = str(target.get("relative_path") or "")
-        result_dir = (archive_dir / rel).resolve()
-        if not is_inside_archive(result_dir, archive_dir) or not result_dir.exists():
-            schedule["last_status"] = "error"
-            schedule["last_message"] = f"Scheduled target missing: {rel}"
+        if cancel is not None and cancel.is_set():
+            from pb9_config import PB9ConfigError
+            raise PB9ConfigError('helper_cancelled')
+        if any(run.get('schedule_id') == schedule.get('id') and run.get('schedule_target_id') == target.get('id')
+               and run.get('schedule_cycle') == cycle for run in runs):
             continue
-        run = _queue_archive_retest_run(
-            archive_name,
-            archive_dir,
-            result_dir,
-            schedule.get("options") or {},
-            schedule_id=str(schedule.get("id") or ""),
-            schedule_target_id=str(target.get("id") or ""),
-        )
+        try:
+            with archive_transaction(archive_dir):
+                rel = str(target.get("relative_path") or "")
+                result_dir = (archive_dir / rel).resolve()
+                if not is_inside_archive(result_dir, archive_dir) or not result_dir.exists():
+                    raise RuntimeError(f"Scheduled target missing: {rel}")
+                actual = _archived_backtest_version(result_dir, archive_dir)
+                if target.get('backtest_version') and target['backtest_version'] != actual:
+                    raise HTTPException(409, 'Scheduled archive target generation changed')
+                run = _queue_archive_retest_run(
+                    archive_name, archive_dir, result_dir, schedule.get("options") or {},
+                    schedule_id=str(schedule.get("id") or ""),
+                    schedule_target_id=str(target.get("id") or ""),
+                    schedule_cycle=cycle, cancel=cancel,
+                )
+        except Exception as exc:
+            if cancel is not None and cancel.is_set():
+                raise
+            errors.append({'target_id':str(target.get('id') or ''), 'error':str(exc)})
+            _log(ARCHIVE_RETEST_SERVICE, 'Scheduled archive target could not be queued', level='WARNING', meta={'traceback':traceback.format_exc()})
+            continue
         runs.append(run)
         queued.append(run)
+        _save_archive_retest_runs(runs)
     if queued:
         schedule["last_status"] = "queued"
         schedule["last_message"] = ""
         schedule["last_queued_at"] = utc_now_iso()
         _save_archive_retest_runs(runs)
-    return {"queued": len(queued), "runs": queued}
+    if errors:
+        schedule['last_status'] = 'partial' if queued else 'error'
+        schedule['last_message'] = '; '.join(item['target_id'] + ': ' + item['error'] for item in errors)[:2000]
+    return {"queued": len(queued), "runs": queued, "errors": errors}
 
 
-def _queue_due_archive_retest_schedules() -> None:
+@_archive_retest_transaction
+def _queue_due_archive_retest_schedules(cancel=None) -> None:
     schedules = _load_archive_retest_schedules()
     if not schedules:
         return
     now = datetime.datetime.now()
     changed = False
     for schedule in schedules:
+        if cancel is not None and cancel.is_set():
+            break
         if not _schedule_is_due(schedule, now):
             continue
         try:
-            _queue_archive_retest_schedule(schedule)
+            _queue_archive_retest_schedule(schedule, cancel=cancel)
         except Exception as exc:
+            if cancel is not None and cancel.is_set():
+                break
             schedule["last_status"] = "error"
             schedule["last_message"] = str(exc)
             _log(
@@ -2464,57 +2549,39 @@ def _queue_due_archive_retest_schedules() -> None:
         _save_archive_retest_schedules(schedules)
 
 
-class ArchiveRetestWorker:
-    """Background task for scheduled archive retests and completion replacement."""
+class ArchiveRetestWorker(BacktestQueueWorker):
+    """Use the existing joined controller lifecycle for all archive generations."""
 
     def __init__(self):
-        self._task: Optional[asyncio.Task] = None
-        self._running = False
-        self._active_work: Optional[asyncio.Future] = None
+        super().__init__('archive-retest-worker')
+        from pb9_config import PB9CancelSignal
+        self._cancel = PB9CancelSignal()
 
     def start(self):
+        """Reset native helper cancellation only for a new controller lifetime."""
         if self._task is None or self._task.done():
-            self._running = True
-            self._task = asyncio.create_task(self._loop(), name="archive-retest-worker")
+            from pb9_config import PB9CancelSignal
+            self._cancel = PB9CancelSignal()
+        super().start()
 
     async def stop(self):
-        self._running = False
-        task = self._task
-        if task is None:
-            return
-        active_work = self._active_work
-        if active_work is not None and not active_work.done():
-            await asyncio.gather(asyncio.shield(active_work), return_exceptions=True)
-        if not task.done():
-            task.cancel()
-        await asyncio.gather(task, return_exceptions=True)
-        if self._task is task:
-            self._task = None
-
-    async def _run_sync(self, func: Callable[[], None]) -> None:
-        self._active_work = asyncio.get_running_loop().run_in_executor(None, func)
-        try:
-            await asyncio.shield(self._active_work)
-        finally:
-            self._active_work = None
+        """Cancel native preparation and join work while detached jobs continue."""
+        self._cancel.set()
+        await super().stop()
 
     async def _loop(self):
         try:
             while self._running:
-                await self._run_sync(_process_archive_retest_completions)
-                if not self._running:
-                    break
-                await self._run_sync(_queue_due_archive_retest_schedules)
+                try:
+                    await self.run_sync(_process_archive_retest_completions)
+                    if not self._running:
+                        break
+                    await self.run_sync(_queue_due_archive_retest_schedules, self._cancel)
+                except Exception:
+                    _log(ARCHIVE_RETEST_SERVICE, 'Archive retest tick failed; retrying', level='ERROR', meta={'traceback':traceback.format_exc()})
                 await asyncio.sleep(30)
         except asyncio.CancelledError:
             pass
-        except Exception as exc:
-            _log(
-                ARCHIVE_RETEST_SERVICE,
-                f"ArchiveRetestWorker error: {exc}",
-                level="ERROR",
-                meta={"traceback": traceback.format_exc()},
-            )
 
 
 _archive_retest_worker = ArchiveRetestWorker()
@@ -2578,6 +2645,11 @@ async def _archive_watcher_loop() -> None:
             wd = _add_watch(str(root))
             if wd >= 0:
                 watched[wd] = str(root)
+            state_root = _archive_retests_dir()
+            state_root.mkdir(parents=True, exist_ok=True)
+            wd = _add_watch(str(state_root))
+            if wd >= 0:
+                watched[wd] = str(state_root)
             # Watch each archive dir and each config dir inside it
             for archive_dir in root.iterdir():
                 if not archive_dir.is_dir():
@@ -5052,7 +5124,51 @@ def rebacktest_archive_results(name: str, body: dict, session: SessionToken = De
     return {"ok": True, "queued": len(queue_items), "queue_items": queue_items}
 
 
+@_archive_retest_transaction
+def _native_archive_retest(name, body, cancel):
+    """Queue native targets under shared state/archive locks and the PB9 request owner."""
+    _validate_name(name)
+    paths = body.get('paths') if isinstance(body, dict) else None
+    if not isinstance(paths, list) or not 1 <= len(paths) <= 100:
+        raise HTTPException(422, 'Select between 1 and 100 native archive results')
+    archive = _archives_dir() / name
+    with archive_transaction(archive):
+        archive = _require_own_archive(name, 'Retest & Replace')
+        targets = []
+        for path in paths:
+            directory = Path(path)
+            if not is_inside_archive(directory, archive) or _archived_backtest_version(directory, archive) not in {'v7','v8','v9'}:
+                raise HTTPException(422, 'Expected supported results from this archive')
+            targets.append(directory)
+        options = _archive_retest_options(body)
+        from pb9_archive_retests import recover_runs
+        recover_runs()
+        runs = _load_archive_retest_runs(); queued = []
+        for directory in targets:
+            run = _queue_archive_retest_run(name, archive, directory, options, cancel=cancel)
+            runs.append(run); queued.append(run)
+            _save_archive_retest_runs(runs)
+        return {'ok': True, 'queued': len(queued), 'runs': queued}
+
+
+@_archive_retest_transaction
+def _native_schedule_run(name, schedule_id, cancel):
+    """Run one native/mixed schedule without bypassing its native preparation owner."""
+    _validate_name(name); _validate_name(schedule_id)
+    if name != _own_archive_name():
+        raise HTTPException(403, 'Scheduled retests are only allowed for the configured own archive')
+    schedules = _load_archive_retest_schedules()
+    for schedule in schedules:
+        if schedule.get('id') == schedule_id and schedule.get('archive_name') == name:
+            result = _queue_archive_retest_schedule(schedule, force=True, cancel=cancel)
+            schedule['last_run_at'] = utc_now_iso()
+            _save_archive_retest_schedules(schedules)
+            return {'ok':True, **result}
+    raise HTTPException(404, 'Schedule not found')
+
+
 @router.post("/archives/{name}/results/retest-replace")
+@_archive_retest_transaction
 def retest_replace_archive_results(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Queue archive retests that replace the original archive result after success."""
     _validate_name(name)
@@ -5071,9 +5187,12 @@ def retest_replace_archive_results(name: str, body: dict, session: SessionToken 
                 raise HTTPException(400, "Invalid result path")
             if not result_dir.exists():
                 raise HTTPException(404, f"Archive result not found: {result_dir}")
+            if _archived_backtest_version(result_dir, archive_dir) == 'v9':
+                raise HTTPException(422, 'Use the native PB9 retest endpoint')
             run = _queue_archive_retest_run(name, archive_dir, result_dir, options)
             runs.append(run)
             queued.append(run)
+            _save_archive_retest_runs(runs)
         _save_archive_retest_runs(runs)
         return {"ok": True, "queued": len(queued), "runs": queued}
 
@@ -5089,6 +5208,7 @@ def list_archive_retest_schedules(name: str, session: SessionToken = Depends(req
 
 
 @router.post("/archives/{name}/retest-schedules")
+@_archive_retest_transaction
 def create_archive_retest_schedule(name: str, body: dict, session: SessionToken = Depends(require_auth)):
     """Create a daily or weekly archive retest schedule for selected archive results."""
     _validate_name(name)
@@ -5113,8 +5233,6 @@ def create_archive_retest_schedule(name: str, body: dict, session: SessionToken 
                 raise HTTPException(400, "Invalid result path")
             if not result_dir.exists():
                 raise HTTPException(404, f"Archive result not found: {result_dir}")
-            if _archived_backtest_version(result_dir, archive_dir) == 'v9':
-                raise HTTPException(409, 'Native PB9 retest schedules are not yet available; use Backtest')
             targets.append({
                 "id": uuid.uuid4().hex,
                 "relative_path": result_dir.relative_to(archive_dir).as_posix(),
@@ -5144,6 +5262,7 @@ def create_archive_retest_schedule(name: str, body: dict, session: SessionToken 
 
 
 @router.post("/archives/{name}/retest-schedules/{schedule_id}/run")
+@_archive_retest_transaction
 def run_archive_retest_schedule_now(name: str, schedule_id: str, session: SessionToken = Depends(require_auth)):
     """Queue all targets of one archive retest schedule immediately."""
     _validate_name(name)
@@ -5153,8 +5272,12 @@ def run_archive_retest_schedule_now(name: str, schedule_id: str, session: Sessio
     schedules = _load_archive_retest_schedules()
     for schedule in schedules:
         if schedule.get("id") == schedule_id and schedule.get("archive_name") == name:
+            if 'v9' in schedule.get('backtest_versions', []):
+                raise HTTPException(422, 'Use the native PB9 schedule endpoint')
             try:
                 result = _queue_archive_retest_schedule(schedule, force=True)
+            except HTTPException:
+                raise
             except Exception as exc:
                 raise HTTPException(500, str(exc)) from exc
             schedule["last_run_at"] = utc_now_iso()
@@ -5164,6 +5287,7 @@ def run_archive_retest_schedule_now(name: str, schedule_id: str, session: Sessio
 
 
 @router.post("/archives/{name}/retest-schedules/{schedule_id}/toggle")
+@_archive_retest_transaction
 def toggle_archive_retest_schedule(name: str, schedule_id: str, body: dict = None, session: SessionToken = Depends(require_auth)):
     """Enable or disable one archive retest schedule."""
     _validate_name(name)
@@ -5177,13 +5301,15 @@ def toggle_archive_retest_schedule(name: str, schedule_id: str, body: dict = Non
                 schedule["enabled"] = bool(body["enabled"])
             else:
                 schedule["enabled"] = not bool(schedule.get("enabled", True))
-            schedule["next_run_at"] = _next_archive_retest_run_at(schedule)
+            if not schedule.get('next_run_at'):
+                schedule["next_run_at"] = _next_archive_retest_run_at(schedule)
             _save_archive_retest_schedules(schedules)
             return {"ok": True, "schedule": schedule}
     raise HTTPException(404, "Schedule not found")
 
 
 @router.delete("/archives/{name}/retest-schedules/{schedule_id}")
+@_archive_retest_transaction
 def delete_archive_retest_schedule(name: str, schedule_id: str, session: SessionToken = Depends(require_auth)):
     """Delete one archive retest schedule."""
     _validate_name(name)

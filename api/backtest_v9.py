@@ -199,12 +199,17 @@ def _remove_job_files(job):
     import shutil
     if _job_status(job)[0] == 'running':
         raise HTTPException(409, 'Stop the PB9 job before deleting it')
+    item = _read(_job_path(job))
+    item.pop('started_at', None)
+    item['status_override'] = 'stopped'
+    _write(_job_path(job), item)
     workspace = _working_dir(job)
     if workspace.exists():
         shutil.rmtree(workspace)
-    for suffix in ('.json', '.config.json', '.pid.json', '.state.json', '.ready'):
+    for suffix in ('.config.json', '.pid.json', '.state.json', '.ready'):
         _job_path(job, suffix).unlink(missing_ok=True)
     release_backtest_slot('v9', job)
+    _job_path(job).unlink(missing_ok=True)
 
 
 def _job_status(job):
@@ -251,7 +256,7 @@ def _queue():
     return sorted(items, key=lambda item: (item['created_at'], item['filename']))
 
 
-def _enqueue(body, cancel):
+def _enqueue(body, cancel, *, archive_retest=None):
     """Publish the immutable source and provenance before making a job visible."""
     name = _name(body.get('name'))
     with _LOCK, _storage_lock():
@@ -285,6 +290,12 @@ def _enqueue(body, cancel):
             raise PB9ConfigError('helper_cancelled')
         _save_source(_job_path(job, '.config.json'), source, cancel)
         payload['snapshot_sha256'] = hashlib.sha256(_job_path(job, '.config.json').read_bytes()).hexdigest()
+        if archive_retest is not None:
+            from pb9_archive_retests import source_digest
+            payload['archive_retest'] = {**copy.deepcopy(archive_retest), 'queue_filename': job,
+                'queue_config': str(_job_path(job, '.config.json')), 'snapshot_sha256': payload['snapshot_sha256'],
+                'source_content_sha256': source_digest(source), 'native_schema':source['config_version'],
+                'native_commit':payload['commit']}
         _write(_job_path(job), payload)
         return {'ok': True, 'filename': job}
 
@@ -726,6 +737,11 @@ def _operation(operation, cancel, payload=None):
                             os.replace(destination, target)
                         raise
             return {'ok': True}
+        if operation in {'bt9_archive_retest', 'bt9_archive_schedule_run'}:
+            from api import backtest_v7 as archives
+            if operation == 'bt9_archive_retest':
+                return archives._native_archive_retest(args['name'], body, cancel)
+            return archives._native_schedule_run(args['name'], args['schedule_id'], cancel)
         if operation == 'bt9_archive_requeue':
             from api.backtest_v7 import _archives_dir, _load_archived_backtest_config
             archive = _safe(Path(_archives_dir()), _name(args['name']))
@@ -1050,6 +1066,18 @@ def _pbgui_data_path():
     """Use the same shared OHLCV root as PB7/PB8, without a bot-slot dependency."""
     from market_data import get_market_data_root_dir
     return str(get_market_data_root_dir())
+
+
+@router.post('/archives/{name}/results/retest-replace')
+async def archive_retest(name: str, request: Request, session: SessionToken = Depends(require_auth)):
+    """Prepare native replacements under the bounded, cancellable PB9 request owner."""
+    return await _call(request, 'archive_retest', {'name': _name(name)}, body=True)
+
+
+@router.post('/archives/{name}/retest-schedules/{schedule_id}/run')
+async def native_schedule_run(name: str, schedule_id: str, request: Request, session: SessionToken = Depends(require_auth)):
+    """Run native scheduled targets through their own request owner."""
+    return await _call(request, 'archive_schedule_run', {'name': _name(name), 'schedule_id': _name(schedule_id)})
 
 
 @router.post('/archives/{name}/results/rebacktest')

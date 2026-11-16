@@ -88,7 +88,13 @@ def publish_result_source(config_path: Path) -> None:
         evidence = {key: record[key] for key in ('runtime', 'schema', 'commit', 'package_version', 'snapshot_sha256', 'filename')}
         if isinstance(record.get('comparison_reference'), dict):
             evidence['comparison_reference'] = record['comparison_reference']
+        if isinstance(record.get('archive_retest'), dict):
+            evidence['archive_retest'] = record['archive_retest']
         atomic_write_private_text(directory / 'pbgui.provenance.json', json.dumps(evidence, indent=4) + '\n')
+    if isinstance(record.get('archive_retest'), dict):
+        complete = {key: record[key] for key in ('runtime', 'schema', 'commit', 'filename', 'snapshot_sha256', 'archive_retest')}
+        complete['returncode'] = 0
+        atomic_write_private_text(root / 'pbgui.completion.json', json.dumps(complete, indent=4) + '\n')
 
 
 
