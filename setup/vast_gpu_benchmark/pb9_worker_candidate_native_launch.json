@@ -1,6 +1,6 @@
 {
     "schema_version": 1,
-    "state": "locally_built_offline_cpu_verified",
+    "state": "published_gpu_smoke_verified_calibration_blocked",
     "verified_on": "2026-11-20",
     "runtime": "pb9",
     "repository": "https://github.com/msei99/passivbot",
@@ -8,10 +8,26 @@
     "config_schema": "v9.0.0",
     "image_tag": "pbgui-pb9-worker:1b85ea6-native-launch-candidate",
     "image_id": "sha256:4c9852dc6f05db445f48e02877e0419c91803b79ba6e0b1be29f85039b0b65c3",
-    "registry_digest": null,
-    "publication": "requires explicit push approval",
-    "physical_gpu_test": "not performed; requires separate rental approval",
-    "installed_runtime": "93ff594bfc9bc3388ed888f48c5d44e99fae1d01 unchanged; exact source mismatch still blocks cloud preparation",
+    "registry_digest": "sha256:354e286b2c51ec7512ef2a22d3b7b3f31e5f1523dd7de91ee9b8ac298102f444",
+    "publication": "public GHCR manifest verified anonymously",
+    "physical_gpu_test": {
+        "status": "optimization_passed_calibration_unavailable",
+        "launch_mode": "fresh",
+        "hardware": {
+            "gpu": "NVIDIA GeForce RTX 3090",
+            "vram_bytes": 25298141184,
+            "compute_capability": "8.6",
+            "revision": "1b85ea6cc4bb7b917ada43725044b7559763c46e"
+        },
+        "exit_code": 0,
+        "evaluations": 6,
+        "pareto_count": 1,
+        "runtime_seconds": 122.03382171492558,
+        "result_directory": "2026-11-20T19_09_52Z_BTC_ETH_binance_2days_setup-ba7b38b346b4_run-7b32fa03_vast_03f22079d575",
+        "publication": "native results imported successfully",
+        "calibration": "PB8 proxy-generation telemetry contract is incompatible with native authoritative GPU cohorts; new PB9 calibration rentals are disabled pending a native contract"
+    },
+    "installed_runtime": "1b85ea6cc4bb7b917ada43725044b7559763c46e, clean source identity verified",
     "build_inputs_sha256": {
         "Dockerfile": "21fe013000380a828ab3d3c07e1ab70f42f0bd02160503132c451dd403f0eb56",
         "cloud_worker.py": "aa12f83cd82af7969e925b505b1709bfee9c065039e279070e7694354690df50",
@@ -40,12 +56,64 @@
         "browser": "56 passed; actual shared Optimize page with isolated APIs",
         "real_browser": "PBv9 menu, draft controls, Guide overlay, reload restoration and no horizontal overflow",
         "calibration_and_transfer": "57 passed; same argv for calibration cases, actual native snapshot/import roundtrip",
-        "final_audits": "20 passed; worker candidate, guides and logging"
+        "final_audits": "20 passed; worker candidate, guides and logging",
+        "publication": "99 passed; native Vast profile, archive integrity and transfer/import tests",
+        "final_backend": "404 passed; changed Vast/native calibration boundaries and shared PB8 regression coverage",
+        "protocol_transfer": "90 passed; protocol 3/4 transfer and worker calibration tests",
+        "final_polling_regressions": "346 passed; persisted native workload, polling, shared jobs, calibration and transfer boundaries",
+        "final_browser_and_guides": "13 passed; shared Vast browser controls and guide coverage",
+        "real_native_workload": "Synthetic native preparation persisted 8640 coin candles; canceled without rental",
+        "final_real_browser": "API startup serial 3761 confirmed; PBv9 Optimize Queue shows PB9_GPU_SMOKE_20261120 complete, execution Vast.ai; persisted synthetic workload 8640 visible, no active rentals"
     },
     "fable_review": {
         "provider_model": "claude-fable-5-1",
         "result": "No concrete blocker after corrections; bounded review, no tool access"
     },
-    "scope": "Local public source build and synthetic network-disabled CPU tests only; no registry push, paid GPU, bot checkout update, VPS action or production optimization.",
-    "active_api_serial": "3753; restarted through the existing API-only Services control"
+    "scope": "Public PB9 image publication and matching external local runtime activated; synthetic paid GPU validation authorized for at most USD 1 and 45 minutes total. No live bot or VPS deployment.",
+    "active_api_serial": 3761,
+    "layers": {
+        "sha256:b4e4c0127190b05d4a0b5b8de6097a4faf15a2096170c1dc46ea30349b0ad8ac": 49584944,
+        "sha256:08457856946d74c8aede7d750e185d1e479a79b8123d1b805182a580d224a6e2": 24056247,
+        "sha256:8cab6ce149c24516f80b26a762b6b9aaebcaf4fbe51d4c6844af7d7dbc372f2d": 64413065,
+        "sha256:01a6a9ffe665b63ea18491fedb646423413ae3fdefcf7776ee25a2eaff8a673e": 211662335,
+        "sha256:9fc49131440437072df6c70097a5db4accbb50654ef7d3b82c636109f8ef361f": 6162299,
+        "sha256:cbbcd353f76c8ee15dafcb5c2d64bc2d581c6bf87c584725ec8050d8507b33e3": 25718575,
+        "sha256:02a27392fe493a4b31d440408340ea74d5f2608fb54e906215eb836573d4ca84": 250,
+        "sha256:7c456d8cbd6836f1783ab818e8041bce013d3497107df0557f7682f5df871322": 359769944,
+        "sha256:9c34216393e28699a958458342a05266062ae6537dac2add81f8114c0983215b": 541315125,
+        "sha256:f17f0cbe65a4aeeaa5fe127a1442c4c43e8a95298e8521e6b53a1c7b6a2a7bea": 201811276,
+        "sha256:3e0146d86ebcdfc03c1d6422573db258913ae42d27c7bfb1d70f6d23bf547e5d": 1082819,
+        "sha256:ba821429f1106cb7accbdf373b54b564e5b288add0ad8a12ffe019f0337da571": 248,
+        "sha256:e643ea426d575bae9b5cd25d486804985bb335ce771e0d46d69e52dc4d2910ac": 825150784,
+        "sha256:187a155f6592dba56c598d1086f251ec2bec4f623cf918f4b890ae784dc036bb": 375407643,
+        "sha256:f58c928460a726aa787299edc53a38ec916d54ff055b093470efa878e0b6a359": 366946730,
+        "sha256:d807bf62351d7b78e38b373d62a189b70fbb37f6ab8a0d20b72034bb5eed973f": 206185750,
+        "sha256:18bae41f1cfe855efcd0e2934181c7996336e2e188d106974fe0db3ee34f1f18": 61014702,
+        "sha256:1b08118eed339cee4dda97d1c58a70adaa99e4a9bb5fc8aa2b806c714f5ae19f": 170720627,
+        "sha256:a179ce661424a136679ed1c16866e867f779f20aec7745eba48ea6ae1089607b": 90246321,
+        "sha256:60f2c55a3025f0220e4c09450c754596592092f82b8b3b7bbe8eae4b434abf06": 825201,
+        "sha256:ce54c14a1344af248c44a3eaa0f03289d856bfec74c84a669e68e04bcb1267da": 10459111,
+        "sha256:96ce6a972c02036d8a651baf52689fd08d67a5adb8b9adc23df02bb8a8e7fcb9": 153520145,
+        "sha256:d2448e8572e42c85ddb580c1a428cc8847f4830f91ee279a5dae4508a53234f4": 1269,
+        "sha256:ae40b4973d6dad8242e889518644e2a468a271859455ab7e9263f9af87059c1a": 330,
+        "sha256:626c69421ed37de326dd641acf7e3e88d1504599f8b513878c673a19f19285b9": 2601,
+        "sha256:b861e1cf3ea5d1dd0ec7c730ed76b5d4be559b4ec73c6a6026303969a34a0152": 94,
+        "sha256:971246495db5b56e3c9abcae2f047e63f710a28fa7f15804c51951ddf7a7f591": 13094,
+        "sha256:433fe9b1a9818a63c803e09484a1092ddde2a3b904d3dd48ee2c055fe3281d50": 2832,
+        "sha256:1db4136c1b34baef73ff6142fd936d13a019d6ca561fa55337c15b85dbd4bddb": 400019
+    },
+    "paid_test_limits": {
+        "budget_usd": 1,
+        "maximum_seconds": 2700,
+        "provider_reported_total_usd": 0.041,
+        "rental_count": 4,
+        "all_deletions_verified": true,
+        "data": "synthetic BTC/ETH candles and public market metadata only"
+    },
+    "fable_publication_review": {
+        "provider_model": "claude-fable-5-2",
+        "effort": "medium",
+        "authentication": "claude.ai subscription",
+        "result": "No concrete bugs identified in the reviewed publication diff; follow-up questions on polling, runtime filtering and referenced inputs were covered by focused tests and native estimate persistence."
+    }
 }

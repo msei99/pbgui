@@ -626,7 +626,7 @@ def _calibration_status(body: CalibrationOfferRequest, response: Response,
                        session=None, *, runtime='pb8') -> dict:
     """Describe preliminary profile coverage and eligible immutable inputs."""
     from vast_calibration import (CalibrationProfiles, calibration_worker_available,
-                                  gpu_variant_identity)
+                                  gpu_variant_identity, NATIVE_CALIBRATION_UNAVAILABLE)
     from vast_jobs import IMAGE
     if runtime=='pb9':
         from vast_worker_profiles import worker_profile
@@ -650,6 +650,8 @@ def _calibration_status(body: CalibrationOfferRequest, response: Response,
                      'seed': 7, 'objective':'cagr_fraction_strategy_equity' if runtime=='pb9' else 'adg_strategy_eq'},
         'calibration_worker': calibration_worker_available(IMAGE),
         'configurable_worker': calibration_worker_available(IMAGE, protocol=4),
+        'unavailable_reason': (NATIVE_CALIBRATION_UNAVAILABLE
+                               if runtime == 'pb9' and not calibration_worker_available(IMAGE) else ''),
     }
 
 
@@ -672,7 +674,9 @@ def _start_calibration(body: CalibrationStartRequest,
         from vast_worker_profiles import worker_profile
         IMAGE=worker_profile('pb9').image
     if not calibration_worker_available(IMAGE):
-        raise HTTPException(status_code=409, detail='The pinned Vast worker does not include the GPU calibration runner')
+        from vast_calibration import NATIVE_CALIBRATION_UNAVAILABLE
+        raise HTTPException(status_code=409, detail=NATIVE_CALIBRATION_UNAVAILABLE if runtime == 'pb9'
+                            else 'The pinned Vast worker does not include the GPU calibration runner')
     if body.hours < .75:
         raise HTTPException(status_code=422, detail='GPU calibration requires a rental allowance of at least 45 minutes')
     queue = CloudQueue()
@@ -738,9 +742,11 @@ def _start_configurable_calibration(body: ConfigurableCalibrationRequest,
         from vast_worker_profiles import worker_profile
         IMAGE=worker_profile('pb9').image
     if not calibration_worker_available(IMAGE, protocol=4):
+        from vast_calibration import NATIVE_CALIBRATION_UNAVAILABLE
         raise HTTPException(
             status_code=409,
-            detail='Configurable GPU tests require the protocol-4 worker release; no GPU was rented',
+            detail=NATIVE_CALIBRATION_UNAVAILABLE if runtime == 'pb9'
+                   else 'Configurable GPU tests require the protocol-4 worker release; no GPU was rented',
         )
     try:
         plan = configurable_calibration_plan(
@@ -846,7 +852,9 @@ def _start_calibration_watch(body: CalibrationWatchRequest,
         IMAGE=worker_profile('pb9').image
     from vast_pool import launch_pool
     if not calibration_worker_available(IMAGE):
-        raise HTTPException(status_code=409, detail='The pinned Vast worker does not include the GPU calibration runner')
+        from vast_calibration import NATIVE_CALIBRATION_UNAVAILABLE
+        raise HTTPException(status_code=409, detail=NATIVE_CALIBRATION_UNAVAILABLE if runtime == 'pb9'
+                            else 'The pinned Vast worker does not include the GPU calibration runner')
     if not services_available():
         raise HTTPException(status_code=409, detail='Rental supervision requires user systemd and OpenSSH')
     preferences = body.preferences.model_dump()
@@ -1166,6 +1174,11 @@ def _prune_throughput_log_seen(job_ids: set) -> None:
 @router.get("/jobs")
 def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> dict:
     """List durable job state without starting any process or rental."""
+    return _jobs(response, session, runtime='pb8')
+
+
+def _jobs(response: Response, session: SessionToken, *, runtime: str | None = None) -> dict:
+    """Project the selected generation before estimating or inspecting job inputs."""
     response.headers["Cache-Control"] = "no-store"
     try:
         queue = CloudQueue()
@@ -1180,7 +1193,10 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
             identifier = job_id(selected_worker)
             unreadable.setdefault(identifier, {'id': identifier, 'category': 'record_unreadable'})
         workers = [item for item in stored if item.get('kind') == 'worker'
-                   and item.get('rental_state') not in ('none', 'deletion_verified')]
+                   and item.get('rental_state') not in ('none', 'deletion_verified')
+                   and (runtime is None or item.get('runtime', 'pb8') == runtime)]
+        if worker and runtime is not None and worker.get('runtime', 'pb8') != runtime:
+            worker = None
 
         def display_read(identifier, filename):
             """Isolate only expected record failures in this read-only projection."""
@@ -1218,6 +1234,8 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
             if candidate.get('requeue_from') and not candidate.get('deleted_at'):
                 replacements.setdefault(candidate['requeue_from'], candidate)
         for row in stored:
+            if runtime is not None and row.get('runtime', 'pb8') != runtime:
+                continue
             # A running optimizer remains reachable even if stale local state
             # incorrectly carries a deletion timestamp.  The worker ownership is
             # authoritative until worker_step releases active_job.
@@ -1241,7 +1259,7 @@ def jobs(response: Response, session: SessionToken = Depends(require_auth)) -> d
             log = CLOUD_LOG_ROOT / ('vast_' + job_id(row['id']) + '.log')
             provider_log = CLOUD_LOG_ROOT / ('vast_' + row['id'] + '_provider.log')
             estimate = row.get('estimated_coin_candles')
-            if len(rows) < 100:
+            if row.get('runtime', 'pb8') != 'pb9' and len(rows) < 100:
                 snapshot = queue.store.directory(row['id']) / 'input/optimize.json'
                 try:
                     signature = snapshot.lstat()

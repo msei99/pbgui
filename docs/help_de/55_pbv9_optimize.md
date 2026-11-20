@@ -345,11 +345,20 @@ Queue Settings steuert Autostart, CPU-Zuteilung und die voreingestellten PBGui-K
 ## Vast.ai
 
 Konto, Marktplatz und Bedienung werden mit PB8 geteilt. PB9 benötigt ein eigenes,
-fest gepinntes Worker-Image mit nativem GPU-Vertrag. Solange es nicht geprüft und
-veröffentlicht ist, werden PB9-Cloud-Miete und Queue-Vorbereitung ausdrücklich
-gesperrt. Es gibt keinen Rückfall auf ein PB8-Image. Ein lokaler Image-Build
-veröffentlicht nichts, mietet keine GPU und installiert nichts auf einem Host.
-Ein Test auf einer echten GPU ist nötig, bevor der Cloud-Ablauf als verifiziert gilt.
+fest gepinntes Worker-Image mit nativem GPU-Vertrag. Das veröffentlichte PB9-Image
+wird unabhängig von PB8 über seinen unveränderlichen Digest ausgewählt. Vor der
+Miete prüft PBGui, dass genau dieser Digest ohne GitHub-Zugangsdaten öffentlich
+herunterladbar ist. Ein fehlendes oder ungeprüftes Image sperrt die Miete;
+es gibt keinen Rückfall auf ein PB8-Image. Ein lokaler Image-Build veröffentlicht
+nichts, mietet keine GPU und installiert nichts auf einem Host. Ein Test auf einer
+echten GPU ist nötig, bevor der Cloud-Ablauf als verifiziert gilt.
+
+GPU-Optimierung wurde mit synthetischen Daten auf einer RTX 3090 einschließlich
+Upload und Ergebnisimport geprüft. Performance-Tuning bleibt für dieses
+PB9-Image gesperrt: Seine maßgeblichen GPU-Auswertungen liefern die für die
+gemeinsamen Kalibrierungsprotokolle benötigten PB8-Proxy-Generationsdaten nicht.
+PBGui lehnt solche Kalibrierungsmieten vor dem Provider-Aufruf ab.
+PB8-Kalibrierung bleibt verfügbar.
 
 Native Cloud-Pakete enthalten dieselben Startoptionen und verwalteten Seeds.
 Lokale Pfade werden durch geprüfte Paketpfade ersetzt. Exportiert werden die

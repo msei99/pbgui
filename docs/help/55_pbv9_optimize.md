@@ -324,11 +324,18 @@ Queue Settings controls Autostart, CPU allocation and the default PBGui candle s
 ## Vast.ai
 
 The account, marketplace, calibration, rental automation and controls are shared with PB8. Native Performance History updates automatically and remains readable after job cleanup. PB9 requires its own
-pinned worker image and native GPU contract. Until that image has been verified
-and published, PB9 cloud rental and queue preparation are blocked explicitly;
-they never fall back to a PB8 image. Building an image locally does not publish
-it, rent a GPU or deploy to a host. A physical GPU test is still required before
-claiming a verified cloud execution path.
+pinned worker image and native GPU contract. The published PB9 image is selected
+by its immutable digest, independently of PB8. Before renting, PBGui verifies
+that the exact digest is publicly downloadable without GitHub credentials.
+Missing or unverified images block rental; PB9 never falls back to a PB8 image.
+Building an image locally does not publish it, rent a GPU or deploy to a host.
+A physical GPU test is required before claiming a verified cloud execution path.
+
+GPU optimization has passed a synthetic RTX 3090 smoke test, including upload
+and result import. Performance tuning remains unavailable for this PB9 image:
+its authoritative GPU cohorts do not provide the PB8 proxy-generation evidence
+required by the shared calibration protocols. PBGui rejects these calibration
+rentals before contacting the provider. PB8 calibration remains available.
 
 Native cloud bundles include the same launch options and managed seed artifacts.
 Host paths are replaced by verified bundle paths. Only the selected scenarios'

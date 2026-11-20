@@ -2,6 +2,24 @@
 
 ## Development
 
+- Verify native PB9 GPU execution end to end on synthetic RTX 3090 data. Keep
+  PB9 performance-tuning rentals disabled: the native authoritative GPU backend
+  does not emit the PB8 proxy-generation calibration evidence. Show the reason
+  in the shared UI and reject API/direct starts before credentials or payment.
+
+- Accept and validate configurable protocol-4 calibration plans in the shared
+  SSH startup path, alongside the existing fixed protocol-3 tests.
+
+- Resolve referenced prepared snapshots when creating GPU calibrations, retaining
+  native launch artifacts and candle hardlinks after Requeue without copying data.
+
+- Filter Vast job lists by generation before estimates and row limits. Compute
+  optional native workload estimates during input preparation and preserve them
+  on Requeue; polling PB9 jobs never starts a native/PB8 helper.
+
+- Activate the independently published PB9 Vast worker by its verified immutable
+  digest, matching the local PB9 source. Keep PB8 on its existing worker image.
+
 - Complete the PB9 Optimize launch controls on the shared PB8/PB9 page: select
   Suite scenarios, filter/compress managed seeds, and import a completed native
   preparation report. Keep large reports in bounded private attachments; configs/drafts hold references.
@@ -10,9 +28,10 @@
 - Package native launch options and seeds through the shared Vast archive,
   verify their hashes, and use the same argv builder locally and in the worker.
   Fix PB9 admission incorrectly comparing against the PB8 source revision.
-  Build an unpublished PB9 worker with its missing runtime entry and a public
-  pinned source; verify all four CLI options in offline synthetic CPU runs.
-  Publication, a matching local runtime and physical GPU validation remain pending.
+  Build a native PB9 worker with its runtime entry and public pinned source;
+  verify all four CLI options in offline synthetic CPU runs. Publication and
+  matching local runtime activation are complete; native GPU optimization passed
+  a physical smoke test. Native performance calibration remains unavailable.
 
 - Document all 27 native PB9 metric selectors in the EN/DE Optimize guides,
   with definitions, units, objective/limit guidance and availability rules.

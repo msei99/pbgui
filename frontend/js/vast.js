@@ -974,8 +974,8 @@
     }
     else if (!calibrationInfo) status.textContent = 'Checking performance coverage…';
     else if (!(selection.legacy ? calibrationInfo.calibration_worker : calibrationInfo.configurable_worker))
-      status.textContent = selection.legacy ? 'The pinned Small-test worker is unavailable.'
-        : 'This reference mode requires the protocol-4 worker release; no GPU will be rented yet.';
+      status.textContent = calibrationInfo.unavailable_reason || (selection.legacy ? 'The pinned Small-test worker is unavailable.'
+        : 'This reference mode requires the protocol-4 worker release; no GPU will be rented yet.');
     else if (match) status.textContent = (match.source === 'local' ? 'Local test' : 'PBGui reference') + ' available: population '
       + Number(match.population_size).toLocaleString() + '. Hardware match only; workload compatibility is checked separately.';
     else status.textContent = 'No verified profile for this advertised GPU variant. Selected reference: '
@@ -994,9 +994,9 @@
     if (!selectedOffer) blockedReason = 'Select an offer first.';
     else if (!calibrationInfo) blockedReason = 'Checking performance-test availability.';
     else if (!selectedWorkerAvailable) {
-      blockedReason = selection.legacy
+      blockedReason = calibrationInfo.unavailable_reason || (selection.legacy
         ? 'The pinned calibration worker is unavailable or mismatched.'
-        : 'Configurable tests require a published, pinned protocol-4 worker; no rental will start.';
+        : 'Configurable tests require a published, pinned protocol-4 worker; no rental will start.');
     } else if (!supervision) blockedReason = 'Rental supervision is unavailable.';
     else if (!savedPreferences) blockedReason = 'Rental settings are still loading.';
     else if (activeRental) blockedReason = 'Finish the active GPU rental first.';
@@ -2996,7 +2996,7 @@
       return;
     }
     if (!calibrationInfo?.configurable_worker) {
-      message('Exact-input tuning needs the published protocol-4 worker; no rental was started.', true);
+      message(calibrationInfo?.unavailable_reason || 'Exact-input tuning needs the published protocol-4 worker; no rental was started.', true);
       return;
     }
     if (!savedPreferences || !supervision || !window.PBGuiDialogs?.confirm) {
@@ -3204,7 +3204,7 @@
     const selection = calibrationSelection();
     if (calibrationStarting || disposed || !selectedOffer) return;
     if (!(selection.legacy ? calibrationInfo?.calibration_worker : calibrationInfo?.configurable_worker)) {
-      message('The selected test requires a published, pinned calibration worker.', true); return;
+      message(calibrationInfo?.unavailable_reason || 'The selected test requires a published, pinned calibration worker.', true); return;
     }
     for (const key of calibrationFields) {
       if (!el('calibration-' + key).reportValidity()) return;

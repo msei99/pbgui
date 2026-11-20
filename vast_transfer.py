@@ -635,15 +635,26 @@ class WorkerConnection:
         stage_inception(self)
         state = self.store.read(self.identifier)
         if state.get('kind') == 'calibration':
-            from vast_calibration import ANCHOR_POPULATIONS, PROTOCOL_VERSION
+            from vast_calibration import (ANCHOR_POPULATIONS, PROTOCOL_VERSION,
+                                          CONFIGURABLE_PROTOCOL_VERSION, configurable_calibration_plan)
             plan = state.get('calibration_plan') or {}
-            if (plan.get('protocol') != PROTOCOL_VERSION
+            if plan.get('protocol') == CONFIGURABLE_PROTOCOL_VERSION:
+                try:
+                    expected_plan = configurable_calibration_plan(
+                        plan['populations'][0], plan['population_step'], plan['max_population'],
+                        plan['min_scale_gain'], plan['sample_seconds'], plan['case_timeout_seconds'])
+                except (ValueError, TypeError, KeyError, IndexError):
+                    expected_plan = None
+                valid_plan = expected_plan is not None and plan == expected_plan
+            else:
+                valid_plan = not (plan.get('protocol') != PROTOCOL_VERSION
                     or plan.get('populations') != list(ANCHOR_POPULATIONS)
                     or plan.get('sample_seconds') != 300
                     or plan.get('population_step') != 4096
                     or plan.get('min_scale_gain') != .10
                     or plan.get('max_population') != 131072
-                    or plan.get('vram_reserve_ratio') != .15):
+                    or plan.get('vram_reserve_ratio') != .15)
+            if not valid_plan:
                 raise VastError('Invalid GPU calibration plan', 422)
             payload = json.dumps(plan, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()
             if len(payload) > 4096:

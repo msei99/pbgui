@@ -17,6 +17,42 @@ import vast_transfer
 from vast_provider import VastError
 
 
+@pytest.mark.parametrize('protocol', [3, 4])
+@pytest.mark.parametrize('valid', [False, True])
+def test_calibration_start_transfers_only_valid_supported_plans(monkeypatch, protocol, valid):
+    """Exercise real start dispatch for fixed and configurable calibration plans."""
+    from vast_calibration import configurable_calibration_plan
+    plan = configurable_calibration_plan(4096, 4096, 8192, .10, 300, 600)
+    if protocol == 3:
+        plan.update(protocol=3, max_population=131072)
+        plan.pop('case_timeout_seconds')
+    if not valid:
+        plan['vram_reserve_ratio'] = .14
+    connection = object.__new__(vast_transfer.WorkerConnection)
+    connection.identifier = 'a' * 32
+    connection.remote_root = '/work/pbgui/jobs/' + connection.identifier
+    connection.store = SimpleNamespace(read=lambda _id, *names: (
+        {'files': []} if names else {'kind': 'calibration', 'calibration_plan': plan}))
+    monkeypatch.setattr('vast_market_cache.stage_public_markets', lambda _connection: None)
+    monkeypatch.setattr('vast_inception.stage_inception', lambda _connection: None)
+    connection.proxy_budget_command = lambda: None
+    payloads, commands = [], []
+    def command(text, *, stdin=None, **_kwargs):
+        """Capture only temporary protocol payloads; perform no SSH operations."""
+        commands.append(text)
+        if stdin is not None:
+            payloads.append(json.load(stdin))
+    connection.command = command
+    if valid:
+        connection.start()
+        assert payloads == [plan]
+        assert sum('nohup ' in text for text in commands) == 1
+    else:
+        with pytest.raises(VastError, match='Invalid GPU calibration plan'):
+            connection.start()
+        assert payloads == [] and commands == []
+
+
 @pytest.mark.parametrize('outcome,payload', [
     ('interrupted', b'go'),
     ('checksum', b'bad!'),

@@ -665,7 +665,8 @@ def test_clone_prepared_reuses_verified_immutable_archive(tmp_path, monkeypatch)
     assert store.read(row["id"], "intent.json")["results_root"] == str((tmp_path / "new-results").resolve())
 
 
-def test_create_calibration_reuses_frozen_input_without_mutating_source(tmp_path):
+@pytest.mark.parametrize('referenced_snapshot', [False, True])
+def test_create_calibration_reuses_frozen_input_without_mutating_source(tmp_path, monkeypatch, referenced_snapshot):
     """Calibration gets independent state while hard-linking immutable input bytes."""
     store = JobStore(tmp_path / 'vast')
     source = store.create_preparation('benchmark', 20_000, 8, False)
@@ -676,10 +677,14 @@ def test_create_calibration_reuses_frozen_input_without_mutating_source(tmp_path
     shard = input_directory / 'ohlcv/binance/1m/BTC/data.npy'
     shard.parent.mkdir(parents=True)
     shard.write_bytes(b'candles')
+    launch = input_directory / 'launch_options.json'
+    write_json(launch, {'mode': 'fresh'})
     write_json(input_directory / 'manifest.json', {
         'schema_version': 1, 'config_sha256': digest(config),
         'files': [{'path': 'ohlcv/binance/1m/BTC/data.npy', 'bytes': shard.stat().st_size,
-                   'sha256': digest(shard)}],
+                   'sha256': digest(shard)},
+                  {'path': 'launch_options.json', 'bytes': launch.stat().st_size,
+                   'sha256': digest(launch)}],
     })
     archive = directory / 'input.tar.gz'
     archive.write_bytes(b'archive')
@@ -701,6 +706,15 @@ def test_create_calibration_reuses_frozen_input_without_mutating_source(tmp_path
         })
     from vast_calibration import configurable_calibration_plan
     freeze_test_proof(store, source['id'])
+    if referenced_snapshot:
+        store.update(source['id'], status='failed')
+        monkeypatch.setattr('pb8_config.load_pb8_config', lambda _path: {
+            'backtest': {'offline': True}, 'optimize': {'iters': 20_000, 'n_cpus': 8},
+        })
+        source = store.clone_prepared(source['id'], 'retry', 'f' * 64,
+                                      tmp_path / 'results', 20_000, 8, False)
+        assert source is not None
+        assert not (store.directory(source['id']) / 'input/launch_options.json').exists()
     plan = configurable_calibration_plan(5632, 512, 7168, .05, 300, 3600)
     row = store.create_calibration(source['id'], plan)
     target = store.directory(row['id'])
@@ -709,6 +723,7 @@ def test_create_calibration_reuses_frozen_input_without_mutating_source(tmp_path
     assert row['calibration_plan'] == plan
     assert (target / 'input.tar.gz').stat().st_ino == archive.stat().st_ino
     assert (target / 'input/ohlcv/binance/1m/BTC/data.npy').stat().st_ino == shard.stat().st_ino
+    assert (target / 'input/launch_options.json').stat().st_ino == launch.stat().st_ino
     assert store.read(source['id'])['status'] == 'ready'
 
 

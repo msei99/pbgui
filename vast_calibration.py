@@ -12,6 +12,9 @@ from file_lock import advisory_file_lock
 from secure_files import atomic_write_private_text, ensure_private_directory
 
 SERVICE = "VastCalibration"
+NATIVE_CALIBRATION_UNAVAILABLE = (
+    'PB9 performance tuning is unavailable for the native GPU backend. Optimization is supported.'
+)
 PROFILE_SCHEMA = 1
 PROTOCOL_VERSION = 3
 CONFIGURABLE_PROTOCOL_VERSION = 4
@@ -40,9 +43,6 @@ COMPATIBLE_CALIBRATION_IMAGES = frozenset({
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:bee2e513d77e2c22f5b0671392063c51bb04bd547c7334e614fe918ada2d49e2",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:8a85444f341a447564fc23e955b34f8a68b1970afc54026334aefa204c6cbc56",
 })
-from vast_worker_profiles import PB9 as _PB9_CALIBRATION_PROFILE
-if _PB9_CALIBRATION_PROFILE.published:
-    COMPATIBLE_CALIBRATION_IMAGES=COMPATIBLE_CALIBRATION_IMAGES|{_PB9_CALIBRATION_PROFILE.image}
 LEGACY_ANCHOR_POPULATIONS = (1024, 2048, 4096, 8192)
 ANCHOR_POPULATIONS = (4096, 8192)
 POPULATION_STEP = 4096
@@ -68,10 +68,14 @@ PRESET_SCENARIOS = {
 }
 def calibration_worker_available(image: str, protocol: int = PROTOCOL_VERSION) -> bool:
     """Require an immutable image pin for the exact protocol sent to the worker."""
+    if not isinstance(image, str):
+        return False
     from vast_worker_profiles import worker_profile
     native=worker_profile('pb9')
     if native.published and image==native.image:
-        return protocol in (PROTOCOL_VERSION,CONFIGURABLE_PROTOCOL_VERSION)
+        # Native authoritative GPU cohorts do not emit the PB8 proxy-generation
+        # evidence required by these protocols. Publication alone is no proof.
+        return False
     return (protocol in (PROTOCOL_VERSION, CONFIGURABLE_PROTOCOL_VERSION)
             and bool(CALIBRATION_WORKER_DIGEST)
             and image.endswith('@sha256:' + CALIBRATION_WORKER_DIGEST))

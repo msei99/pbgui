@@ -1,5 +1,6 @@
 """PB9 shares Vast controls without ever using PB8 jobs, images or provider calls."""
 import json
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,6 +20,8 @@ ROOT=Path(__file__).resolve().parents[1]
 @pytest.fixture
 def client(monkeypatch,tmp_path):
     """Use an isolated job store and replace authenticated ownership only."""
+    import vast_worker_profiles
+    monkeypatch.setattr(vast_worker_profiles, 'PB9', replace(vast_worker_profiles.PB9, image=None))
     store=JobStore(tmp_path/'vast')
     monkeypatch.setattr(native,'JobStore',lambda:store)
     monkeypatch.setattr(shared,'JobStore',lambda:store)
@@ -70,7 +73,103 @@ def test_unknown_worker_profile_never_uses_pb8(value):
         with pytest.raises(VastError):config_runtime({'config_version':value})
     assert config_runtime({'config_version':'v9.0.0'})=='pb9'
     assert worker_profile('pb8').published
-    with pytest.raises(VastError):worker_profile('pb9').require_published()
+    with pytest.raises(VastError):replace(worker_profile('pb9'), image=None).require_published()
+
+
+def test_native_published_profile_is_bound_to_reviewed_digest_and_source():
+    """Native rentals use the exact verified native image, independently of PB8."""
+    profile = worker_profile('pb9').require_published()
+    assert profile.image == 'ghcr.io/msei99/pbgui-pb9-worker@sha256:354e286b2c51ec7512ef2a22d3b7b3f31e5f1523dd7de91ee9b8ac298102f444'
+    assert profile.revision == '1b85ea6cc4bb7b917ada43725044b7559763c46e'
+    assert profile.image != worker_profile('pb8').image
+    from vast_image_layers import IMAGE_LAYERS
+    assert len(IMAGE_LAYERS[profile.image]) == 29
+    assert all(size > 0 for size in IMAGE_LAYERS[profile.image].values())
+
+
+def test_native_calibration_rejects_before_credentials_or_provider(tmp_path, monkeypatch):
+    """Image publication must not authorize a legacy calibration on native GPU cohorts."""
+    from fastapi import HTTPException
+    from vast_calibration import calibration_worker_available, NATIVE_CALIBRATION_UNAVAILABLE
+    assert worker_profile('pb9').published
+    assert not calibration_worker_available(worker_profile('pb9').image)
+    assert not calibration_worker_available(worker_profile('pb9').image, protocol=4)
+    assert not calibration_worker_available(None)
+    monkeypatch.setattr(shared, 'CloudQueue', lambda: pytest.fail('Queue consulted'))
+    monkeypatch.setattr(shared, 'VastCredentialStore', lambda *_: pytest.fail('Credentials read'))
+    monkeypatch.setattr(shared, 'VastClient', lambda *_: pytest.fail('Provider called'))
+    for endpoint in (shared._start_calibration, shared._start_configurable_calibration,
+                     shared._start_calibration_watch):
+        with pytest.raises(HTTPException) as error:
+            endpoint(SimpleNamespace(accept_rental_and_cleanup=True), runtime='pb9')
+        assert error.value.status_code == 409
+        assert error.value.detail == NATIVE_CALIBRATION_UNAVAILABLE
+    store = JobStore(tmp_path / 'vast')
+    row = store.create_preparation('native', 512, 4, False, runtime='pb9')
+    store.update(row['id'], status='ready')
+    with pytest.raises(VastError, match='PB9 performance tuning is unavailable'):
+        store.create_calibration(row['id'], {})
+    store.update(row['id'], kind='calibration')
+    monkeypatch.setattr('vast_jobs.services_available', lambda: True)
+    with pytest.raises(VastError, match='PB9 performance tuning is unavailable'):
+        store.start(row['id'], {'id': 1, 'price_hour_usd': .1, 'cuda_max_good': 13,
+                               'disk_gb': 40, 'cpu_cores': 4}, .25, .1)
+
+
+@pytest.mark.parametrize('legacy_count', [1, 101])
+def test_native_job_list_skips_legacy_snapshots_before_projection(client, monkeypatch, legacy_count):
+    """PB8 work cannot delay or consume the native list's one-hundred-row limit."""
+    from vast_queue import CloudQueue
+    client, store = client
+    monkeypatch.setattr(shared, 'CloudQueue', lambda: CloudQueue(store))
+    monkeypatch.setattr(shared, 'services_available', lambda: True)
+    native_row = store.create_preparation('native', 512, 4, False, runtime='pb9')
+    store.update(native_row['id'], status='ready', exchanges=['binance'], estimated_coin_candles=1234)
+    native_input = store.directory(native_row['id']) / 'input'
+    native_input.mkdir()
+    (native_input / 'optimize.json').write_text('{}')
+    for index in range(legacy_count):
+        row = store.create_preparation('legacy_' + str(index), 512, 4, False)
+        store.update(row['id'], status='completed', exchanges=['bybit'])
+        folder = store.directory(row['id']) / 'input'
+        folder.mkdir()
+        (folder / 'optimize.json').write_text('{}')
+    monkeypatch.setattr(shared, '_cached_display_estimate', lambda *args: pytest.fail('PB8 snapshot inspected'))
+    response = client.get('/api/vast-v9/jobs')
+    assert response.status_code == 200, response.text
+    assert [row['id'] for row in response.json()['jobs']] == [native_row['id']]
+    assert response.json()['jobs'][0]['estimated_coin_candles'] == 1234
+
+
+def test_legacy_list_never_inspects_native_snapshots(client, monkeypatch):
+    """The PB8 list filters native rows before row limits and snapshot estimates."""
+    from fastapi import Response
+    from vast_queue import CloudQueue
+    _client, store = client
+    monkeypatch.setattr(shared, 'CloudQueue', lambda: CloudQueue(store))
+    monkeypatch.setattr(shared, 'services_available', lambda: True)
+    legacy = store.create_preparation('legacy', 512, 4, False)
+    native = store.create_preparation('native', 512, 4, False, runtime='pb9')
+    for row in (legacy, native):
+        store.update(row['id'], status='ready')
+    folder = store.directory(native['id']) / 'input'
+    folder.mkdir()
+    (folder / 'optimize.json').write_text('{}')
+    monkeypatch.setattr(shared, '_cached_display_estimate', lambda *args: pytest.fail('Native snapshot inspected'))
+    assert [row['id'] for row in shared.jobs(Response(), None)['jobs']] == [legacy['id']]
+
+
+def test_native_estimate_failures_remain_optional(tmp_path, monkeypatch):
+    """A failed native source inspection cannot fail a display-only estimate."""
+    from api.optimize_v9 import engine
+    from pb9_config import PB9ConfigError
+    path = tmp_path / 'native.json'
+    path.write_text('{}')
+    def broken_context():
+        """Simulate a missing native source without reading local runtimes."""
+        raise PB9ConfigError('runtime_not_detected')
+    monkeypatch.setattr(engine.native, '_workload_context', broken_context)
+    assert engine.native.estimate_snapshot(path, tmp_path) is None
 
 
 def test_native_build_context_shares_recipe_and_excludes_private_files(tmp_path):

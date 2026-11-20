@@ -191,7 +191,8 @@ def test_current_claim_filters_incompatible_snapshots(queue, calibration):
     assert not queue.store.read(identifier).get('active_job')
 
 
-@pytest.mark.parametrize('image,revision', [(i, r) for i, r in SUPPORTED_RENTAL_IMAGE_REVISIONS.items() if i != IMAGE])
+@pytest.mark.parametrize('image,revision', [(i, r) for i, r in SUPPORTED_RENTAL_IMAGE_REVISIONS.items()
+                                         if i != IMAGE and 'pbgui-pb8-worker@' in i])
 def test_supported_older_claims_preserve_behavior(queue, image, revision, monkeypatch):
     """Older paid workers are deliberately outside the new current-pin check."""
     row = prepared(queue.store, unstable_config())

@@ -28,7 +28,8 @@ class WorkerProfile:
         return self
 
 
-PB9 = WorkerProfile('pb9','1b85ea6cc4bb7b917ada43725044b7559763c46e',None,'v9.0.0',
+PB9 = WorkerProfile('pb9','1b85ea6cc4bb7b917ada43725044b7559763c46e',
+                    'ghcr.io/msei99/pbgui-pb9-worker@sha256:354e286b2c51ec7512ef2a22d3b7b3f31e5f1523dd7de91ee9b8ac298102f444','v9.0.0',
                     'https://github.com/msei99/passivbot')
 
 

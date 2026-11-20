@@ -646,7 +646,12 @@ class JobStore:
                        "bundle_bytes": (directory / "input.tar.gz").stat().st_size,
                        "manifest_sha256": digest(folder / 'manifest.json'), "source_config_sha256": source_sha256,
                        "convergence_config": job_convergence})
+            estimate = {}
+            if native:
+                from vast_pb9 import _adapter
+                estimate['estimated_coin_candles'] = _adapter().estimate_snapshot(folder / 'optimize.json', self.root)
             return self.update(identifier, status="ready", input_bytes=(directory / "input.tar.gz").stat().st_size,
+                               **estimate,
                                use_adg=use_adg, sweep_enabled=sweep is not None, input_progress={
                                    "stage": "complete", "files_completed": len(shards), "files_total": len(shards),
                                    "bytes_completed": total_bytes, "bytes_total": total_bytes,
@@ -726,6 +731,7 @@ class JobStore:
             progress = source.get("input_progress") or {}
             return self.update(
                 identifier, status="ready", input_bytes=expected_bytes, use_adg=use_adg,
+                **({'estimated_coin_candles': source.get('estimated_coin_candles')} if profile.runtime == 'pb9' else {}),
                 snapshot_source_id=source.get("snapshot_source_id") or source_id,
                 exchanges=list(source.get("exchanges") or []), sweep_enabled=bool(source.get("sweep_enabled")),
                 input_progress={
@@ -745,6 +751,10 @@ class JobStore:
         source = self.read(source_id)
         from vast_worker_profiles import worker_profile
         profile=worker_profile(source.get('runtime','pb8')).require_published()
+        if profile.runtime == 'pb9':
+            from vast_calibration import calibration_worker_available, NATIVE_CALIBRATION_UNAVAILABLE
+            if not calibration_worker_available(profile.image):
+                raise VastError(NATIVE_CALIBRATION_UNAVAILABLE, 409)
         if (source.get('kind') in {'worker', 'calibration'} or source.get('status') != 'ready'
                 or source.get('lease_id') or source.get('deleted_at')):
             raise VastError('Choose an inactive prepared PB8 queue item for calibration', 409)
@@ -761,7 +771,7 @@ class JobStore:
         if plan != expected:
             raise VastError('Invalid GPU calibration plan', 422)
         source_directory = self.directory(source_id)
-        source_input = source_directory / 'input'
+        source_input = self.prepared_input_directory(source_id)
         from vast_queue import preflight_gpu_snapshots
         preflight_gpu_snapshots(self, [source], reject=True)
         source_archive = source_directory / 'input.tar.gz'
@@ -816,6 +826,7 @@ class JobStore:
                 identifier, kind='calibration', status='ready', calibration_plan=copy.deepcopy(plan),
                 calibration_source_id=source_id, snapshot_source_id=source.get('snapshot_source_id') or source_id,
                 input_bytes=source_intent['bundle_bytes'], use_adg=bool(source.get('use_adg')),
+                **({'estimated_coin_candles': source.get('estimated_coin_candles')} if profile.runtime == 'pb9' else {}),
                 exchanges=list(source.get('exchanges') or []), sweep_enabled=bool(source.get('sweep_enabled')),
                 input_progress={
                     'stage': 'complete', 'files_completed': int(progress.get('files_total', 0)),
@@ -843,6 +854,9 @@ class JobStore:
         directory = self.directory(identifier)
         with advisory_file_lock(self.root / ".lock"):
             state = self.read(identifier)
+            if state.get('runtime') == 'pb9' and state.get('kind') == 'calibration':
+                from vast_calibration import NATIVE_CALIBRATION_UNAVAILABLE
+                raise VastError(NATIVE_CALIBRATION_UNAVAILABLE, 409)
             if state["rental_state"] != "none":
                 return state  # Start retries never create another rental.
             if (number(offer.get("cpu_cores")) or 0) < state["workers"]:

@@ -45,11 +45,13 @@ async def validate_config(request:Request,session:SessionToken=Depends(require_a
 @router.get('/jobs')
 def jobs(response:Response,session:SessionToken=Depends(require_auth)):
     """Keep common account/queue supervision but display only native jobs and workers."""
-    result=shared.jobs(response,session)
+    result=shared._jobs(response,session,runtime='pb9')
     for key in ('jobs','workers'):
         result[key]=[row for row in result.get(key,[]) if row.get('runtime','pb8')=='pb9']
     if (result.get('worker') or {}).get('runtime','pb8')!='pb9':result['worker']=None
-    return {**result,'profile':_profile()}
+    from vast_calibration import calibration_worker_available
+    return {**result,'profile':_profile(),
+            'calibration_worker_available':calibration_worker_available(worker_profile('pb9').image)}
 
 
 @router.post('/jobs/prepare')
