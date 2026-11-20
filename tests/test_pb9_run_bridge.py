@@ -20,6 +20,13 @@ def metadata_runtime(runtime):
     (package / "field_spec.py").write_text('from enum import Enum\nclass Missing(Enum):\n    VALUE = "no default"\nNO_DEFAULT = Missing.VALUE\n')
     site = runtime.python.parent.parent / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
     (site / "passivbot_rust.py").write_text('"""Inert Rust-module fixture with selected-environment provenance."""\n')
+    live = runtime.root / 'src/live';live.mkdir()
+    (live / '__init__.py').write_text('')
+    (live / 'order_churn_gate.py').write_text("ORDER_CHURN_GATE_SUPPORTED_EXCHANGES = {'binance','bybit','gateio','hyperliquid','fake','unavailable'}\n")
+    (runtime.root / 'src/utils.py').write_text("def to_ccxt_client_id(value):\n    return {'binance':'binanceusdm','gateio':'gate'}.get(value,value)\n")
+    ccxt = site / 'ccxt';ccxt.mkdir()
+    (ccxt / '__init__.py').write_text('')
+    (ccxt / 'async_support.py').write_text("exchanges = ['binanceusdm','bybit','gate','hyperliquid','fake']\n")
     (package / "field_registry.py").write_text('''from enum import Enum
 from types import SimpleNamespace as NS
 class Kind(str, Enum):
@@ -58,6 +65,10 @@ def test_metadata_uses_native_fields_and_keeps_no_default_distinct(metadata_runt
     assert result["strategy_specs"]["trailing_martingale"]["parameters"][0]["bounds"] == [0.0,1.0]
     assert Path(result["source"]["rust_module_file"]).is_relative_to(env.python.parent.parent)
     assert result["source"]["rust_source_agreement"] == "not_checked"
+    assert result['exchange_options']['optimize'] == ['binance','bybit','gateio','hyperliquid']
+    assert result['exchange_options']['backtest'] == result['exchange_options']['suite']
+    assert 'unavailable' in result['exchange_options']['live']
+    assert 'fake' not in result['exchange_options']['live']
 
 
 def test_live_validation_uses_live_only_and_preserves_inline_source(validation_runtime):

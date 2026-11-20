@@ -17,6 +17,17 @@
       }
       active = null; previousDescription = null;
     }
+    var previousState = window.__pbguiTooltipState;
+    var state = {
+      get target() { return active; },
+      refresh: function () {
+        if (!active) return;
+        tooltip.textContent = active.getAttribute('data-tip') || '';
+        position();
+      },
+      hide: hide
+    };
+    window.__pbguiTooltipState = state;
     function position(event) {
       if (tooltip.hidden || !active) return;
       if (event && tooltip.contains(event.target)) return;
@@ -42,10 +53,20 @@
       if (next && (tooltip.contains(next) || active && active.contains(next))) return;
       clearTimeout(hideTimer); hideTimer = setTimeout(hide, 150);
     }
-    function escape(event) { if (event.key === 'Escape') hide(); }
+    function escape(event) {
+      if (event.key !== 'Escape' || tooltip.hidden) return;
+      event.preventDefault();
+      hide();
+    }
     function hold() { clearTimeout(hideTimer); }
     function visibility() { if (document.hidden) hide(); }
-    function scroll(event) { if (!tooltip.contains(event.target)) hide(); }
+    function scroll(event) {
+      if (tooltip.contains(event.target)) return;
+      // Browser focus can scroll the label after focusin. Keep keyboard help
+      // anchored to that label instead of immediately hiding it again.
+      if (active && active === document.activeElement) position();
+      else hide();
+    }
     tooltip.addEventListener('mouseenter', hold); tooltip.addEventListener('mouseleave', leave);
     document.addEventListener('mouseover', show); document.addEventListener('focusin', show);
     document.addEventListener('mouseout', leave); document.addEventListener('focusout', leave);
@@ -54,6 +75,7 @@
     window.addEventListener('resize', hide); window.addEventListener('scroll', scroll, true);
     window.addEventListener('pagehide', function () {
       hide(); tooltip.remove(); installed = false;
+      if (window.__pbguiTooltipState === state) window.__pbguiTooltipState = previousState;
       document.removeEventListener('mouseover', show); document.removeEventListener('focusin', show);
       document.removeEventListener('mouseout', leave); document.removeEventListener('focusout', leave);
       document.removeEventListener('mousemove', position); document.removeEventListener('keydown', escape);

@@ -19,7 +19,7 @@ _KEY = re.compile(r"\*\*([^*]+)\*\*|`([^`]+)`")
 
 def _canonical_key(key: str, section: str, first: str = "") -> str:
     """Resolve documentation shorthand without merging unrelated parameter names."""
-    key = key.strip().strip('"').split(":", 1)[0]
+    key = key.strip().strip('"').split(":", 1)[0].replace("bot.<side>.", "bot.long.")
     if not re.fullmatch(r"[A-Za-z_][\w.]*", key):
         return ""
     if key.startswith(("bot.", "backtest.", "live.", "logging.", "monitor.", "optimize.")):
@@ -59,7 +59,7 @@ def _parse_document(text: str, filename: str) -> dict[str, dict]:
             if filename == "configuration.md" and line.startswith("## "):
                 section = {
                     "Backtest Settings": "backtest", "Logging": "logging", "Monitor": "monitor",
-                    "Bot Settings": "bot", "Live Trading Settings": "live",
+                    "Bot Settings": "bot", "Shared Bot Policy": "bot", "Live Trading Settings": "live",
                     "Optimization Settings": "optimize",
                 }.get(heading, "")
             if filename == "optimizing.md":
@@ -146,26 +146,31 @@ def _build_catalog(documents: dict[str, str]) -> dict:
 
 def get_pb8_parameter_help() -> dict:
     """Return a bounded, signature-invalidated cache of allowlisted local docs."""
-    global _cache
     configured = pb8dir()
     if not configured:
         raise FileNotFoundError("PB8 documentation is unavailable: PB8 path is not configured")
+    return get_local_parameter_help(configured)
+
+
+def get_local_parameter_help(configured, *, generation="PB8", document_names=_DOCUMENTS, builder=_build_catalog) -> dict:
+    """Share bounded local document loading and cache invalidation across runtimes."""
+    global _cache
     root = Path(configured).resolve()
     paths = []
-    for name in _DOCUMENTS:
+    for name in document_names:
         path = (root / "docs" / name).resolve()
         if not path.is_relative_to(root):
-            raise ValueError("PB8 documentation path leaves the configured installation")
+            raise ValueError(f"{generation} documentation path leaves the configured installation")
         if path.exists():
             stat = path.stat()
             if stat.st_size > 1024 * 1024:
-                raise ValueError("PB8 documentation file exceeds the size limit")
+                raise ValueError(f"{generation} documentation file exceeds the size limit")
             paths.append((name, path, stat.st_mtime_ns, stat.st_size))
     if not any(name == "configuration.md" for name, *_ in paths):
-        raise FileNotFoundError("PB8 docs/configuration.md is unavailable")
-    signature = (str(root), tuple((name, mtime, size) for name, _, mtime, size in paths))
+        raise FileNotFoundError(f"{generation} docs/configuration.md is unavailable")
+    signature = (str(root), builder, tuple((name, mtime, size) for name, _, mtime, size in paths))
     with _cache_lock:
         if _cache is None or _cache[0] != signature:
             documents = {name: path.read_text(encoding="utf-8") for name, path, *_ in paths}
-            _cache = (signature, _build_catalog(documents))
+            _cache = (signature, builder(documents))
         return copy.deepcopy(_cache[1])

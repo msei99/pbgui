@@ -366,6 +366,7 @@ def test_sweep_apply_sets_balanced_high_risk_scoring_preset() -> None:
     script = textwrap.dedent(
         f"""
         const assert = browserAssert;
+        const optimizeEditorAdapter = {{isV9:false}};
         const nodes = {{
           'opted-starting-balance': {{value: '100000'}},
           'opted-objective-scenario-mode': {{value: 'named'}},
@@ -412,6 +413,7 @@ def test_rolling_and_walk_forward_apply_the_sweep_scoring_and_limits_defaults() 
     script = textwrap.dedent(
         f"""
         const assert = browserAssert;
+        const optimizeEditorAdapter = {{isV9:false}};
         const nodes = {{
           'opted-starting-balance': {{value: '100000'}},
           'opted-objective-scenario-mode': {{value: 'named'}},
@@ -561,7 +563,7 @@ def test_pb8_scenario_generator_guide_opens_exact_topic_and_anchor() -> None:
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
     suite = (ROOT / "frontend" / "js" / "suite_editor.js").read_text(encoding="utf-8")
 
-    assert "optimizeEditorAdapter.isV8 ? '43_pbv8_optimize' : '36_pbv7_optimize'" in page
+    assert 'optimizeEditorAdapter.guideTopic' in page
     assert "window._openOptimizeHelp('scenario-generator')" in page
     assert "_suiteOpenScenarioGeneratorGuide()" in suite
     assert '>Guide\\x3C/button>' in suite
@@ -1542,13 +1544,15 @@ def test_v7_and_v8_use_one_optimize_template() -> None:
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
     api = (ROOT / "api" / "optimize_v7.py").read_text(encoding="utf-8")
     api_v8 = (ROOT / "api" / "optimize_v8.py").read_text(encoding="utf-8")
+    shared = (ROOT / 'api' / 'optimize_engine.py').read_text(encoding='utf-8')
 
     assert '"frontend" / "v7_optimize.html"' in api
-    assert '"frontend" / "v7_optimize.html"' in api_v8
-    assert '"%%OPTIMIZE_VERSION%%": "v8"' in api_v8
-    assert '"%%OPTIMIZE_NAV_CURRENT%%": "v8_optimize"' in api_v8
+    assert 'OptimizeEngine()' in api_v8
+    assert "'frontend' / 'v7_optimize.html'" in shared
+    assert "'%%OPTIMIZE_VERSION%%': self.profile.text('v8')" in shared
+    assert "'%%OPTIMIZE_NAV_CURRENT%%': self.profile.text('v8_optimize')" in shared
     assert not (ROOT / "frontend" / "v8_optimize.html").exists()
-    assert '/app/js/optimize_editor_adapter.js?v=17' in page
+    assert '/app/js/optimize_editor_adapter.js?v=20' in page
     assert "PBGuiOptimizeEditorAdapter.create(OPTIMIZE_VERSION" in page
     assert 'backtestVersion: BACKTEST_VERSION' in page
     for panel in ("panel-configs", "panel-queue", "panel-results", "panel-paretos"):
@@ -2264,7 +2268,7 @@ def test_pb8_optimize_archive_export_and_import_use_the_shared_service() -> None
     adapter = (ROOT / "frontend" / "js" / "optimize_editor_adapter.js").read_text(encoding="utf-8")
 
     assert "supportsArchive: true" in adapter
-    assert "return apiBase.replace(/\\/optimize-v[78]$/, '/backtest-v7')" in adapter
+    assert "return apiBase.replace(/\\/optimize-v[789]$/, '/backtest-v7')" in adapter
     assert "'btn-archive-selected'" not in adapter.split("configureUi: function", 1)[1]
     assert "'/optimize-configs?version=' + encodeURIComponent(optimizeEditorAdapter.version)" in page
     assert "optimize_version: optimizeEditorAdapter.version" in page
@@ -2754,6 +2758,7 @@ def test_seed_runtime_unknown_overrides_and_pymoo_auto_execute_page_logic() -> N
         "collectOptimizeRuntimeOverrides",
         "normalizeOptimizePymooPopulationMode",
         "resolveOptimizePymooRequestedPopulationSize",
+        "optimizeBackendUsesPymooSettings",
         "shouldPreserveOptimizePymooAutoPopulation",
         "formatOptimizePymooPopulationAutoLabel",
         "optimizeReferenceDirectionCount",
@@ -3424,6 +3429,7 @@ def test_cloud_scenario_apply_preserves_objectives_after_adg_fix():
     function_source = _page_function(page, "applyOptimizeSweepPreset")
     _run_node(textwrap.dedent(f"""
         const assert = browserAssert;
+        const optimizeEditorAdapter = {{isV9:false}};
         const el = id => id === 'opted-execution' ? {{value:'vast'}} : null;
         let scoring = [{{metric:'adg_strategy_eq',goal:'max',scenario:null,aggregate:'median'}},
                        {{metric:'drawdown_worst_strategy_eq',goal:'min'}}];
@@ -3609,6 +3615,7 @@ def test_graphical_sweep_apply_restores_only_three_scoring_defaults():
     script = """
     (async () => {
       const assert = browserAssert;
+        const optimizeEditorAdapter = {isV9:false};
       const fs = testSources;
       eval(fs.readFileSync('frontend/js/suite_editor.js', 'utf8'));
       _suiteRender = () => {};
@@ -3724,11 +3731,13 @@ def test_unsaved_editor_refresh_round_trip():
     functions = '\n'.join(_page_function(page, name) for name in (
         'optimizeDraftStorageKey', 'storeOptimizeDraft', 'captureOptimizeDraftForRefresh',
         'updateOptimizeEditorUrl', 'openEditorWithConfig', 'handleOpenConfigParam')).split('/* ── data-tip')[0]
+    from test_remaining_issue_regressions import function
+    functions = function('js/editor_shared.js','stringifyNonSecretDraft') + functions
     _run_node("""
 const assert=browserAssert;
 const storage=new Map();
 const listeners={};
-const window={addEventListener:(name,fn)=>{listeners[name]=fn;},location:{href:'http://localhost/main#configs',pathname:'/main'},
+const window={PBGuiEditorShared:{stringifyNonSecretDraft},addEventListener:(name,fn)=>{listeners[name]=fn;},location:{href:'http://localhost/main#configs',pathname:'/main'},
  sessionStorage:{setItem:(k,v)=>storage.set(k,v),getItem:k=>storage.get(k),removeItem:k=>storage.delete(k)}};
 const history={replaceState:(_,t,p)=>{window.location.href=new URL(p,window.location.href).href;}};
 const state={}; let shown,status;
@@ -3952,7 +3961,7 @@ def _start_lookup_sync_harness(page: str) -> str:
     adapter = (ROOT / 'frontend/js/optimize_editor_adapter.js').read_text()
     functions = '\n'.join(_page_function(page, name) for name in (
         'optimizeOhlcvStartLookupSignature', 'mergeOptimizeEditorChanges',
-        'cancelOptimizeEditorSync', 'commitOptimizeEditorChange', 'recordOptimizeEditorChange',
+        'cancelOptimizeEditorSync', 'refreshOptimizeFixedEffectiveValues', 'commitOptimizeEditorChange', 'recordOptimizeEditorChange',
         'reconcileOptimizeEditorSync', 'scheduleOptimizeEditorReconciliation',
         'scheduleRawJsonEditorSync', 'scheduleStructuredEditorSync', 'collectOptimizeStartLookupConfig'))
     return """

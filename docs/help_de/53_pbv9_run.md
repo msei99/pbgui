@@ -10,7 +10,7 @@ Long- und Short-JSON verwenden den gemeinsamen Editor. **With global defaults** 
 
 Wähle **Add PB9 Instance**, ein Börsenkonto und bearbeite Strategie, Portfolio, globale Vorgaben sowie Long-/Short-Overrides. Das Formular liest Felddefinitionen und Strategiemetadaten der installierten PB9-Version. Geerbte Seitenwerte bleiben geerbt, bis du ausdrücklich einen Override setzt. Aktiviere die gewünschten Seiten ausdrücklich.
 
-Die Coin-Auswahl verwendet veröffentlichte lokale Coin-Data-Mappings. Exakte, börsenqualifizierte Marktkennungen unterscheiden unabhängig gehandelte Märkte mit gleichem Coin-Namen. Coin-Overrides sind eingebettete PB9-Patches. Dateibasierte Overrides und externe Konfigurationsverweise werden abgelehnt.
+Die Coin-Auswahl verwendet den gemeinsamen PB8-Katalogablauf mit dem nativen PB9-Resolver und vorhandenen lokalen öffentlichen Marktmetadaten. Normale Coins erscheinen einmal unter ihrem Namen; exakte Kennungen unterscheiden tatsächlich mehrdeutige Märkte. Bereits gewählte exakte Kennungen behalten ihre Identität. Apply Filters verwendet dieselbe Filterzuordnung wie PB8. Coin-Overrides sind eingebettete PB9-Patches. Dateibasierte Overrides und externe Konfigurationsverweise werden abgelehnt.
 
 Der Katalog verwendet die native Standard-Abrechnungswährung der Börse: USDT für die üblichen Börsen und USDC für Hyperliquid/Lighter. Hyperliquid-HIP-3-Namensräume und numerische native Marktkennungen bleiben unterscheidbar.
 

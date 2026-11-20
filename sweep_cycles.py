@@ -1,4 +1,4 @@
-"""Deterministic PB8 Suite sweep-cycle evaluation."""
+"""Deterministic PB8/PB9 Suite sweep-cycle evaluation."""
 
 from __future__ import annotations
 
@@ -19,6 +19,15 @@ SWEEP_METRIC_NAMES = (
     "sweep_target_hit_rate",
 )
 _GAIN_ALIASES = ("gain_strategy_eq", "gain_usd", "gain")
+# PB9 has no gain metric. Its native CAGR is expm1(ln(E_end / E_start) / Y)
+# with Y = (actual_end_timestamp_ms - start_timestamp_ms) / DAY_MS / year_days,
+# taken from the scenario's own metric metadata. The window multiplier is only
+# reconstructed when exactly one native source defines that clock.
+PB9_CAGR_METRIC = "cagr_fraction_strategy_equity"
+_DAY_MS = 86_400_000
+# Maximum relative error of a reconstructed multiplier caused by the stored
+# CAGR rounding alone; larger errors (CAGR close to -1) are not trustworthy.
+_MAX_GAIN_RELATIVE_ERROR = 1e-9
 
 
 def build_sweep_plan(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -157,25 +166,92 @@ def sweep_holdout_scenarios(plan: object) -> list[dict[str, Any]]:
     return result
 
 
-def _scenario_gain(suite_values: dict[str, Any], label: str) -> tuple[str | None, float | None]:
-    """Return the first canonical finite per-scenario gain value."""
+def _scenario_metric(suite_values: dict[str, Any], metric: str, label: str) -> float | None:
+    """Return one finite per-scenario value."""
+    payload = suite_values.get(metric) if isinstance(suite_values, dict) else None
+    scenarios = payload.get("scenarios") if isinstance(payload, dict) else None
+    value = scenarios.get(label) if isinstance(scenarios, dict) else None
+    if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
+        return float(value)
+    return None
+
+
+def _native_source_years(sources: object, label: str) -> tuple[float | None, str | None]:
+    """Return the exact native evaluation years of one single-source scenario."""
+    per_label = sources.get(label) if isinstance(sources, dict) else None
+    if not isinstance(per_label, dict) or not per_label:
+        return None, f"No native evaluation clock for {label}"
+    if len(per_label) != 1:
+        return None, f"{label} averages {len(per_label)} native sources; its window gain cannot be reconstructed from CAGR"
+    metadata = next(iter(per_label.values()))
+    if not isinstance(metadata, dict):
+        return None, f"No native evaluation clock for {label}"
+    start = metadata.get("start_timestamp_ms")
+    end = metadata.get("actual_end_timestamp_ms")
+    year_days = metadata.get("year_days")
+    if (
+        any(isinstance(value, bool) or not isinstance(value, int) for value in (start, end))
+        or isinstance(year_days, bool)
+        or not isinstance(year_days, (int, float))
+        or not math.isfinite(float(year_days))
+        or float(year_days) <= 0.0
+        or start < 0
+        or end <= start
+    ):
+        return None, f"No valid native evaluation clock for {label}"
+    return (end - start) / _DAY_MS / float(year_days), None
+
+
+def _cagr_gain(cagr: float, years: float, label: str) -> tuple[float | None, str | None]:
+    """Invert the native CAGR when the stored value still determines the multiplier."""
+    if cagr <= -1.0:
+        return None, f"{PB9_CAGR_METRIC}={cagr!r} for {label} does not determine the window gain"
+    relative_error = years * (math.ulp(cagr) / 2.0) / (1.0 + cagr)
+    if not math.isfinite(relative_error) or relative_error > _MAX_GAIN_RELATIVE_ERROR:
+        return None, f"{PB9_CAGR_METRIC}={cagr!r} for {label} is too close to -1 to reconstruct the window gain"
+    try:
+        gain = math.exp(math.log1p(cagr) * years)
+    except OverflowError:
+        gain = math.inf
+    if not math.isfinite(gain):
+        return None, f"Window gain for {label} overflows"
+    return gain, None
+
+
+def _scenario_gain(
+    suite_values: dict[str, Any], label: str, sources: object = None
+) -> tuple[str | None, float | None, str | None]:
+    """Return (metric, finite window multiplier, unavailable reason)."""
     for metric in _GAIN_ALIASES:
-        payload = suite_values.get(metric) if isinstance(suite_values, dict) else None
-        scenarios = payload.get("scenarios") if isinstance(payload, dict) else None
-        value = scenarios.get(label) if isinstance(scenarios, dict) else None
-        if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value)):
-            return metric, float(value)
-    return None, None
+        value = _scenario_metric(suite_values, metric, label)
+        if value is not None:
+            return metric, value, None
+    cagr = _scenario_metric(suite_values, PB9_CAGR_METRIC, label)
+    if cagr is None:
+        return None, None, f"No per-scenario gain metric for {label}"
+    years, reason = _native_source_years(sources, label)
+    if years is None:
+        return PB9_CAGR_METRIC, None, reason
+    gain, reason = _cagr_gain(cagr, years, label)
+    return PB9_CAGR_METRIC, gain, reason
 
 
-def evaluate_sweep_cycles(plan: object, suite_values: dict[str, Any]) -> dict[str, Any]:
-    """Evaluate sequential window gains using reset, sweep, and refill rules."""
+def evaluate_sweep_cycles(
+    plan: object, suite_values: dict[str, Any], scenario_sources: object = None
+) -> dict[str, Any]:
+    """Evaluate sequential window gains using reset, sweep, and refill rules.
+
+    ``scenario_sources`` is the native ``suite_metrics.sources`` mapping
+    (label -> source -> metric metadata) required for PB9 CAGR inversion.
+    """
     normalized = validate_sweep_plan(plan)
     if normalized is None:
         return {"available": False, "reason": "Sweep plan is invalid"}
     policy = normalized["policy"]
     starting_balance = float(policy["starting_balance"])
     target_balance = starting_balance * float(policy["balance_multiplier"])
+    if not math.isfinite(target_balance):
+        return {"available": False, "reason": "Sweep target balance overflows"}
     refill_cost = float(policy["refill_cost"])
     balance = starting_balance
     total_swept = 0.0
@@ -186,9 +262,9 @@ def evaluate_sweep_cycles(plan: object, suite_values: dict[str, Any]) -> dict[st
     metric_used = None
     for scenario in normalized["training_scenarios"]:
         label = str(scenario["label"])
-        metric, gain = _scenario_gain(suite_values, label)
+        metric, gain, reason = _scenario_gain(suite_values, label, scenario_sources)
         if gain is None:
-            return {"available": False, "reason": f"No per-scenario gain metric for {label}"}
+            return {"available": False, "reason": reason}
         metric_used = metric_used or metric
         opening_balance = balance
         ending_balance = max(0.0, opening_balance * gain)
@@ -211,6 +287,8 @@ def evaluate_sweep_cycles(plan: object, suite_values: dict[str, Any]) -> dict[st
             action = "refill_reset"
         else:
             balance = ending_balance
+        if not all(math.isfinite(value) for value in (ending_balance, total_swept, external_capital, balance)):
+            return {"available": False, "reason": f"Sweep balances overflow at {label}"}
         windows.append(
             {
                 "label": label,

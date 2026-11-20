@@ -850,7 +850,7 @@ def extract_results(archive_path: Path, directory: Path, name: str, *, check=lam
                 parts = Path(item.name).parts
                 allowed = item.name in {"manifest.json", "finished.json", "optimizer.log", "calibration-result.json"} or (
                     len(parts) in (3, 4) and parts[0] == "optimize_results" and (
-                        len(parts) == 3 and parts[2] in {"all_results.bin", "checkpoint.pkl"} or
+                        len(parts) == 3 and parts[2] in {"all_results.bin", "checkpoint.pkl", "session.json", "search.json", ".pbgui_native_launch.json"} or
                         len(parts) == 4 and parts[2] == "pareto" and re.fullmatch(r"[A-Za-z0-9_-]+\.json", parts[3])))
                 total += item.size
                 if not allowed or total > 2 * 1024**3 or len(names) >= 100_000:
@@ -901,6 +901,12 @@ def execution_input(store: JobStore, identifier: str) -> Path:
     """Prepare a hardware-adjusted execution copy, preserving the source snapshot."""
     from pb8_config import load_pb8_config, save_prepared_pb8_config
     from vast_gpu_tuning import resolve_gpu_settings
+    from vast_worker_profiles import config_runtime
+    native=store.read(identifier).get('runtime','pb8')=='pb9'
+    if native:
+        from vast_pb9 import _adapter,save
+        load_pb8_config=_adapter().load
+        save_prepared_pb8_config=save
     directory = store.directory(identifier)
     row = store.read(identifier)
     source = directory / 'input'
@@ -919,7 +925,7 @@ def execution_input(store: JobStore, identifier: str) -> Path:
         config = load_pb8_config(source / 'optimize.json')
         config['backtest']['ohlcv_source_dir'] = remote_ohlcv
         config['optimize']['n_cpus'] = row['workers']
-        config['optimize'].setdefault('gpu', {})['exact_workers'] = row['workers']
+        if not native:config['optimize'].setdefault('gpu', {})['exact_workers'] = row['workers']
         intent_owner = row.get('lease_id') or identifier
         intent_path = store.directory(intent_owner) / 'intent.json'
         intent = store.read(intent_owner, 'intent.json') if intent_path.is_file() else {}

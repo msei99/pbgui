@@ -36,7 +36,8 @@ from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log
 from pb9_config import PB9ConfigError, PB9CancelSignal, get_pb9_editor_metadata, validate_pb9_backtest_config
 from pb9_config_helper import check_inline_config
-from pb9_backtest_runtime import launch_environment, source_identity, prepare_market_metadata
+from pb9_backtest_runtime import launch_environment, source_identity, require_cached_market_metadata
+from api.backtest_v8 import _launch_backtest_runner
 from pb9_runtime import inspect_pb9_runtime
 from pb9_result_helpers import load_equity_arrays, summarize_native_result
 from pb7_config import load_pb7_config, save_pb7_config
@@ -181,7 +182,7 @@ def _job_path(job, suffix='.json'):
 
 
 def _working_dir(job):
-    """Keep native caches and incidental files out of the source and other runtimes."""
+    """Locate legacy per-job workspaces for existing process recovery and cleanup."""
     _job_path(job)
     return _safe(_root('queue'), 'workspaces', job)
 
@@ -221,9 +222,15 @@ def _job_status(job):
             process = psutil.Process(int(record['pid']))
             command = process.cmdline()
             item = _read(_job_path(job))
+            expected_cwd = item.get('working_directory', str(_working_dir(job)))
+            cwd_matches_source = 'working_directory' not in item or (len(command) == 11
+                    and isinstance(expected_cwd, str)
+                    and Path(expected_cwd).is_absolute()
+                    and expected_cwd == str(Path(command[9]).resolve()))
             if (abs(process.create_time() - float(record['create_time'])) < .01
                     and command == item.get('launch_command')
-                    and process.cwd() == str(_working_dir(job))
+                    and cwd_matches_source
+                    and process.cwd() == expected_cwd
                     and process.status() != psutil.STATUS_ZOMBIE):
                 return 'running', record
         except (psutil.Error, ValueError, TypeError, KeyError):
@@ -358,11 +365,11 @@ def _start(job, cancel, automatic=False):
         snapshot = _job_path(job, '.config.json')
         if hashlib.sha256(snapshot.read_bytes()).hexdigest() != item['snapshot_sha256']:
             raise HTTPException(409, "PB9 queue snapshot changed")
-        work = _working_dir(job)
-        ensure_private_directory(work)
+        # Match PB8: native downloads, catalog proofs and prepared data belong
+        # to the configured bot installation and are reused across both tools.
+        work = Path(paths['pb9dir']).resolve()
         try:
-            prepare_market_metadata(work, _read(snapshot), Path(PBGDIR) / 'data/coindata', Path(paths['pb9dir']),
-                                    [paths.get('pb8dir'), paths.get('pb7dir')])
+            require_cached_market_metadata(work, _read(snapshot))
         except (OSError, ValueError) as exc:
             _log(SERVICE, 'PB9 offline metadata preflight failed', level='WARNING')
             raise HTTPException(409, str(exc)) from None
@@ -388,30 +395,18 @@ def _start(job, cancel, automatic=False):
                 item['started_at'] = time.time()
                 item['status_override'] = 'running'
                 item['launch_command'] = command
+                item['working_directory'] = str(work)
                 _write(_job_path(job), item)
-                # A transient user unit survives an API service restart. The existing PB8
-                # launcher is deliberately not used: its environment is unfiltered.
+                # Use PB8's launcher with native environment isolation and an
+                # explicit unit owner for cancellation before publication.
                 env = launch_environment(paths['pb9venv'])
-                from shutil import which
-                systemd_socket = Path(f'/run/user/{os.getuid()}/systemd/private')
-                if which('systemd-run') and systemd_socket.exists():
-                    unit_started = True  # submission can succeed even if its client times out
-                    result = subprocess.run([which('systemd-run'), '--user', '--quiet', '--collect',
-                        '--unit=pbgui-pb9-backtest-' + job, '--property=Type=exec', '--property=UMask=0077',
-                        f'--property=WorkingDirectory={work}',
-                        f'--property=StandardOutput=append:{log}', f'--property=StandardError=append:{log}',
-                        '--', '/usr/bin/env', '-i', *[f'{key}={value}' for key, value in env.items()], *command],
-                        env={**env, 'XDG_RUNTIME_DIR': str(systemd_socket.parents[1])},
-                        capture_output=True, timeout=15)
-                    if result.returncode:
-                        raise RuntimeError('Could not launch the persistent PB9 backtest unit')
+                unit_name = f'pbgui-pb9-backtest-{job}-{time.time_ns()}'
+                def own_unit():
+                    """Own a possibly submitted unit even if its client times out."""
+                    nonlocal unit_started
                     unit_started = True
-                else:
-                    descriptor = os.open(log, os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-                    with os.fdopen(descriptor, 'ab') as output:
-                        process = subprocess.Popen(command, cwd=work, env=env,
-                                                   stdin=subprocess.DEVNULL, stdout=output, stderr=output,
-                                                   start_new_session=True, close_fds=True)
+                process = _launch_backtest_runner(job, command, work, log, environment=env,
+                                                 unit_name=unit_name, on_unit_started=own_unit)
             deadline = time.monotonic() + 75
             while time.monotonic() < deadline:
                 if cancel.is_set():
@@ -437,8 +432,8 @@ def _start(job, cancel, automatic=False):
             cleanup_confirmed = True
             if unit_started:
                 try:
-                    stopped = subprocess.run(['systemctl', '--user', 'stop', 'pbgui-pb9-backtest-' + job],
-                                   env={**env, 'XDG_RUNTIME_DIR': str(systemd_socket.parents[1])},
+                    stopped = subprocess.run(['systemctl', '--user', 'stop', unit_name],
+                                   env={**env, 'XDG_RUNTIME_DIR': os.environ.get('XDG_RUNTIME_DIR') or f'/run/user/{os.getuid()}'},
                                    capture_output=True, timeout=15, check=False)
                     cleanup_confirmed = stopped.returncode == 0
                 except subprocess.SubprocessError:
@@ -447,7 +442,7 @@ def _start(job, cancel, automatic=False):
             if claimed and cancel.is_set() and cleanup_confirmed and not state.exists():
                 # An unpublished, cancelled preparation can safely be retried after
                 # API restart. Never discard a real completion/error from the runner.
-                for key in ('started_at', 'status_override', 'launch_command'):
+                for key in ('started_at', 'status_override', 'launch_command', 'working_directory'):
                     item.pop(key, None)
                 _write(_job_path(job), item)
                 for path in (pid, ready):
@@ -579,6 +574,21 @@ def _configured_coins_count(config):
     return len(coins)
 
 
+def store_draft(owner, config, migration_report=None):
+    """Keep one short-lived owner-bound draft for the shared Backtest/Optimize handoff."""
+    with _LOCK:
+        for key, value in list(_drafts.items()):
+            if time.monotonic() - value['created'] > 600:
+                del _drafts[key]
+        if len(_drafts) >= 100:
+            del _drafts[next(iter(_drafts))]
+        token = str(uuid.uuid4())
+        _drafts[token] = {'created': time.monotonic(), 'owner': owner, 'config': config}
+        if migration_report is not None:
+            _drafts[token]['migration_report'] = migration_report
+    return token
+
+
 def _operation(operation, cancel, payload=None):
     """Use the existing bounded PB9 request owner for all native/transactional work."""
     from api.pb9 import _request_envelope
@@ -620,16 +630,7 @@ def _operation(operation, cancel, payload=None):
             carry_comparison_reference(source, review['config'])
             if review.get('comparison_reference'):
                 source.setdefault('pbgui', {})['comparison_reference'] = review['comparison_reference']
-            with _LOCK:
-                for key, value in list(_drafts.items()):
-                    if time.monotonic() - value['created'] > 600:
-                        del _drafts[key]
-                if len(_drafts) >= 100:
-                    del _drafts[next(iter(_drafts))]
-                token = str(uuid.uuid4())
-                _drafts[token] = {'created': time.monotonic(), 'owner': args['owner'], 'config': source,
-                                  'migration_report': review['report']}
-            return {'draft_id': token, 'suggested_name': review['name']}
+            return {'draft_id': store_draft(args['owner'], source, review['report']), 'suggested_name': review['name']}
         if operation == 'bt9_metadata':
             paths = _paths()
             return get_pb9_editor_metadata(paths['pb9dir'], paths['pb9venv'],
@@ -654,15 +655,7 @@ def _operation(operation, cancel, payload=None):
                     backtest['ohlcv_source_dir'] = _pbgui_data_path()
             source, _ = _native(candidate, cancel)
             carry_comparison_reference(source, candidate)
-            with _LOCK:
-                for key, value in list(_drafts.items()):
-                    if time.monotonic() - value['created'] > 600:
-                        del _drafts[key]
-                if len(_drafts) >= 100:
-                    del _drafts[next(iter(_drafts))]
-                token = str(uuid.uuid4())
-                _drafts[token] = {'created': time.monotonic(), 'owner': args['owner'], 'config': source}
-            return {'draft_id': token}
+            return {'draft_id': store_draft(args['owner'], source)}
         if operation == 'bt9_draft_get':
             with _LOCK:
                 value = _drafts.get(args['id'])
@@ -927,6 +920,8 @@ def main_page(request: Request, session: SessionToken = Depends(require_auth)):
     """Render the same Backtest page used by PB8."""
     html = (Path(__file__).resolve().parents[1] / 'frontend/v7_backtest.html').read_text()
     html = render_page_urls(request, html, '/api/backtest-v9')
+    nav=Path(__file__).resolve().parents[1]/'frontend/pbgui_nav.js'
+    html=html.replace('%%NAV_HASH%%',str(int(nav.stat().st_mtime)))
     for key, value in {'VERSION': PBGUI_VERSION, 'SERIAL': str(PBGUI_SERIAL), 'BACKTEST_VERSION': 'v9',
                        'BACKTEST_LABEL': 'V9', 'BACKTEST_SUBTITLE': 'PBv9 BACKTEST', 'BACKTEST_NAV_CURRENT': 'v9_backtest'}.items():
         html = html.replace('"%%' + key + '%%"', script_json(value)).replace('%%' + key + '%%', value)
@@ -950,7 +945,7 @@ def _queue_settings():
         cpu = 1
     return {'autostart': str(values.get('autostart', 'False')).lower() == 'true',
             'cpu': max(1, min(cpu, maximum)), 'cpu_max': maximum, 'exchange_options': [],
-            'capabilities': {'local': True, 'native_schema': 'v9', 'optimizer': False,
+            'capabilities': {'local': True, 'native_schema': 'v9', 'optimizer': True,
                              'archive': True, 'autostart': True}}
 
 

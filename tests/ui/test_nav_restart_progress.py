@@ -33,6 +33,11 @@ const flush=()=>new Promise(r=>setImmediate(r));
   assert.equal(timers.length,0);assert.equal(requests,0);
   assert.match(nodes['pbgui-restart-status'].textContent,/Requesting/);
   showRestartOverlay('http://test',[],'old');
+  status={needs_restart:true,api_instance_id:'old',restart_request:{state:'waiting',reason:'PB9 inspection'}};
+  for(let i=0;i<70;i++){timers.shift()();await flush();}
+  assert.equal(reloads,0);assert.equal(timers.length,1);
+  assert.match(nodes['pbgui-restart-status'].textContent,/Restart queued.*PB9 inspection/);
+  status={needs_restart:false,api_instance_id:'old'};
   timers.shift()();await flush();assert.equal(reloads,0);
   status={needs_restart:false,api_instance_id:'new',restart_inspection_error:'unavailable'};
   timers.shift()();await flush();assert.equal(reloads,0);
@@ -56,10 +61,12 @@ def test_confirmed_restart_is_visible_during_delayed_request_and_sent_once():
 const assert=browserAssert;
 let _restartInFlight=false,_restartConfirmPending=false,_restartStatus={api_instance_id:'old'};
 let click,confirm,reply,requests=0,overlays=[],errors=[],removed=0;
-const btn={getAttribute(){return ''},classList:{add(){},remove(){}},addEventListener(_,fn){click=fn}};
+const btn={getAttribute(key){return key==='data-restart-blocked'?'1':'PB9 inspection'},classList:{add(){},remove(){}},addEventListener(_,fn){click=fn}};
 const document={getElementById(id){return id==='pbgui-restart-btn'?btn:{remove(){removed++}}}};
 const showNavConfirm=opts=>{
  if(opts.title==='Restart failed'){errors.push(opts);return Promise.resolve(true)}
+ assert.equal(opts.title,'Restart PBGui services');
+ assert.match(opts.detail,/wait automatically/);
  return new Promise(r=>confirm=r);
 };
 const _getAppBase=()=>'/prefix',authOptions=x=>x,fetchRestartStatus=()=>{};
@@ -121,6 +128,50 @@ def test_restart_button_is_visible_in_complete_navigation_script():
         page.locator('#pbgui-restart-btn').wait_for(state='visible', timeout=1500)
         assert 'PBGui API Server' in page.locator('#pbgui-restart-btn').get_attribute('title')
         assert not any(method == 'POST' and 'restart' in url for method, url in requests)
+        browser.close()
+
+
+def test_pending_restart_restores_progress_after_browser_reload():
+    """The complete shared nav restores a server-owned wait without another POST."""
+    import json
+
+    browser_api = __import__('browser_driver')
+    source = Path('frontend/pbgui_nav.js').read_text()
+    payload = {'needs_restart': True, 'api_instance_id': 'original', 'current_serial': 42,
+               'restart_request': {'state': 'waiting', 'reason': 'PB9 inspection',
+                                   'api_instance_id': 'original'}}
+    with browser_api.sync_browser() as driver:
+        browser = driver.chromium.launch(headless=True)
+        page = browser.new_page()
+        requests = []
+
+        def respond(route):
+            """Serve only isolated browser fixtures and safe restart status."""
+            url = route.request.url
+            requests.append((route.request.method, url))
+            if url.endswith('/nav.js'):
+                route.fulfill(body=source, content_type='text/javascript')
+            elif url.endswith('/api/server-status/stream'):
+                route.fulfill(body='data: ' + json.dumps(payload) + '\n\n',
+                              content_type='text/event-stream')
+            elif url.endswith('/api/server-status'):
+                route.fulfill(json=payload)
+            elif '/api/' in url:
+                route.fulfill(json={})
+            else:
+                route.fulfill(body='''<nav id="topnav"></nav><script>
+                    window.PBGUI_NAV_CONFIG={authenticated:true,current:'system_services'};
+                    </script><script src="/nav.js"></script>''', content_type='text/html')
+
+        page.route('**/*', respond)
+        page.goto('http://pbgui.test/editor?config=example#queue')
+        page.locator('#pbgui-restart-overlay').wait_for(state='visible', timeout=1500)
+        assert 'Restart queued' in page.locator('#pbgui-restart-btn').inner_text()
+        page.reload()
+        page.locator('#pbgui-restart-overlay').wait_for(state='visible', timeout=1500)
+        assert page.url == 'http://pbgui.test/editor?config=example#queue'
+        assert not any(method == 'POST' and 'restart' in url for method, url in requests)
+        assert page.locator('#pbgui-restart-btn').is_disabled()
         browser.close()
 
 

@@ -303,17 +303,20 @@ def require_manifest_proof(store, identifier):
 
 def _require_manifest_proof(store, identifier):
     """Validate the full persisted proof, converting malformed input at the boundary."""
-    from vast_jobs import REVISION
+    from vast_worker_profiles import worker_profile
 
     manifest = store.read(identifier, 'input/manifest.json')
     intent = store.read(identifier, 'intent.json')
+    runtime = store.read(identifier).get('runtime', 'pb8')
+    profile = worker_profile(runtime)
     folder = store.directory(identifier)
     markets = (manifest.get('metadata_snapshot') or {}).get('markets')
     if (not isinstance(markets, dict) or not markets or any(
             not isinstance(item, dict) or type(item.get('fetched_at')) not in (int, float)
             or not 0 <= time.time() - item['fetched_at'] < 86400 for item in markets.values())):
         raise VastError('Prepared market metadata is missing or expired; prepare fresh input before renting.', 422)
-    if (manifest.get('pb8_revision') != REVISION
+    if (manifest.get('runtime', 'pb8') != runtime or intent.get('runtime', 'pb8') != runtime
+            or manifest.get('pb8_revision') != profile.revision
             or not manifest.get('ohlcv_requirements') or not manifest.get('metadata_snapshot')
             or manifest.get('ohlcv_integrity') != seal_manifest(manifest)
             or _frozen_digest(folder / 'input/optimize.json', store.root) != manifest.get('config_sha256')

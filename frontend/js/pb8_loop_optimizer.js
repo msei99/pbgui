@@ -1520,7 +1520,7 @@
     if (!stopped && token === watchGeneration) timer = setTimeout(watch, 3000);
   }
   function mount() {
-    if (!window.optimizeEditorAdapter || !optimizeEditorAdapter.isV8 || root) return;
+    if (!window.optimizeEditorAdapter || !optimizeEditorAdapter.isV8 || optimizeEditorAdapter.isV9 || root) return;
     base = String(API_BASE).replace(/\/$/, '') + '/loops';
     PBGuiLoopInstructions.mount(base);
     var template = element('button', 'AI Loop Template', 'sb-btn accent'); template.id = 'btn-ai-loop-template'; template.type = 'button';

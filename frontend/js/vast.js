@@ -1,8 +1,9 @@
 /* Vast account and marketplace: same-origin requests, no persisted credentials. */
 (async function () {
   'use strict';
-  if (window.OPTIMIZE_VERSION !== 'v8') return;
-  const apiBase = window.API_BASE.replace(/\/optimize-v8$/, '/vast');
+  if (!['v8','v9'].includes(window.OPTIMIZE_VERSION)) return;
+  const nativeRuntime = window.OPTIMIZE_VERSION === 'v9';
+  const apiBase = window.API_BASE.replace(/\/optimize-v[89]$/, window.OPTIMIZE_VERSION==='v9' ? '/vast-v9' : '/vast');
   const host = document.getElementById('vast-queue-host');
   const bootstrap = new AbortController();
   let leaving = false;
@@ -1798,6 +1799,8 @@
     try {
       const data = await request('/jobs');
       if (disposed || current !== jobGeneration) return;
+      const profileNotice=el('vast-runtime-profile');
+      if(profileNotice && nativeRuntime){profileNotice.hidden=false;profileNotice.textContent=data.profile?.published ? 'Native PB9 worker '+data.profile.revision.slice(0,7) : (data.profile?.reason || 'Checking native PB9 worker publication…');}
       unreadableJobs = Array.isArray(data.unreadable) ? data.unreadable : [];
       ['cloud-inventory-warning', 'cloud-inventory-detail-warning'].forEach(id => {
         const notice = el(id); if (!notice) return;
@@ -1952,7 +1955,7 @@
       blockingCount ? 'Cloud configuration needs attention (' + blockingCount + ')' : 'GPU direction hints (' + errors.length + ')';
     heading.dataset.tip = blockingCount ? 'Saving remains available. Resolve these errors before queueing. Market data is checked during preparation.' : 'These hints do not block queueing. Dataset-dependent checks remain on the worker.';
     content.appendChild(heading);
-    if (report) heading.dataset.tip += ' Worker PB8 ' + report.revision.slice(0, 7) + '.';
+    if (report && report.revision) heading.dataset.tip += ' Worker ' + (nativeRuntime?'PB9':'PB8') + ' ' + report.revision.slice(0, 7) + '.';
     const list = document.createElement('ul');
     const extra = document.createElement('details'), extraList = document.createElement('ul');
     if (errors.length > 6) { const summary = document.createElement('summary'); summary.textContent = (errors.length - 6) + ' more issues'; extra.appendChild(summary); extra.appendChild(extraList); }
@@ -2091,6 +2094,7 @@
   async function refreshGpuRecommendation(config) {
     const current = ++gpuRecommendationGeneration;
     const offer = selectedOffer;
+    if (nativeRuntime) { gpuRecommendation=null; renderGpuRecommendation(); return; }
     if (config?.optimize?.backend !== 'gpu') {
       gpuRecommendation = null; renderGpuRecommendation(); return;
     }

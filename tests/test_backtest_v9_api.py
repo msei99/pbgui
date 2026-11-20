@@ -22,6 +22,8 @@ def native(tmp_path, monkeypatch):
     source = copy.deepcopy(metadata['template'])
     status = {'detected':True, 'commit':'a'*40, 'config_schema':'v9.0.0', 'package_version':'8.2.0.dev0'}
     monkeypatch.setattr(bt,'PBGDIR',tmp_path)
+    from api import backtest_v8
+    monkeypatch.setattr(backtest_v8,'_systemd_user_manager_available',lambda:False)
     from api import backtest_v7
     monkeypatch.setattr(backtest_v7, '_archive_retests_dir', lambda: tmp_path/'archive-retest-state')
     monkeypatch.setattr(bt,'_pbgui_data_path',lambda:str(tmp_path/'data/ohlcv'))
@@ -589,7 +591,7 @@ def test_missing_offline_metadata_leaves_queue_and_snapshot_unchanged(native,mon
     raw=bt._job_path(job,'.config.json').read_bytes()
     monkeypatch.setattr(bt,'claim_backtest_slot',lambda *args,**kwargs:pytest.fail('metadata must be checked first'))
     with pytest.raises(HTTPException) as error:operation('start',id=job)
-    assert error.value.status_code==409 and 'Coin Data' in error.value.detail
+    assert error.value.status_code==409 and 'PB9 cache' in error.value.detail
     assert operation('queue')['queue'][0]['status']=='queued'
     assert bt._job_path(job,'.config.json').read_bytes()==raw
 
@@ -761,7 +763,13 @@ def test_auto_pause_during_runtime_preflight_prevents_spawn(native, monkeypatch)
     job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
     policy = {'autostart': 'True'}
     monkeypatch.setattr(bt, 'load_ini_section', lambda _: policy.copy())
-    monkeypatch.setattr(bt, 'prepare_market_metadata', lambda *args: policy.update(autostart='False'))
+    original_runtime = bt._runtime
+    def preflight(cancel=None):
+        """Acknowledge a pause while runtime verification is still in progress."""
+        result = original_runtime(cancel)
+        policy.update(autostart='False')
+        return result
+    monkeypatch.setattr(bt, '_runtime', preflight)
     monkeypatch.setattr(bt, 'claim_backtest_slot', lambda *args, **kwargs: pytest.fail('must not reserve'))
     with pytest.raises(HTTPException, match='paused'):
         bt._start(job, PB9CancelSignal(), automatic=True)
@@ -773,7 +781,6 @@ def test_manual_start_uses_configured_shared_capacity_when_autostart_disabled(na
     """Manual execution remains available and uses the same cross-version slot limit."""
     source, _, _ = native
     job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
-    monkeypatch.setattr(bt, 'prepare_market_metadata', lambda *args: None)
     monkeypatch.setattr(bt, 'load_ini_section', lambda _: {'cpu': '2'})
     monkeypatch.setattr(bt.os, 'cpu_count', lambda: 4)
     claims = []
@@ -858,7 +865,6 @@ def test_native_automatic_launch_publishes_one_slot_and_survives_controller_stop
     job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
     monkeypatch.setattr(bt, '_runtime', lambda cancel=None: ({**status, 'cli_file': root/'cli'},
                         {'pb9dir': str(root/'source'), 'pb9venv': str(root/'env/bin/python')}))
-    monkeypatch.setattr(bt, 'prepare_market_metadata', lambda *args: None)
     monkeypatch.setattr(bt, 'load_ini_section', lambda _: {'autostart': 'True', 'cpu': '1'})
     monkeypatch.setattr(shutil, 'which', lambda *_: None)
     claims, published, launches = [], [], []
@@ -886,6 +892,9 @@ def test_native_automatic_launch_publishes_one_slot_and_survives_controller_stop
     assert len(launches) == len(published) == 1
     assert published[0][:4] == ('v9', job, 12345, 1.25)
     assert launches[0][1]['start_new_session'] is True
+    assert launches[0][1]['cwd'] == str((root/'source').resolve())
+    assert bt._read(bt._job_path(job))['working_directory'] == str((root/'source').resolve())
+    assert not bt._working_dir(job).exists()
     assert not bt._job_path(job, '.state.json').exists()
 
 
@@ -942,7 +951,6 @@ def test_cancelled_unpublished_start_returns_to_queue_after_confirmed_cleanup(na
     job = operation('enqueue', {'name': 'sample', 'config': source})['filename']
     monkeypatch.setattr(bt, '_runtime', lambda cancel=None: ({**status, 'cli_file': root/'cli'},
                         {'pb9dir': str(root/'source'), 'pb9venv': str(root/'env/bin/python')}))
-    monkeypatch.setattr(bt, 'prepare_market_metadata', lambda *args: None)
     monkeypatch.setattr(bt, 'load_ini_section', lambda _: {'autostart': 'True'})
     monkeypatch.setattr(shutil, 'which', lambda *_: None)
     cancel = PB9CancelSignal(); stopped = []
@@ -1554,3 +1562,59 @@ def test_completed_native_retest_cleanup_failure_never_downgrades_success(native
     monkeypatch.setattr(adapter,'cleanup',cleanup)
     backtest_v7._process_archive_retest_completions()
     assert backtest_v7._load_archive_retest_runs()[0]['result']['cleanup']['complete'] is True
+
+
+@pytest.mark.parametrize('layout',['legacy','native','foreign_pid','wrong_cwd'])
+def test_process_recovery_checks_launch_cwd_and_retains_completed_state(native,monkeypatch,layout):
+    """Both launch layouts remain recoverable; stale PIDs cannot hide completion."""
+    from types import SimpleNamespace
+    source,_,root=native
+    job=operation('enqueue',{'name':'sample','config':source})['filename']
+    command=['python','-I','-B','runner','backtest','state','pid','ready','cli',str(root/'source'),'config']
+    item=bt._read(bt._job_path(job));item.update(launch_command=command,started_at=1)
+    cwd=str(bt._working_dir(job)) if layout=='legacy' else str((root/'source').resolve())
+    if layout!='legacy':item['working_directory']=cwd
+    bt._write(bt._job_path(job),item)
+    bt._write(bt._job_path(job,'.pid.json'),{'pid':12345,'create_time':1.25})
+    bt._write(bt._job_path(job,'.state.json'),{'returncode':0})
+    process=SimpleNamespace(create_time=lambda:2.25 if layout=='foreign_pid' else 1.25,
+                            cmdline=lambda:['unrelated'] if layout=='foreign_pid' else command,
+                            cwd=lambda:str(root/'foreign') if layout=='wrong_cwd' else cwd,
+                            status=lambda:bt.psutil.STATUS_RUNNING)
+    monkeypatch.setattr(bt.psutil,'Process',lambda _:process)
+    assert bt._job_status(job)[0]==('complete' if layout in {'foreign_pid','wrong_cwd'} else 'running')
+
+
+def test_cancelled_native_systemd_submission_cleans_exact_owned_unit(native,monkeypatch):
+    """The shared launcher clears manager variables and retains ownership on timeout."""
+    import subprocess
+    from types import SimpleNamespace
+    from api import backtest_v8
+    source,status,root=native
+    job=operation('enqueue',{'name':'sample','config':source})['filename']
+    monkeypatch.setattr(bt,'_runtime',lambda cancel=None:({**status,'cli_file':str(root/'cli')},
+                        {'pb9dir':str(root/'source'),'pb9venv':str(root/'env/bin/python')}))
+    monkeypatch.setattr(backtest_v8,'_systemd_user_manager_available',lambda:True)
+    monkeypatch.setattr(backtest_v8,'which',lambda _: '/usr/bin/systemd-run')
+    monkeypatch.setenv('PBGUI_FAKE_SECRET','not-in-child')
+    monkeypatch.setattr(bt,'claim_backtest_slot',lambda *args,**kwargs:True)
+    released=[];calls=[];cancel=PB9CancelSignal()
+    monkeypatch.setattr(bt,'release_backtest_slot',lambda *args:released.append(args))
+    def run(command,**kwargs):
+        """Model an acknowledged timeout without ever talking to a service manager."""
+        calls.append((command,kwargs))
+        assert 'PBGUI_FAKE_SECRET' not in kwargs['env']
+        if command[0]=='/usr/bin/systemd-run':
+            cancel.set()
+            raise subprocess.TimeoutExpired(command,15)
+        assert command[:3]==['systemctl','--user','stop']
+        return SimpleNamespace(returncode=0)
+    monkeypatch.setattr(bt.subprocess,'run',run)
+    with pytest.raises(subprocess.TimeoutExpired):bt._start(job,cancel)
+    launched=calls[0][0];stopped=calls[1][0]
+    unit=next(arg.split('=',1)[1] for arg in launched if arg.startswith('--unit='))
+    assert unit.startswith('pbgui-pb9-backtest-'+job+'-') and stopped[-1]==unit
+    assert '/usr/bin/env' in launched and '-i' in launched
+    assert released==[('v9',job)]
+    assert bt._job_status(job)[0]=='queued'
+    assert not any(key in bt._read(bt._job_path(job)) for key in ('started_at','launch_command','working_directory'))

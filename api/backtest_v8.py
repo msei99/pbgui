@@ -1025,37 +1025,49 @@ def _systemd_user_manager_available() -> bool:
     return (runtime_dir / "systemd" / "private").exists()
 
 
-def _launch_backtest_runner(filename: str, command: list[str], cwd: Path, log_path: Path) -> subprocess.Popen | None:
-    """Launch a runner outside the API cgroup when user systemd is available."""
+def _launch_backtest_runner(filename: str, command: list[str], cwd: Path, log_path: Path, *,
+                           environment: dict | None = None, unit_name: str | None = None,
+                           on_unit_started=None) -> subprocess.Popen | None:
+    """Share persistent launch mechanics, with optional isolated native ownership."""
+    env = (environment if environment is not None else
+           {**os.environ, "PATH": str(Path(command[0]).parent) + os.pathsep + os.environ.get("PATH", "")})
     if _systemd_user_manager_available():
         atomic_write_private_text(log_path, "")
-        unit = f"pbgui-pb8-backtest-{filename}-{time.time_ns()}"
+        unit = unit_name or f"pbgui-pb8-backtest-{filename}-{time.time_ns()}"
         runtime_dir = os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}"
+        launch_command = (command if environment is None else
+                          ['/usr/bin/env', '-i', *[f'{key}={value}' for key, value in env.items()], *command])
+        if on_unit_started is not None:
+            on_unit_started()
         result = subprocess.run(
             [
                 str(which("systemd-run")), "--user", "--quiet", "--collect", f"--unit={unit}",
                 "--property=Type=exec", "--property=UMask=0077", f"--property=WorkingDirectory={cwd}",
                 f"--property=StandardOutput=append:{log_path}", f"--property=StandardError=append:{log_path}",
-                f"--setenv=PATH={Path(command[0]).parent}{os.pathsep}{os.environ.get('PATH', '')}", "--", *command,
+                f"--setenv=PATH={env['PATH']}", "--", *launch_command,
             ],
             check=False,
             capture_output=True,
             text=True,
             timeout=15,
-            env={**os.environ, "XDG_RUNTIME_DIR": runtime_dir},
+            env={**env, "XDG_RUNTIME_DIR": runtime_dir},
         )
         if result.returncode != 0:
             detail = ((result.stderr or "") + (result.stdout or "")).strip()
-            raise RuntimeError(f"Could not start persistent PB8 backtest unit: {detail or result.returncode}")
+            raise RuntimeError(f"Could not start persistent backtest unit: {detail or result.returncode}")
         return None
 
-    log_file = open(log_path, "w", encoding="utf-8")
+    descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_NOFOLLOW', 0), 0o600)
+    if hasattr(os, 'fchmod'):
+        os.fchmod(descriptor, 0o600)
+    log_file = os.fdopen(descriptor, "w", encoding="utf-8")
     try:
         kwargs = {
             "cwd": str(cwd),
             "stdout": log_file,
             "stderr": log_file,
-            "env": {**os.environ, "PATH": str(Path(command[0]).parent) + os.pathsep + os.environ.get("PATH", "")},
+            "env": env,
+            "stdin": subprocess.DEVNULL,
             "close_fds": True,
         }
         if platform.system() == "Windows":

@@ -250,6 +250,10 @@ def resolve_gpu_settings(
     rental_gpu_profile: dict | None = None,
 ) -> dict:
     """Fill only automatic GPU fields and return an auditable tuning record."""
+    from vast_worker_profiles import config_runtime
+    if config_runtime(config)=='pb9':
+        from vast_pb9 import resolve_gpu_settings as native_settings
+        return native_settings(config,state,offer,rental_gpu_profile)
     optimize = config.setdefault('optimize', {})
     gpu = optimize.setdefault('gpu', {})
     hardware = state.get('hardware') if isinstance(state.get('hardware'), dict) else {}

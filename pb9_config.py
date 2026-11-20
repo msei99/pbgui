@@ -72,12 +72,12 @@ def _run_helper(status: dict, timeout: float, *, operation: str = "template", co
         "operation": operation, "pb9_dir": status["pb9dir"],
         "config_schema": status["config_schema"], "package_version": status["package_version"],
     }
-    if operation in {"validate", "validate_live", "validate_backtest", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates"}:
+    if operation in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates"}:
         payload["config"] = config
-    if operation in {"ohlcv_preflight", "ohlcv_start_dates"}:
+    if operation in {"ohlcv_preflight", "ohlcv_start_dates", "market_identifiers"}:
         payload.update(probe_context or {})
     request = json.dumps(payload, allow_nan=False).encode("utf-8")
-    if len(request) > (MAX_VALIDATION_BYTES if operation in {"validate", "validate_live", "validate_backtest", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates"} else 16384):
+    if len(request) > (MAX_VALIDATION_BYTES if operation in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates", "market_identifiers"} else 16384):
         raise PB9ConfigError("invalid_request")
     env = {key: value for key, value in os.environ.items() if key.upper() in _ENV_KEYS}
     env["PATH"] = os.pathsep.join((str(Path(status["pb9venv"]).parent), os.defpath))
@@ -201,16 +201,20 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
         raise PB9ConfigError("invalid_response")
     if operation == "template" and not isinstance(result.get("config"), dict):
         raise PB9ConfigError("invalid_response")
-    if operation in {"validate", "validate_live", "validate_backtest"} and result.get("valid") is not True:
+    if operation in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config"} and result.get("valid") is not True:
         raise PB9ConfigError("invalid_response")
     src = (Path(status["pb9dir"]) / "src").resolve()
     module_keys = ("schema_module_file", "version_module_file")
-    if operation in {"validate", "validate_live", "validate_backtest"}:
+    if operation in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config"}:
         module_keys += ("load_module_file",)
     elif operation == "migrate_v8":
         module_keys += ("converter_module_file",)
-    elif operation == "metadata":
+    elif operation in {"metadata", "optimize_metadata"}:
         module_keys += ("registry_module_file", "strategy_module_file")
+    elif operation == "market_identifiers":
+        module_keys += ("resolver_module_file",)
+    if operation == "result_config":
+        module_keys += ("result_records_module_file",)
     for key in module_keys:
         value = result.get(key)
         if not isinstance(value, str) or not Path(value).is_absolute() or not Path(value).resolve().is_relative_to(src):
@@ -226,12 +230,45 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
         "schema_module_file": result["schema_module_file"],
         "version_module_file": result["version_module_file"],
     }
+    if operation == "market_identifiers":
+        catalog = result.get('market_catalog')
+        if (not isinstance(catalog,dict) or catalog.get('contract_version') != 1
+                or not isinstance(catalog.get('symbols'),list) or len(catalog['symbols']) > 20000
+                or any(not isinstance(value,str) or not value for value in catalog['symbols'])
+                or not isinstance(catalog.get('catalog'),list) or len(catalog['catalog']) > 20000
+                or any(not isinstance(row,dict) or not isinstance(row.get('config_id'),str)
+                       or not isinstance(row.get('display'),str) or not isinstance(row.get('coin'),str)
+                       or not isinstance(row.get('resolutions'),list) for row in catalog['catalog'])
+                or not isinstance(catalog.get('statuses'),dict) or len(catalog['statuses']) > 1000
+                or not isinstance(catalog.get('exchanges'),list)):
+            raise PB9ConfigError('invalid_response')
+        return {'market_catalog':catalog,'source':source}
     if operation in {"ohlcv_preflight", "ohlcv_start_dates"}:
         if not isinstance(result.get("summary"), dict) or not isinstance(result.get("request"), dict):
             raise PB9ConfigError("invalid_response")
         return {"report": {key: value for key, value in result.items() if key not in {"config_schema", "package_version", "schema_module_file", "version_module_file"}}, "source": source}
-    if operation in {"validate", "validate_live", "validate_backtest"}:
+    if operation in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config"}:
         source["load_module_file"] = result["load_module_file"]
+        if operation == 'result_config':
+            config = result.get('config')
+            check_inline_config(config, status['config_schema'], allow_inline_overrides=True)
+            source['result_records_module_file'] = result['result_records_module_file']
+            return {'config': config, 'source': source}
+        if operation == 'optimize_effective':
+            effective=result.get('effective')
+            if not isinstance(effective,dict) or effective.get('config_version')!=status['config_schema']:
+                raise PB9ConfigError('invalid_response')
+            _require_json_value(effective)
+            return {'effective':effective,'source':source}
+        if operation == 'optimize_cloud_plan':
+            plans = result.get('data_plans')
+            if (not isinstance(plans,list) or not 1 <= len(plans) <= 256
+                    or any(not isinstance(plan,dict) or not isinstance(plan.get('backtest'),dict)
+                           or not isinstance(plan.get('live'),dict) or type(plan.get('warmup_minutes')) is not int
+                           or plan['warmup_minutes'] < 0 for plan in plans)):
+                raise PB9ConfigError('invalid_response')
+            check_inline_config(result.get('config'), status['config_schema'])
+            return {'config':result['config'], 'data_plans':plans, 'source':source}
         return {"valid": True, "source": source}
     if operation == "migrate_v8":
         migration = result.get('migration')
@@ -245,7 +282,7 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
             raise PB9ConfigError('invalid_response')
         source['converter_module_file'] = result['converter_module_file']
         return {'migration': migration, 'source': source}
-    if operation == "metadata":
+    if operation in {"metadata", "optimize_metadata"}:
         metadata = result.get("metadata")
         if (not isinstance(metadata, dict) or metadata.get("contract_version") != 1
                 or not isinstance(metadata.get("template"), dict)
@@ -270,6 +307,12 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
                     or any(not isinstance(kind, str) or kind not in {"boolean", "integer", "float", "string", "array", "object"} for kind in field["types"])
                     or type(field.get("nullable")) is not bool):
                 raise PB9ConfigError("invalid_response")
+        catalog = metadata.get('exchange_options')
+        if (not isinstance(catalog, dict) or set(catalog) != {'live','backtest','optimize','suite'}
+                or any(not isinstance(values,list) or not values or len(values)>64
+                       or any(not isinstance(value,str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,63}',value) for value in values)
+                       or len(set(values))!=len(values) for values in catalog.values())):
+            raise PB9ConfigError('invalid_response')
         rust_file = result.get("rust_module_file")
         environment = Path(status["pb9venv"]).absolute().parent.parent.resolve()
         if not isinstance(rust_file, str) or not Path(rust_file).is_absolute() or not Path(rust_file).resolve().is_relative_to(environment):
@@ -277,7 +320,12 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
         source.update({key: result[key] for key in ("registry_module_file", "strategy_module_file", "rust_module_file")})
         source["rust_source_agreement"] = "not_checked"
         _require_json_value(metadata)
-        return {key: metadata[key] for key in ("contract_version", "template", "prototype", "fields", "strategies", "strategy_specs", "strategy_defaults")} | {"source": source}
+        if operation == 'optimize_metadata':
+            if (not isinstance(metadata.get('all_bounds'), dict) or not isinstance(metadata.get('backend_contract'), dict)
+                    or not isinstance(metadata.get('scoring'), dict) or not isinstance(metadata.get('limits'), dict)):
+                raise PB9ConfigError('invalid_response')
+            return {**metadata, 'source':source}
+        return {key: metadata[key] for key in ("contract_version", "template", "prototype", "fields", "strategies", "strategy_specs", "strategy_defaults", "exchange_options")} | {"source": source}
     return {"config": result["config"], "source": source}
 
 
@@ -311,6 +359,18 @@ def validate_pb9_backtest_config(config, pb9dir, pb9venv, other_slots=None, *, t
                              config=config, cancel_event=cancel_event)
 
 
+def get_pb9_optimize_metadata(pb9dir, pb9venv, other_slots=None, *, timeout=60, cancel_event=None):
+    """Read native optimizer contracts through the existing isolated helper."""
+    return _config_operation('optimize_metadata', pb9dir, pb9venv, other_slots, timeout=timeout,
+                             cancel_event=cancel_event)
+
+
+def validate_pb9_optimize_config(config, pb9dir, pb9venv, other_slots=None, *, timeout=60, cancel_event=None):
+    """Check native search bounds and config acceptance without executing optimization."""
+    return _config_operation('validate_optimize', pb9dir, pb9venv, other_slots, timeout=timeout,
+                             config=config, cancel_event=cancel_event)
+
+
 def validate_pb9_config(config: dict, pb9dir: str | Path | None, pb9venv: str | Path | None,
                         other_slots: dict | None = None, *, timeout: float = 60,
                         cancel_event: threading.Event | PB9CancelSignal | None = None) -> dict:
@@ -336,6 +396,9 @@ def validate_pb9_document(document: dict, pb9dir: str | Path | None, pb9venv: st
     The strict JSON snapshot is independent of caller-owned nested objects, and
     native preparation never replaces it with hydrated defaults. This is an
     in-memory boundary only: no loading, saving, migration or metadata rewriting.
+    The explicit ``result`` target instead extracts authored config through the
+    selected native result reader before canonical validation, without hydrating
+    defaults into the returned source. GUI metadata remains separate.
     Source identity is reported separately, never trusted from GUI metadata.
     The document limit counts ASCII-escaped JSON bytes. The separate helper
     request cap also includes runtime identity, so near-limit native payloads can
@@ -360,9 +423,13 @@ def validate_pb9_document(document: dict, pb9dir: str | Path | None, pb9venv: st
         raise error from exc
     metadata = snapshot.pop("pbgui", None)
     options = {"cancel_event": cancel_event} if cancel_event is not None else {}
-    if validation_target not in {"config", "backtest"}:
+    if validation_target == "result":
+        validation = _config_operation("result_config", pb9dir, pb9venv, other_slots,
+                                       timeout=timeout, config=snapshot, **options)
+        return {"config": validation["config"], "pbgui": metadata, "source": validation["source"]}
+    if validation_target not in {"config", "backtest", "optimize"}:
         raise PB9ConfigError("invalid_document")
-    validator = validate_pb9_backtest_config if validation_target == "backtest" else validate_pb9_config
+    validator = {"backtest": validate_pb9_backtest_config, "optimize": validate_pb9_optimize_config}.get(validation_target, validate_pb9_config)
     validation = validator(snapshot, pb9dir, pb9venv, other_slots, timeout=timeout, **options)
     return {"config": snapshot, "pbgui": metadata, "source": validation["source"]}
 
@@ -380,28 +447,35 @@ def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: 
             raise PB9ConfigError("invalid_timeout")
         if not _SUPPORTED_PLATFORM:
             raise PB9ConfigError("unsupported_platform")
-        validating = operation in {"validate", "validate_live", "validate_backtest"}
+        validating = operation in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config"}
         probing = operation in {"ohlcv_preflight", "ohlcv_start_dates"}
         if operation == "migrate_v8":
             check_migration_input(config)
-        if validating or probing:
-            check_inline_config(config, allow_inline_overrides=probing or operation in {"validate_live", "validate_backtest"})
+        if operation == "result_config":
+            _require_json_value(config)
+            if not isinstance(config, dict):
+                raise PB9ConfigError("invalid_document")
+        elif validating or probing:
+            check_inline_config(config, allow_inline_overrides=probing or operation in {"validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective"})
         status = (inspect_pb9_runtime(pb9dir, pb9venv, other_slots, cancel_event=cancel_event)
                   if cancel_event is not None else inspect_pb9_runtime(pb9dir, pb9venv, other_slots))
         if cancel_event is not None and cancel_event.is_set():
             raise PB9ConfigError("helper_cancelled")
         if not status["detected"]:
             raise PB9ConfigError("runtime_not_detected")
-        if probing:
+        if operation == 'market_identifiers':
+            raw = _run_helper(status, timeout, operation=operation, cancel_event=cancel_event, probe_context=probe_context)
+        elif probing:
             check_inline_config(config, status["config_schema"], allow_inline_overrides=True)
             raw = _run_helper(status, timeout, operation=operation, config=config, cancel_event=cancel_event, probe_context=probe_context)
         elif operation == "migrate_v8":
             raw = _run_helper(status, timeout, operation=operation, config=config, cancel_event=cancel_event)
         elif validating:
-            check_inline_config(config, status["config_schema"], allow_inline_overrides=operation in {"validate_live", "validate_backtest"})
+            if operation != "result_config":
+                check_inline_config(config, status["config_schema"], allow_inline_overrides=operation in {"validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective"})
             options = {"cancel_event": cancel_event} if cancel_event is not None else {}
             raw = _run_helper(status, timeout, operation=operation, config=config, **options)
-        elif operation == "metadata":
+        elif operation in {"metadata", "optimize_metadata"}:
             options = {"cancel_event": cancel_event} if cancel_event is not None else {}
             raw = _run_helper(status, timeout, operation=operation, **options)
         elif cancel_event is not None:
@@ -423,3 +497,15 @@ def migrate_pb8_config_to_pb9(bundle, pb9dir, pb9venv, other_slots=None, *, time
     """Preview an official PB8 migration using the existing isolated PB9 process owner."""
     return _config_operation('migrate_v8', pb9dir, pb9venv, other_slots, timeout=timeout,
                              config=bundle, cancel_event=cancel_event)
+
+
+def get_pb9_optimize_cloud_plan(config,pb9dir,pb9venv,other_slots=None,*,timeout=60,cancel_event=None):
+    """Ask the selected native helper for exact bounds-aware cloud data requirements."""
+    return _config_operation('optimize_cloud_plan',pb9dir,pb9venv,other_slots,config=config,
+        timeout=timeout,cancel_event=cancel_event)
+
+
+def get_pb9_optimize_effective(config,pb9dir,pb9venv,other_slots=None,*,timeout=60,cancel_event=None):
+    """Resolve native policy for resume comparison without rewriting authored source."""
+    return _config_operation('optimize_effective',pb9dir,pb9venv,other_slots,config=config,
+        timeout=timeout,cancel_event=cancel_event)

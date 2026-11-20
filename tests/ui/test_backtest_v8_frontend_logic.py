@@ -58,7 +58,7 @@ def test_pb8_exposes_read_only_legacy_results_panel() -> None:
     page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
     adapter = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
 
-    assert "/app/js/backtest_editor_adapter.js?v=20" in page
+    assert "/app/js/backtest_editor_adapter.js?v=21" in page
     assert "items.push({ panel: 'legacy'" in adapter
     assert "initialPanels: ['configs', 'queue', 'results', 'archive', 'legacy']" in adapter
     assert "rebacktestSelectedLegacy" in adapter
@@ -737,7 +737,7 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
 
     assert '/app/css/backtest_shell.css?v=9' in v7_source
     assert '/app/js/backtest_shell.js?v=5' in v7_source
-    assert '/app/js/backtest_editor_adapter.js?v=20' in v7_source
+    assert '/app/js/backtest_editor_adapter.js?v=21' in v7_source
     assert "PBGuiBacktestShell.upgradeLegacy" in v7_source
     assert "PBGuiBacktestEditorAdapter.create(BACKTEST_VERSION)" in v7_source
     assert "sideConfig.risk" in adapter_source
@@ -750,13 +750,14 @@ def test_v7_and_v8_share_the_same_backtest_shell() -> None:
 def test_delayed_config_load_does_not_replace_results_sidebar() -> None:
     """A stale config response must not reopen the editor after navigation."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
-    functions = "\n\n".join(_extract_function(source, name) for name in ("editConfig", "newConfig"))
+    functions = "\n\n".join(_extract_function(source, name) for name in ("editConfig", "newConfig", "markBacktestDraftSaved"))
     script = textwrap.dedent(
         f"""
         const assert = browserAssert;
         const backtestEditorAdapter = {{isV8: false}};
         let currentPanel = 'configs';
         let editingConfig = null;
+        let backtestDraftEdited = true;
         let pendingResolve;
         let opened = [];
         function apiFetch() {{
@@ -805,7 +806,8 @@ def test_panel_navigation_closes_config_editor_sidebar_outside_configs() -> None
         let rendered = 0;
         let loaded = 0;
         let selected = [];
-        const window = {{PBGuiEditorShared: {{clearFixedValidationStatus() {{}}}}}};
+        const window = {{location: {{href:'http://fixture.test/api/backtest-v8/main_page'}},
+          PBGuiEditorShared: {{clearFixedValidationStatus() {{}}}}}};
         const document = {{getElementById() {{ return {{style: {{}}}}; }}}};
         const backtestShell = {{selectPanel(id) {{ selected.push(id); }}}};
         let currentPanel = 'configs';
@@ -865,6 +867,10 @@ def test_editor_results_button_opens_the_unfiltered_results_panel() -> None:
           'results-config-filter': {{value: 'old config'}}
         }};
         const document = {{getElementById(id) {{ return elements[id] || null; }}}};
+        const window = {{location: {{href:'http://fixture.test/api/backtest-v8/main_page'}}}};
+        const history = {{replaceState(_state, _unused, url) {{
+          assert.equal(url.searchParams.get('edit_draft'), '1');
+        }}}};
         const backtestEditorAdapter = {{isV8: true}};
         const backtestShell = {{setEditorMode(value) {{ assert.equal(value, true); }}}};
         let _ohlcvPreflightController = null;
@@ -1389,11 +1395,37 @@ def test_v8_backtest_result_can_open_pb8_optimize() -> None:
     adapter = (ROOT / "frontend" / "js" / "backtest_editor_adapter.js").read_text(encoding="utf-8")
     page = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
 
-    assert "window.optimizeFromResult = function()" in adapter
-    assert "'/api/optimize-v8/main_page?opt_draft_id='" in adapter
+    assert "window.optimizeFromResult = resultOptimizeAction('v8', origin)" in adapter
+    assert "'/api/optimize-' + version + '/main_page?opt_draft_id='" in adapter
     unsupported = adapter.split("var unsupported =", 1)[1].split("];", 1)[0]
     assert "'optimizeFromResult'" not in unsupported
-    assert "/app/js/backtest_editor_adapter.js?v=20" in page
+    assert "/app/js/backtest_editor_adapter.js?v=21" in page
+
+    function = _extract_function(adapter, 'resultOptimizeAction')
+    script = textwrap.dedent(f"""
+        const assert = browserAssert;
+        const requests = [];
+        const source = {{config_version:'fixture',bot:{{native:true}}}};
+        const window = {{location:{{href:''}}, getSelectedResults() {{return ['group/result'];}},
+          apiFetch(path, options) {{
+            requests.push([path, options]);
+            return Promise.resolve(path === '/optimize-draft' ? {{draft_id:'draft'}} : source);
+          }}, toast(message) {{throw new Error(message);}}}};
+        {function}
+        (async () => {{
+          for (const version of ['v8','v9']) {{
+            requests.length = 0;
+            await resultOptimizeAction(version, '/mounted')();
+            assert.equal(requests[0][0], '/results/config?path=group%2Fresult');
+            assert.equal(requests[1][0], '/optimize-draft');
+            assert.deepEqual(JSON.parse(requests[1][1].body), {{config:source}});
+            assert.equal(window.location.href,
+              '/mounted/api/optimize-' + version + '/main_page?opt_draft_id=draft&draft_name=result');
+          }}
+        }})().catch(error => {{console.error(error);finishTest(1);}});
+    """)
+    completed = run_javascript(['-e', script], cwd=ROOT, text=True, capture_output=True, check=False)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
 def test_v8_result_add_to_run_uses_direct_canonical_draft() -> None:

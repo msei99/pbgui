@@ -1,6 +1,22 @@
 (function(global) {
   'use strict';
 
+  function stringifyNonSecretDraft(payload) {
+    function check(value, path) {
+      if (!value || typeof value !== 'object') return;
+      Object.keys(value).forEach(function(key) {
+        var coinMap = path === 'override_configs' || path === 'config.coin_overrides';
+        var symbolKey = coinMap && value[key] && typeof value[key] === 'object' && !Array.isArray(value[key]);
+        if (!symbolKey && /(password|secret|private.?key|api.?key|token|credential)/i.test(key)) {
+          throw new Error('This draft contains credential fields and cannot be kept in browser storage.');
+        }
+        check(value[key], path ? path + '.' + key : key);
+      });
+    }
+    check(payload, '');
+    return JSON.stringify(payload);
+  }
+
   function resolveElement(target) {
     if (!target) return null;
     if (typeof target === 'string') return document.getElementById(target);
@@ -2190,7 +2206,6 @@
       var visibleIdx = 0;
 
       state.options.forEach(function(opt) {
-        if (upperFilter && String(opt).toUpperCase().indexOf(upperFilter) < 0) return;
         var selected = state.selected.indexOf(opt) >= 0;
         var exclusive = isExclusiveValue(id, opt);
         var inOther = !exclusive && cpSelected.indexOf(opt) >= 0;
@@ -2210,6 +2225,16 @@
           state: state,
           controller: api,
         });
+        var searchText = String(opt);
+        if (coinIds[id]) {
+          // Search coin names and native contracts, not the venue prefix or
+          // its disambiguation suffix. Qualified identifier searches still work.
+          if (upperFilter.indexOf('::') < 0 && searchText.indexOf('::') >= 0) {
+            searchText = searchText.slice(searchText.indexOf('::') + 2);
+          }
+          searchText += ' ' + String(label).split(' (')[0].replace(/\s*⇄$/, '');
+        }
+        if (upperFilter && searchText.toUpperCase().indexOf(upperFilter) < 0) return;
         html += '<div class="' + cls + '" data-val="' + escapeHtml(opt) + '">' + escapeHtml(label) + '</div>';
         if (!selected) visibleIdx += 1;
         count += 1;
@@ -3097,16 +3122,22 @@
         key: field.path.join('.'),
         kind: metadataControlKind(field),
         state: 'inherited',
+        touched: false,
         error: '',
         options: []
       };
       var id = item.id || idPrefix + '-' + field.path.join('__');
       var group = document.createElement('div');
       group.className = 'form-group meta-field' + (entry.kind === 'json' ? ' span-4' : '');
+      if (opts.booleanLayout === 'label-above') {
+        group.classList.remove('form-group');
+        group.classList.add('runtime-override-field');
+      }
       if (item.span) group.style.gridColumn = 'span ' + item.span;
       group.dataset.metaPath = entry.key;
       var label = document.createElement('label');
       label.htmlFor = id;
+      if (opts.booleanLayout === 'label-above') label.className = 'runtime-override-label';
       var text = document.createElement('span');
       text.textContent = item.label || field.path[field.path.length - 1];
       if (field.description) {
@@ -3127,11 +3158,15 @@
       toggle.setAttribute('aria-label', 'Explicit value: ' + entry.key);
       var control = buildControl(entry, id);
       if (entry.kind === 'boolean') {
-        group.style.justifyContent = 'flex-end';
+        var labelAbove = opts.booleanLayout === 'label-above';
+        if (labelAbove) {
+          group.classList.add('runtime-override-field', 'runtime-override-field-bool');
+          group.appendChild(label);
+        } else group.style.justifyContent = 'flex-end';
         var row = document.createElement('div');
-        row.className = 'chk-row';
+        row.className = labelAbove ? 'runtime-override-check chk-row' : 'chk-row';
         row.appendChild(control);
-        row.appendChild(label);
+        if (!labelAbove) row.appendChild(label);
         if (item.showExplicit !== false) row.appendChild(toggle);
         group.appendChild(row);
       } else {
@@ -3171,6 +3206,7 @@
       entry.status = status;
 
       function edited() {
+        entry.touched = true;
         setState(entry, 'explicit');
         setError(entry, readValue(entry).error);
         refreshCounts();
@@ -3178,6 +3214,7 @@
       control.addEventListener('input', edited);
       control.addEventListener('change', edited);
       toggle.addEventListener('change', function() {
+        entry.touched = true;
         setState(entry, toggle.checked ? 'explicit' : 'inherited');
         if (entry.state === 'inherited') {
           showValue(entry, resolveField(lastSource, field).inherited);
@@ -3264,6 +3301,7 @@
     function populate(source) {
       lastSource = source || {};
       entries.forEach(function(entry) {
+        entry.touched = false;
         var resolved = resolveField(lastSource, entry.field);
         setState(entry, resolved.explicit ? 'explicit' : 'inherited');
         setError(entry, '');
@@ -3273,10 +3311,14 @@
     }
 
     // Writes explicit fields into target and removes the ones returned to
-    // inheritance; invalid input leaves the target value untouched.
-    function apply(target) {
+    // inheritance; invalid input leaves the target value untouched. With
+    // options.onlyTouched, fields not edited since the last populate() keep
+    // the target's value, so another editor of the same path is not reverted.
+    function apply(target, options) {
+      var onlyTouched = !!(options && options.onlyTouched);
       var errors = [];
       entries.forEach(function(entry) {
+        if (onlyTouched && !entry.touched) return;
         if (entry.state !== 'explicit') {
           removeConfigPath(target, entry.field.path, keepDepth);
           return;
@@ -3295,6 +3337,22 @@
       return errors;
     }
 
+    // Shows source values on fields the user has not edited since populate().
+    function refresh(source) {
+      lastSource = source || {};
+      entries.forEach(function(entry) {
+        if (entry.touched) return;
+        var resolved = resolveField(lastSource, entry.field);
+        setState(entry, resolved.explicit ? 'explicit' : 'inherited');
+        if (document.activeElement !== entry.control) showValue(entry, resolved.value);
+      });
+      refreshCounts();
+    }
+
+    function hasTouched() {
+      return entries.some(function(entry) { return entry.touched; });
+    }
+
     function firstInvalid() {
       for (var i = 0; i < entries.length; i++) {
         if (entries[i].state !== 'explicit') continue;
@@ -3310,6 +3368,8 @@
       mount: mount,
       populate: populate,
       apply: apply,
+      refresh: refresh,
+      hasTouched: hasTouched,
       firstInvalid: firstInvalid,
       count: function() { return entries.length; }
     };
@@ -3340,6 +3400,7 @@
     closeModal: closeModal,
     createDebouncedRunner: createDebouncedRunner,
     bindStructuredSyncRoot: bindStructuredSyncRoot,
+    stringifyNonSecretDraft: stringifyNonSecretDraft,
     createJsonSyncController: createJsonSyncController,
     clearInlineStatus: clearInlineStatus,
     setInlineStatusError: setInlineStatusError,

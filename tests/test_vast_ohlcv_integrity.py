@@ -251,6 +251,36 @@ def test_preparation_metadata_order_before_integrity_copy_archive(preparation, m
     assert len(manifest['files']) == 2
 
 
+def test_native_preparation_archives_and_verifies_cli_artifacts(preparation, monkeypatch):
+    """Native options and seeds use the existing immutable archive and file proof."""
+    import tarfile
+    import vast_pb9
+    from vast_worker_profiles import worker_profile
+    p = preparation
+    export_config = copy.deepcopy(p.config)
+    p.config['config_version'] = 'v9.0.0'
+    profile = worker_profile('pb9')
+    native_config = copy.deepcopy(p.config)
+    native_config['backtest']['offline'] = True
+    monkeypatch.setattr(vast_pb9, 'prepare', lambda *args: (native_config, profile, export_config, [0]))
+    artifacts = {'launch_options.json': b'{"mode":"pareto_seed","source":"starting_configs"}',
+                 'starting_configs/0000.json': b'{"config_version":"v9.0.0"}'}
+    monkeypatch.setattr(vast_pb9, 'launch_bundle', lambda source: artifacts)
+    monkeypatch.setattr(vast_pb9, 'save', lambda config, path: write_json(path, config))
+    row = p.run()
+    folder = p.store.directory(row['id'])
+    manifest = integrity.require_manifest_proof(p.store, row['id'])
+    assert manifest['runtime'] == 'pb9'
+    assert manifest['pb8_revision'] == profile.revision
+    assert set(artifacts) <= {item['path'] for item in manifest['files']}
+    with tarfile.open(folder/'input.tar.gz') as archive:
+        for name, content in artifacts.items():
+            assert archive.extractfile('input/' + name).read() == content
+    (folder/'input/starting_configs/0000.json').write_text('{}')
+    with pytest.raises(VastError, match='bytes changed'):
+        integrity.require_manifest_proof(p.store, row['id'])
+
+
 @pytest.mark.parametrize('fault', ['gap', 'snapshot_missing', 'symbol_missing', 'stale_snapshot', 'invalid_cache', 'resolver_error', 'unresolved'])
 def test_preparation_failure_never_creates_archive_or_rental(preparation, monkeypatch, fault):
     """Metadata and candle failures remain distinct and persist failed without packaging."""

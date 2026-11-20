@@ -263,6 +263,11 @@
     renderer.populate(config);
   }
 
+  function exchangeOptions(selected) {
+    var available = (metadata.exchange_options || {}).backtest || [];
+    return Array.from(new Set(available.concat(selected || [])));
+  }
+
   function populate(config) {
     source = copy(config); window._cfgEditorCfg = source;
     mount(source);
@@ -274,7 +279,7 @@
       input.value = value == null ? '' : String(value);
       shown[id] = input.value;
     });
-    var exchanges=Array.from(new Set(((metadata.template.backtest || {}).exchanges || []).concat(source.backtest.exchanges || [])));
+    var exchanges=exchangeOptions(source.backtest.exchanges);
     window.cfgRebuildMs('ms-cfg-exchanges', exchanges, source.backtest.exchanges || []);
     renderSideJson(source);
     window.kvInit('kv-cs',source.backtest.coin_sources || {});
@@ -298,7 +303,7 @@
     html += '<div id="bt9-balance-fields"></div><div id="bt9-fees-fields"></div>';
     html += '<div class="form-row cols-8">' + window.fieldOhlcvSource(config.backtest && config.backtest.ohlcv_source_dir) + '<div class="span-4" id="bt9-candles-fields"></div></div>';
     html += '<div id="bt9-native-fields"></div>';
-    html += window.buildBacktestSourcesHtml(config.backtest || {},Array.from(new Set((metadata.template.backtest.exchanges || []).concat(config.backtest.exchanges || []))));
+    html += window.buildBacktestSourcesHtml(config.backtest || {},exchangeOptions(config.backtest.exchanges));
     html += window.buildBacktestCoinFiltersHtml(config.pbgui || {});
     html += '<div id="coin-overrides-container"></div><div id="suite-container"></div>';
     html += '<div class="section-title">Bot Configuration</div><div class="form-row cols-8"><div class="form-group span-2" style="grid-column:-3 / -1"><label for="cfg-native-strategy">strategy_kind</label><select id="cfg-native-strategy"></select></div></div>';
@@ -350,7 +355,7 @@
       var params = metadata.fields.filter(function(field){return field.path[0] === 'bot' && field.path[1] === 'long' && field.path.indexOf('*') < 0;}).map(function(field){return {key:field.path.slice(2).join('.'),type:field.types[0]};});
       var optimize=metadata.template.optimize || {};
       var metrics=Array.from(new Set((optimize.scoring || []).concat(optimize.limits || []).map(function(entry){return entry.metric;}).filter(function(metric){return typeof metric === 'string';})));
-      window.suiteInit('suite-container',{apiBase:window.API_BASE,version:'v9',exchanges:metadata.template.backtest.exchanges,botParams:params,aggregateMetrics:metrics});
+      window.suiteInit('suite-container',{apiBase:window.API_BASE,version:'v9',exchanges:exchangeOptions(config.backtest.exchanges),botParams:params,aggregateMetrics:metrics});
       populate(config);
       Object.keys(editorView.open || {}).forEach(function(id) {var element=document.getElementById(id);if(element && host.contains(element)) element.classList.toggle('open',editorView.open[id] === true);});
       host.addEventListener('click',function(event) {if(event.target.closest('.expander-header')) rememberEditorView();},{signal:editorListeners.signal});
@@ -506,6 +511,7 @@
       if (mine !== generation) return;
       window.loadConfigs();
       if (editorGeneration === window.configEditorGeneration && revision === window.configEditRevision) {
+        window.markBacktestDraftSaved();
         if (queue) window.closeEditor(); else {window.editingConfig = name;window.showEditorSidebar();editorViewKey='pbgui:backtest:v9:editor:'+name;rememberEditorView();}
         var url = new URL(window.location.href); url.searchParams.delete('opt_draft_id'); url.searchParams.delete('draft_id');
         if (queue) {url.searchParams.delete('config');url.searchParams.set('panel','queue');} else {url.searchParams.set('config', name);url.searchParams.delete('panel');} history.replaceState(null,'',url);
@@ -581,5 +587,8 @@
     await loadMetadata();
     return window.PBGuiEditorShared.nativeV9BalanceConfig(config,function(path) {return resolve(config,{path:path}).value;});
   }
-  window.PBGuiBacktestV9 = {balanceConfig:balanceConfig,rememberComparison:rememberComparison, restoreComparison:restoreComparison, preferredPrice:preferredPrice, rememberPrice:rememberPrice, rememberResults:rememberResults, restoreResults:restoreResults, restoreSearch:restoreSearch, active:function(){return !!(window.backtestEditorAdapter && window.backtestEditorAdapter.metadataDriven);}, render:render, collect:collect, populate:populate, validate:validate, save:save, close:function(){generation++;if(editorListeners)editorListeners.abort();var url=new URL(window.location.href);['config','draft_id','opt_draft_id'].forEach(function(key){url.searchParams.delete(key);});history.replaceState(null,'',url);}};
+  function recoveryIdentity() {
+    return {name:configName || '', revision:configRevision};
+  }
+  window.PBGuiBacktestV9 = {recoveryIdentity:recoveryIdentity,balanceConfig:balanceConfig,rememberComparison:rememberComparison, restoreComparison:restoreComparison, preferredPrice:preferredPrice, rememberPrice:rememberPrice, rememberResults:rememberResults, restoreResults:restoreResults, restoreSearch:restoreSearch, active:function(){return !!(window.backtestEditorAdapter && window.backtestEditorAdapter.metadataDriven);}, render:render, collect:collect, populate:populate, validate:validate, save:save, close:function(){generation++;if(editorListeners)editorListeners.abort();var url=new URL(window.location.href);['config','draft_id','opt_draft_id'].forEach(function(key){url.searchParams.delete(key);});history.replaceState(null,'',url);}};
 }());

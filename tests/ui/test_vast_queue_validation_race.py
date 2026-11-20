@@ -133,5 +133,5 @@ assert.equal(box.hidden,true);
 assert(!positions.classes.has('cloud-invalid'));
 assert.equal(positions.attributes['aria-invalid'],undefined);
 '''
-    result = run_javascript(['-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
+    result = run_javascript(['-e', 'const nativeRuntime=false;\n' + source[start:end] + code], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr

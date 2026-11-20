@@ -1,6 +1,29 @@
 ;(function () {
   'use strict';
 
+  function resultOptimizeAction(version, origin) {
+    return function() {
+      var selected = window.getSelectedResults();
+      if (selected.length !== 1) {
+        if (typeof window.toast === 'function') window.toast('Select exactly 1 result', 'err');
+        return;
+      }
+      var resultPath = selected[0];
+      return window.apiFetch('/results/config?path=' + encodeURIComponent(resultPath)).then(function(config) {
+        return window.apiFetch('/optimize-draft', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ config: config })
+        });
+      }).then(function(draft) {
+        var name = String(resultPath).split('/').filter(Boolean).pop() || 'pb' + version.slice(1) + '-optimize';
+        window.location.href = origin + '/api/optimize-' + version + '/main_page?opt_draft_id=' + encodeURIComponent(draft.draft_id || '')
+          + '&draft_name=' + encodeURIComponent(name);
+      }).catch(function(error) {
+        if (typeof window.toast === 'function') window.toast('Failed: ' + error.message, 'err');
+      });
+    };
+  }
+
   function createV9() {
     return {
       version:'v9', isV8:false, metadataDriven:true,
@@ -17,10 +40,11 @@
         window.PBGuiBacktestV9.restoreSearch();
         document.querySelectorAll('button[onclick]').forEach(function(button) {
           var action=button.getAttribute('onclick') || '';
-          if (/^(?:optimizeFromResult|optimizePresetFromResult|strategyExplorerFromResult|convertConfigToV8|goStrategyExplorer)/.test(action)) {
+          if (/^(?:optimizePresetFromResult|strategyExplorerFromResult|convertConfigToV8|goStrategyExplorer)/.test(action)) {
             button.hidden=true;button.disabled=true;button.style.display='none';
           }
         });
+        window.optimizeFromResult = resultOptimizeAction('v9', String(window.API_BASE).replace(/\/api\/backtest-v9$/, ''));
         ['arc-tab-optimize'].forEach(function(id){var node=document.getElementById(id);if(node){node.hidden=true;node.disabled=true;node.style.display='none';}});
         var readiness=document.getElementById('sb-btn-ohlcv-preflight');
         if (readiness) readiness.title='Check PB9 OHLCV readiness for the current config';
@@ -152,27 +176,7 @@
         });
       };
 
-      window.optimizeFromResult = function() {
-        var selected = window.getSelectedResults();
-        if (selected.length !== 1) {
-          if (typeof window.toast === 'function') window.toast('Select exactly 1 result', 'err');
-          return;
-        }
-        var resultPath = selected[0];
-        window.apiFetch('/results/config?path=' + encodeURIComponent(resultPath)).then(function(config) {
-          return window.apiFetch('/optimize-draft', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ config: config })
-          });
-        }).then(function(draft) {
-          var name = String(resultPath).split('/').filter(Boolean).pop() || 'pb8-optimize';
-          window.location.href = origin + '/api/optimize-v8/main_page?opt_draft_id=' + encodeURIComponent(draft.draft_id || '')
-            + '&draft_name=' + encodeURIComponent(name);
-        }).catch(function(error) {
-          if (typeof window.toast === 'function') window.toast('Failed: ' + error.message, 'err');
-        });
-      };
+      window.optimizeFromResult = resultOptimizeAction('v8', origin);
     }
 
     function sideRisk(sideConfig) {

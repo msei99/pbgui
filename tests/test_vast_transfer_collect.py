@@ -217,6 +217,30 @@ def test_partial_snapshot_skips_existing_pareto_files(tmp_path, monkeypatch):
     assert pareto_paths == {'optimize_results/run/pareto/b.json', 'optimize_results/run/pareto/c.json'}
 
 
+def test_native_final_snapshot_roundtrips_launch_and_session_metadata(tmp_path, monkeypatch):
+    """The actual worker archive passes the shared importer with native provenance intact."""
+    from setup.vast_gpu_benchmark import cloud_worker
+    from pb9_optimize_options import OPTIONS_FILENAME
+    monkeypatch.setattr(cloud_worker, 'ROOT', tmp_path)
+    monkeypatch.setenv('PBGUI_WORKER_RUNTIME', 'pb9')
+    folder = tmp_path/'input'; folder.mkdir()
+    (folder/'launch_options.json').write_text(json.dumps({'scenarios':['train']}))
+    result = tmp_path/'output/optimize_results/run'
+    (result/'pareto').mkdir(parents=True)
+    (result/'pareto/one.json').write_text('{}')
+    (result/'all_results.bin').write_bytes(b'fixture')
+    (result/'checkpoint.pkl').write_bytes(b'fixture checkpoint; never unpickled')
+    (result/'session.json').write_text('{"preparation":{"report":{"kind":"prepared-inputs"}}}')
+    (result/'search.json').write_text('{"seed":42}')
+    (tmp_path/'finished.json').write_text('{"exit_code":0}')
+    cloud_worker.snapshot(True)
+    extracted = vast_transfer.extract_results(tmp_path/'final.tar.gz', tmp_path, 'native')
+    restored = extracted/'optimize_results/run'
+    assert json.loads((restored/OPTIONS_FILENAME).read_text())['scenarios'] == ['train']
+    assert (restored/'session.json').read_bytes() == (result/'session.json').read_bytes()
+    assert (restored/'search.json').read_bytes() == (result/'search.json').read_bytes()
+
+
 def test_partial_collect_sends_skip_request_and_merges(tmp_path, monkeypatch):
     """Partial collection skips already-verified Pareto files and merges the delta."""
     from vast_snapshot import work_boundary

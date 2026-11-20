@@ -1,4 +1,5 @@
 <div class="vast-component">
+  <p id="vast-runtime-profile" class="muted" role="status" hidden></p>
   <nav id="vast-settings-nav" class="ctx-actions" aria-label="Cloud settings">
     <div class="sb-label">Vast.ai</div>
     <button type="button" class="sb-btn" data-vast-view="account">Account</button>
@@ -14,7 +15,7 @@
       <div class="fields">
         <label>Vast API key<input id="api-key" type="password" autocomplete="new-password" maxlength="4096" placeholder="Enter a new key to save or replace it"></label>
         <button type="submit" id="save-key">Save key</button>
-        <button type="button" id="refresh-balance">Test connection &amp; refresh balance</button>
+        <button type="button" id="refresh-balance">Test connection</button>
       </div>
     </form>
     <p id="key-status" class="muted">Loading account settings…</p>
@@ -164,7 +165,6 @@
     <p class="muted">Recorded locally while the API is running. Select up to four runs. Compare configs describes different workloads; Compare hardware requires identical workloads. Exported candles include reference and warm-up data; actual consumed candles are not reported. Costs are estimates.</p>
     <p id="performance-status" role="status" aria-live="polite"></p>
     <div id="vast-performance-actions" class="fields" role="toolbar" aria-label="Performance history actions" hidden>
-      <button type="button" class="btn" id="performance-refresh">Refresh history</button>
       <button type="button" class="btn" id="performance-view" disabled>View selected run</button>
       <button type="button" class="btn" id="performance-compare" disabled>Compare hardware</button>
       <button type="button" class="btn" id="performance-config-compare" disabled>Compare configs</button>

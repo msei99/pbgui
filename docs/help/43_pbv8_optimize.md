@@ -1,5 +1,10 @@
 # PBv8 Optimize
 
+Coin search matches visible coin names and native contracts, excluding exchange
+prefixes and display qualifiers. For example, `hype` finds HYPE/HYPER, not STX
+on Hyperliquid. Full identifiers such as `hyperliquid::19` remain searchable;
+selecting a displayed coin preserves its exact stored identifier.
+
 For a normal cloud optimizer, use **Queue → ▶ Start** on its prepared job, or **Open log → Start**. Review and confirm the single-job rental; no AI chat is required. See [manual single-job start](48_vast_gpu.md#start-one-prepared-optimizer).
 
 ## Collect Pareto without stopping
@@ -150,6 +155,7 @@ A Python/Rust schema mismatch can prevent metadata loading even when the PBGui e
 - The Configs table shows the active PB8 strategy and supports sorting by Strategy.
 - Official **Convert to V8** migration is available for PBv7 Optimize configurations. The complete config is passed to PB8 and opened as an unsaved editor preview; no config bundle is created or replaced until the user explicitly saves. The migration report travels with the preview and is persisted with that manual save. Review blocking is limited to `optimize`, `backtest`, and `bot` findings that can affect an Optimize evaluation; Run-only `live` findings do not block this context. PBGui metadata and the redundant legacy default `max_pending_starting_evals_per_cpu=1` are removed before migration. After PB8 migration, PBGui removes strategy-incompatible optimizer overrides, emits canonical fixed-runtime paths, freezes already disabled sides, and restores implicit positive-threshold V7 enforcers. These deterministic corrections are reported as `ok_with_adjustments`; conflicting or unresolved paths still block the preview. Weighted-only scoring, ADG/MDG floors, inserted V8 defaults, and fixed new cooldown bounds produce report warnings but are never rewritten as an optimizer recipe. Genuine failures show a bounded list of fields and behavior warnings instead of dumping the complete migration report.
 - PBv7 Pareto candidates expose the same official migration action and are accepted only from managed PB7 result directories.
+- **V9** next to a saved PB8 config or Pareto config opens the official PB8 → PB9 converter. After reviewing its changes and warnings, the result opens as an unsaved PB9 Optimize draft; the PB8 source stays unchanged. PBGui run settings (starting configs, fine-tune, polish and execution) are not migrated. Supported PB8 schemas: v8.0.0, v8.1.0 and v8.6.0.
 
 The PB8 editor exposes installed HSL modes and optimizer overrides in Long/Short cards. Under **Bounds & Overrides**, **Long HSL restart after RED** and **Short HSL restart after RED** edit the actual side HSL policy; **Portfolio HSL restart after RED** appears in Unified mode when `bot.hsl` already exists. The supported choices are `always` and `never`. A missing, null or removed `threshold` policy in an existing relevant HSL object defaults to `always`, before date lookup, Readiness, Save or Queue. Existing valid choices remain; a valid fixed runtime override is imported once into that same bot policy and removed, so later form and JSON edits agree. No missing HSL object is created and activation is unchanged. `always` permits restart after cooldown subject to other requirements; `never` prevents automatic restart while the stop remains within the configured lookback. `polish_percentage` is displayed as a percentage and converted to PB8’s fractional `--polish-pct` value. Pymoo retains native automatic population sizing.
 

@@ -123,3 +123,19 @@ def test_shared_metadata_links_and_traversal_are_rejected(tmp_path):
     work=tmp_path/'work';work.mkdir()
     for exchange in ['../bybit','bybit']:
         with pytest.raises(ValueError):prepare_market_metadata(work,{'backtest':{'offline':True,'exchanges':[exchange]}},source,tmp_path/'native')
+
+
+@pytest.mark.parametrize('offline,has_native', [(False,False),(True,False),(True,True)])
+def test_execution_offline_metadata_uses_only_persistent_native_cache(tmp_path,offline,has_native):
+    """Offline execution reads its own inputs and never creates shared metadata links."""
+    from pb9_backtest_runtime import require_cached_market_metadata
+    repo=tmp_path/'pb9';repo.mkdir()
+    config={'backtest':{'offline':offline,'exchanges':['bybit']}}
+    if has_native:
+        target=repo/'caches/bybit/markets.json';target.parent.mkdir(parents=True)
+        target.write_text(json.dumps({'HYPE/USDT:USDT':{'symbol':'HYPE/USDT:USDT'}}))
+    before={str(p.relative_to(repo)):p.read_bytes() for p in repo.rglob('*') if p.is_file()}
+    if offline and not has_native:
+        with pytest.raises(ValueError,match='PB9 cache'):require_cached_market_metadata(repo,config)
+    else:require_cached_market_metadata(repo,config)
+    assert {str(p.relative_to(repo)):p.read_bytes() for p in repo.rglob('*') if p.is_file()}==before

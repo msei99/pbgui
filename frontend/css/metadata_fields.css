@@ -13,4 +13,5 @@
 .meta-field [aria-invalid="true"] { border-color: var(--red); }
 .meta-unit { color: var(--text-dim); opacity: .75; }
 .meta-error { color: var(--red); font-size: var(--fs-xs); line-height: 1.3; }
+.runtime-override-field > .meta-error:empty { display: none; }
 .meta-count { margin-left: 6px; color: var(--text-dim); font-size: var(--fs-xs); font-weight: 400; }

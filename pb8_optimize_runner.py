@@ -22,7 +22,7 @@ SERVICE = "OptimizeV8"
 EVALUATION_PROGRESS_FILENAME = ".pbgui_optimize_progress.json"
 
 
-def _install_evaluation_progress_publisher(optimize_module):
+def _install_evaluation_progress_publisher(optimize_module, native_options=None):
     """Publish PB8's exact in-memory evaluation count without changing PB8 source."""
     recorder_class = getattr(optimize_module, "ResultRecorder", None)
     if recorder_class is None or getattr(recorder_class, "_pbgui_progress_patched", False):
@@ -60,6 +60,13 @@ def _install_evaluation_progress_publisher(optimize_module):
     def patched_init(instance, *args, **kwargs):
         original_init(instance, *args, **kwargs)
         instances.append(instance)
+        if native_options is not None:
+            from pb9_optimize_options import OPTIONS_FILENAME, validate_options
+            directory = getattr(getattr(instance, 'store', None), 'directory', None)
+            if directory is None or not Path(directory).is_dir():
+                raise RuntimeError('Native result directory is missing; cannot preserve launch provenance')
+            atomic_write_private_text(Path(directory) / OPTIONS_FILENAME,
+                                      json.dumps(validate_options(native_options), indent=4) + '\n')
 
     def patched_record(instance, data):
         result = original_record(instance, data)
@@ -118,31 +125,16 @@ def _monitor_sweep_plan(pb8_dir: Path, plan: dict, stop_event: threading.Event) 
         stop_event.wait(0.5)
 
 
-def _optimizer_argv(cli_path: str, config_path: str, options: dict) -> list[str]:
-    argv = [cli_path, config_path]
-    mode = str(options.get("mode") or "fresh")
-    source = str(options.get("source") or "")
-    if mode == "checkpoint_resume":
-        argv.extend(["--resume", source])
-    elif mode == "pareto_seed":
-        argv.extend(["--start", source])
-    elif mode != "fresh":
-        raise ValueError(f"Unsupported optimize launch mode: {mode}")
-    fine_tune = options.get("fine_tune_params")
-    if isinstance(fine_tune, list):
-        fine_tune = ",".join(str(item).strip() for item in fine_tune if str(item).strip())
-    if str(fine_tune or "").strip():
-        argv.extend(["--fine-tune-params", str(fine_tune).strip()])
-    polish_pct = options.get("polish_percentage")
-    if polish_pct is not None:
-        argv.extend(["--polish-pct", str(polish_pct)])
-        argv.extend(["--polish-bounds-mode", str(options.get("polish_bounds_mode") or "clamp")])
-    return argv
+def _optimizer_argv(cli_path: str, config_path: str, options: dict, *, runtime: str = "v8", manifest_path=None) -> list[str]:
+    from optimize_cli import optimizer_argv
+    return optimizer_argv(cli_path, config_path, options, runtime=runtime, manifest_path=manifest_path)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, runtime: str = 'v8') -> int:
     """Run one PB8 optimizer and atomically publish its final return code."""
     arguments = list(sys.argv[1:] if argv is None else argv)
+    if runtime not in {'v8', 'v9'}:
+        raise ValueError('Unsupported optimizer runtime')
     if len(arguments) != 8 or arguments[0] != "optimize":
         raise SystemExit(
             "usage: pb8_optimize_runner.py optimize STATE OWNERSHIP READY CLI PB8_DIR CONFIG OPTIONS"
@@ -163,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         atomic_write_private_text(Path(ownership_path), json.dumps(ownership, indent=4) + "\n")
 
         pbgui_dir = Path(__file__).resolve().parent
-        invalid_marker = pbgui_dir / "data" / "locks" / "pb8-runtime-invalid"
+        invalid_marker = pbgui_dir / "data" / "locks" / ('pb' + runtime[1:] + '-runtime-invalid')
         if invalid_marker.exists() or invalid_marker.is_symlink():
             raise RuntimeError("PB8 installation or update is incomplete")
         try:
@@ -183,9 +175,25 @@ def main(argv: list[str] | None = None) -> int:
             if validation_plan is not None:
                 sweep_plan = {'_validation_windows': validation_plan, '_sweep_cycles': sweep_plan}
             runtime_pb8_dir = Path(pb8_dir).resolve(strict=False)
-            sys.argv = _optimizer_argv(cli_path, config_path, options)
+            if runtime == 'v9':
+                import hashlib
+                from pb9_backtest_runtime import source_identity, verify_native_extension
+                identity = source_identity(runtime_pb8_dir)
+                proof = options.get('runtime_identity') or {}
+                if (proof.get('runtime') != 'pb9' or proof.get('commit') != identity['commit'] or proof.get('schema') != identity['config_schema']
+                        or hashlib.sha256(Path(config_path).read_bytes()).hexdigest() != proof.get('launch_sha256')):
+                    raise RuntimeError('PB9 optimizer runtime or immutable launch config changed')
+                sys.path.insert(0, str(runtime_pb8_dir / 'src'))
+                verify_native_extension(runtime_pb8_dir)
+            manifest_path = None
+            if runtime == 'v9':
+                from pb9_optimize_options import stage_manifest
+                manifest_path = stage_manifest(options, Path(options_path).with_name('preparation.json'), atomic_write_private_text)
+            sys.argv = (_optimizer_argv(cli_path,config_path,options,runtime="v9",manifest_path=manifest_path) if runtime=="v9"
+                        else _optimizer_argv(cli_path, config_path, options))
             optimize_module = importlib.import_module("optimize")
-            publish_final_progress = _install_evaluation_progress_publisher(optimize_module)
+            publish_final_progress = (_install_evaluation_progress_publisher(optimize_module, options)
+                                      if runtime == 'v9' else _install_evaluation_progress_publisher(optimize_module))
             from optimize_convergence import validate_config
             convergence_config = validate_config(options.get("convergence_config"))
             if convergence_config["convergence_enabled"]:

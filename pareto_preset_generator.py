@@ -84,6 +84,61 @@ def _clamp_int(value: Any, default: int, low: int, high: int) -> int:
     return max(low, min(high, parsed))
 
 
+# Native PB9 metric names per preset intent. PB9 renamed every PB7/PB8
+# objective, so these candidates replace the legacy names for v9 results.
+_PB9_PRESET_METRICS = {
+    "profit": [
+        ["cagr_fraction_strategy_equity_ew", "cagr_fraction_strategy_equity"],
+        ["cagr_fraction_strategy_equity", "cagr_fraction_strategy_equity_ew"],
+        ["cagr_fraction_strategy_equity_ew", "cagr_fraction_strategy_equity"],
+    ],
+    "ratio": [
+        ["loss_profit_ratio"],
+        ["sortino_ratio_strategy_equity", "sharpe_ratio_strategy_equity"],
+        ["sharpe_ratio_strategy_equity", "sortino_ratio_strategy_equity"],
+    ],
+    "risk": [
+        ["drawdown_max_fraction_strategy_equity"],
+        ["ulcer_index_fraction_strategy_equity", "pain_index_fraction_strategy_equity"],
+        ["peak_recovery_max_days_strategy_equity"],
+    ],
+    "smooth": [
+        ["ulcer_index_fraction_strategy_equity"],
+        ["pain_index_fraction_strategy_equity"],
+        ["omega_ratio_strategy_equity"],
+    ],
+    "turnover": [
+        ["position_held_max_days"],
+        ["position_held_time_weighted_mean_hours"],
+        ["gross_exposure_rms_ratio_strategy_equity"],
+    ],
+    "exposure": [
+        "position_exposure_utilization_rms_ratio_long",
+        "position_exposure_utilization_rms_ratio_short",
+        "gross_exposure_rms_ratio_strategy_equity",
+        "gross_exposure_max_ratio_strategy_equity",
+    ],
+}
+_PB9_PRESET_GOALS = {
+    "cagr_fraction_strategy_equity": "max",
+    "cagr_fraction_strategy_equity_ew": "max",
+    "loss_profit_ratio": "min",
+    "sortino_ratio_strategy_equity": "max",
+    "sharpe_ratio_strategy_equity": "max",
+    "omega_ratio_strategy_equity": "max",
+    "drawdown_max_fraction_strategy_equity": "min",
+    "ulcer_index_fraction_strategy_equity": "min",
+    "pain_index_fraction_strategy_equity": "min",
+    "peak_recovery_max_days_strategy_equity": "min",
+    "position_held_max_days": "min",
+    "position_held_time_weighted_mean_hours": "min",
+    "gross_exposure_rms_ratio_strategy_equity": "min",
+    "gross_exposure_max_ratio_strategy_equity": "min",
+    "position_exposure_utilization_rms_ratio_long": "min",
+    "position_exposure_utilization_rms_ratio_short": "min",
+}
+
+
 def _detect_metric_scheme(metrics: list[str]) -> str:
     for metric in metrics:
         if isinstance(metric, str) and metric.startswith("btc_"):
@@ -390,6 +445,8 @@ def _is_side_enabled(bot_params: dict[str, Any], side: str) -> bool | None:
         f"{side}_total_wallet_exposure_limit",
         f"{side}.risk.n_positions",
         f"{side}.risk.total_wallet_exposure_limit",
+        f"{side}.risk.max_positions",
+        f"{side}.risk.total_wallet_exposure_limit_ratio",
     ):
         value = _to_float(bot_params.get(key))
         if value is not None:
@@ -569,6 +626,7 @@ def _build_scoring_and_limits(
     risk_adjust: int,
     currency_metrics: set[str],
     default_goal_map_override: dict[str, str] | None = None,
+    native_v9: bool = False,
 ) -> tuple[list[Any], Any, str]:
     optimize_block = full_config_data.get("optimize", {}) if isinstance(full_config_data, dict) else {}
     base_scoring = optimize_block.get("scoring") if isinstance(optimize_block, dict) else None
@@ -585,6 +643,16 @@ def _build_scoring_and_limits(
         base_scoring_entries = list(base_metric_names)
     if base_limits is None:
         base_limits = []
+
+    if native_v9:
+        return _build_pb9_scoring_and_limits(
+            base_scoring_entries=base_scoring_entries,
+            base_metric_names=base_metric_names,
+            base_limits=base_limits,
+            suite_metrics=suite_metrics,
+            direction=direction,
+            default_goal_map_override=default_goal_map_override,
+        )
 
     scheme = _detect_metric_scheme(base_metric_names)
     metric = lambda name: _metric_name(name, scheme, currency_metrics)
@@ -672,6 +740,47 @@ def _build_scoring_and_limits(
             limits_out = _upsert_limit(limits_out, entry)
 
     return _dedupe_scoring_entries(scoring_out), limits_out, scheme
+
+
+def _build_pb9_scoring_and_limits(
+    *,
+    base_scoring_entries: list[Any],
+    base_metric_names: list[str],
+    base_limits: Any,
+    suite_metrics: dict[str, Any],
+    direction: str,
+    default_goal_map_override: dict[str, str] | None,
+) -> tuple[list[Any], Any, str]:
+    """Build PB9 objectives from native metric names; keep authored PB9 limits.
+
+    PB9 limits use native operators and reducers. Legacy PB7/PB8 limit
+    synthesis would write retired metrics, so PB9 limits stay unchanged.
+    """
+    default_goal_map = dict(_PB9_PRESET_GOALS)
+    for metric_name, goal in (default_goal_map_override or {}).items():
+        if str(goal).lower() in {"min", "max"}:
+            default_goal_map[str(metric_name)] = str(goal).lower()
+    sets = {
+        key: [_first_available_metric(candidates, suite_metrics) for candidates in value]
+        for key, value in _PB9_PRESET_METRICS.items() if key != "exposure"
+    }
+    exposure_set = _available_metrics(list(_PB9_PRESET_METRICS["exposure"]), suite_metrics)
+    profit_set, ratio_set, risk_set = sets["profit"], sets["ratio"], sets["risk"]
+    smooth_set, turnover_set = sets["smooth"], sets["turnover"]
+    if direction == "Balanced (keep run scoring)":
+        scoring_out = _balanced_scoring_entries(base_scoring_entries, base_metric_names, default_goal_map)
+    elif direction == "More profit (risk can be higher)":
+        scoring_out = _scoring_entries([profit_set[0], profit_set[1], ratio_set[1], ratio_set[0]], default_goal_map)
+    elif direction == "Safer (lower drawdowns)":
+        scoring_out = _scoring_entries([risk_set[0], risk_set[1], ratio_set[1], ratio_set[0]], default_goal_map)
+    elif direction == "Smoother equity curve":
+        scoring_out = _scoring_entries([smooth_set[0], smooth_set[1], ratio_set[1], profit_set[0]], default_goal_map)
+    elif direction == "Fewer/shorter holds (less time in market)":
+        scoring_out = _scoring_entries([turnover_set[0], turnover_set[1], turnover_set[2], profit_set[0], ratio_set[1]], default_goal_map)
+    else:
+        scoring_out = _scoring_entries(exposure_set + [risk_set[0], ratio_set[1], profit_set[0]], default_goal_map)
+    limits_out = copy.deepcopy(base_limits) if isinstance(base_limits, (list, dict)) else base_limits
+    return _dedupe_scoring_entries(scoring_out), limits_out, "pb9"
 
 
 def _build_new_bounds(
@@ -762,6 +871,9 @@ def _build_new_bounds(
             "total_wallet_exposure_limit" in name
             or name.endswith("n_positions")
             or "_n_positions" in name
+            or name.endswith(".risk.max_positions")
+            or name.endswith(".risk.we_excess_allowance_fraction")
+            or name.endswith("_enforcer.threshold_ratio")
             or "risk_we_excess_allowance_pct" in name
             or "risk_wel_enforcer_threshold" in name
             or "risk_twel_enforcer_threshold" in name
@@ -783,7 +895,7 @@ def _build_new_bounds(
 
         if risk_enabled and is_risk_param:
             base = float(window_pct) if window_enabled else float(risk_window_pct)
-            invert = name.endswith("n_positions") or "_n_positions" in name
+            invert = name.endswith("n_positions") or "_n_positions" in name or name.endswith(".risk.max_positions")
             down_mult, up_mult = _risk_multipliers(direction, signed, invert=invert)
             new_bounds[param_name] = _tighten_bounds_around_value_asymmetric(
                 low,
@@ -815,8 +927,9 @@ def build_optimize_preset(
     currency_metrics = set(metric_sets.get("currency_metrics") or [])
 
     optimize_version = str(config_context.get("optimize_version") or "v7").lower()
+    nested_bounds = optimize_version in {"v8", "v9"}
     source_optimize = full_config_data.get("optimize", {}) if isinstance(full_config_data, dict) else {}
-    if optimize_version == "v8" and isinstance(source_optimize, dict):
+    if nested_bounds and isinstance(source_optimize, dict):
         bounds = _flatten_dotted_bounds(source_optimize.get("bounds") or {})
     else:
         bounds = copy.deepcopy(config_context.get("bounds") or {})
@@ -877,7 +990,8 @@ def build_optimize_preset(
         direction=direction,
         risk_adjust=risk_adjust,
         currency_metrics=currency_metrics,
-        default_goal_map_override=(config_context.get("scoring_goals") or {}) if optimize_version == "v8" else None,
+        default_goal_map_override=(config_context.get("scoring_goals") or {}) if nested_bounds else None,
+        native_v9=optimize_version == "v9",
     )
 
     expand_notes: dict[str, str] = {}
@@ -973,11 +1087,11 @@ def build_optimize_preset(
 
     preset_config = copy.deepcopy(full_config_data or {})
     optimize = dict(preset_config.get("optimize") or {})
-    optimize["bounds"] = _restore_dotted_bounds(result_bounds) if optimize_version == "v8" else result_bounds
+    optimize["bounds"] = _restore_dotted_bounds(result_bounds) if nested_bounds else result_bounds
     optimize["scoring"] = scoring_out
     optimize["limits"] = limits_out
     preset_config["optimize"] = optimize
-    if optimize_version == "v8":
+    if nested_bounds:
         pbgui = preset_config.get("pbgui")
         if not isinstance(pbgui, dict):
             pbgui = {}

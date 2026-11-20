@@ -17,7 +17,7 @@ def test_setup_uses_shared_page_shell_and_local_assets():
     assert 'credentials:\'same-origin\'' in JS
     assert 'Authorization' not in HTML+JS and 'Bearer' not in HTML+JS
     assert 'sessionStorage' not in JS and 'localStorage' not in JS
-    assert '/app/css/data_tip.css?v=1' in HTML and '/app/js/data_tip.js?v=1' in HTML
+    assert '/app/css/data_tip.css?v=2' in HTML and '/app/js/data_tip.js?v=3' in HTML
     assert 'details class="field-help"' not in HTML
     assert 'data-tip=' in HTML
     assert not re.search(r'<button\b[^>]*\bdata-tip=',HTML)

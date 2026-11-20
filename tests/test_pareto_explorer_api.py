@@ -142,7 +142,7 @@ def test_pareto_frontend_routes_by_result_version_without_bearer_tokens() -> Non
     assert "'/api/backtest-' + optimizeVersion()" in source
     assert "optimizeApiBase() + '/results/pareto-dash/'" in source
     assert "encodeURIComponent(optimizeVersion())" in source
-    assert "current: optimizeVersion() === 'v8'" in source
+    assert "current: optimizeVersion() + '_pareto_explorer'" in source
     assert "activeOptimizeVersion" not in source
     assert "Authorization" not in source
     assert "%%TOKEN%%" not in source

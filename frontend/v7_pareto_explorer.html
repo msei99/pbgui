@@ -1485,7 +1485,6 @@ input[type="range"]::-moz-range-thumb {
           </div>
           <div class="form-field">
             <label>&nbsp;</label>
-            <div class="button-row"><button class="ghost-btn" id="btn-deep-correlations-refresh">Refresh</button></div>
           </div>
         </div>
         <div id="deep-correlations-chart" class="placeholder-chart deep-plotly-chart">Load a result to render the risk-profile radar.</div>
@@ -1645,6 +1644,11 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 (function() {
   'use strict';
 
+  function normalizeExplorerVersion(value) {
+    var normalized = String(value || 'v7').toLowerCase();
+    return normalized === 'v8' || normalized === 'v9' ? normalized : 'v7';
+  }
+
   var state = {
     stage: 'command_center',
     deepTab: 'parameters',
@@ -1686,7 +1690,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     selectedConfigIndex: null,
     selectedDetail: null,
     strategyCompareBaseline: null,
-    optimizeVersion: String(window.OPTIMIZE_VERSION || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7',
+    optimizeVersion: normalizeExplorerVersion(window.OPTIMIZE_VERSION),
     plotSessionId: '',
     plotSessionKind: '',
     playground: {
@@ -1757,16 +1761,23 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   function optimizeVersion() {
     var sessionVersion = state.session && state.session.optimize_version;
     var resultVersion = state.session && state.session.result && state.session.result.optimize_version;
-    state.optimizeVersion = String(resultVersion || sessionVersion || state.optimizeVersion || 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7';
+    state.optimizeVersion = normalizeExplorerVersion(resultVersion || sessionVersion || state.optimizeVersion);
     return state.optimizeVersion;
   }
 
   function syncStrategyExplorerActions() {
-    var isV8 = optimizeVersion() === 'v8';
+    var version = optimizeVersion();
+    var isV8 = version === 'v8';
     var button = el('btn-pin-strategy-baseline');
     if (button) {
       button.style.display = isV8 ? '' : 'none';
       button.disabled = !isV8;
+    }
+    // A native PB9 Strategy Explorer does not exist yet.
+    var explorerButton = el('btn-open-strategy-explorer');
+    if (explorerButton) {
+      explorerButton.style.display = version === 'v9' ? 'none' : '';
+      explorerButton.disabled = version === 'v9';
     }
     if (!isV8) state.strategyCompareBaseline = null;
   }
@@ -1792,6 +1803,23 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }
     if (['parameters', 'scenarios', 'evolution', 'correlations'].indexOf(deepTab) >= 0) {
       state.deepTab = deepTab;
+    }
+    ['vizType', 'quickView', 'customXMetric', 'customYMetric', 'customZMetric', 'colorMetric'].forEach(function(key) {
+      var value = params.get('chart_' + key);
+      if (value && value.length <= 256) state.playground[key] = value;
+    });
+    ['perfWeight', 'riskWeight', 'robustWeight'].forEach(function(key) {
+      var raw = params.get('chart_' + key);
+      var value = Number(raw);
+      if (raw !== null && Number.isFinite(value) && value >= 0 && value <= 100) state.playground[key] = value;
+    });
+    ['showAll', 'useWeighted', 'useBtc'].forEach(function(key) {
+      var value = params.get('chart_' + key);
+      if (value === '1' || value === '0') state.playground[key] = value === '1';
+    });
+    var selected = params.get('selected_config');
+    if (selected !== null && /^\d+$/.test(selected) && Number.isSafeInteger(Number(selected))) {
+      state.selectedConfigIndex = Number(selected);
     }
   }
 
@@ -1837,7 +1865,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function extractConfigSections(raw) {
     var out = {};
-    ['backtest', 'bot', 'live', 'optimize', 'pbgui', 'coin_overrides'].forEach(function(key) {
+    ['config_version', 'backtest', 'bot', 'live', 'logging', 'monitor', 'optimize', 'pbgui', 'coin_overrides'].forEach(function(key) {
       if (raw && Object.prototype.hasOwnProperty.call(raw, key)) out[key] = raw[key];
     });
     return out;
@@ -2000,11 +2028,13 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   function isWeightedMetricName(metric) {
     var name = String(metric || '');
+    if (optimizeVersion() === 'v9') return /_ew$/.test(name);
     return name.indexOf('_w_') >= 0 || /_w_(usd|btc)$/.test(name) || /_w_(?!.*_w_)/.test(name);
   }
 
   function filterCustomMetrics(availableMetrics) {
     var filtered = Array.isArray(availableMetrics) ? availableMetrics.slice() : [];
+    if (optimizeVersion() === 'v9') return filtered;
     if (!state.playground.allowMixedCurrency) {
       var currency = state.playground.useBtc ? '_btc' : '_usd';
       filtered = filtered.filter(function(metric) {
@@ -2057,11 +2087,31 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     var isRadar = state.playground.vizType === 'Radar Chart';
     var is3d = state.playground.vizType === '3D Scatter' || state.playground.vizType === '3D Projections';
     if (showAllWrap) showAllWrap.style.display = isRadar ? 'none' : '';
-    if (useWeightedWrap) useWeightedWrap.style.display = isRadar ? 'none' : '';
-    if (useBtcWrap) useBtcWrap.style.display = isRadar ? 'none' : '';
+    if (useWeightedWrap) useWeightedWrap.style.display = isRadar || (payload && payload.weighting_available === false) ? 'none' : '';
+    if (useBtcWrap) useBtcWrap.style.display = isRadar || optimizeVersion() === 'v9' ? 'none' : '';
     if (colorMetricWrap) colorMetricWrap.style.display = isRadar ? 'none' : '';
+    if (optimizeVersion() === 'v9') {
+      var previewWeighting = el('preview-use-weighted');
+      if (previewWeighting) {
+        previewWeighting.closest('.check-row').style.display = payload && payload.weighting_available ? '' : 'none';
+        var previewLabel = document.querySelector('label[for="preview-use-weighted"] span');
+        if (previewLabel) previewLabel.textContent = 'Use CAGR EW';
+      }
+      ['deep-correlations-weighted', 'deep-correlations-btc'].forEach(function(id) {
+        var field = el(id);
+        if (field) field.closest('.check-row').style.display = 'none';
+      });
+      var weightingLabel = document.querySelector('label[for="playground-use-weighted"] span');
+      if (weightingLabel) {
+        weightingLabel.textContent = 'Use CAGR EW';
+        weightingLabel.dataset.tip = 'Select exponentially weighted CAGR when the result contains both CAGR variants.';
+      }
+      el('playground-robust-weight').disabled = !!payload && payload.robustness_available === false;
+      var riskTitle = el('detail-risk-profile').previousElementSibling;
+      if (riskTitle) riskTitle.textContent = 'Risk Metrics';
+    }
     customRoot.style.display = isCustom && !isRadar ? '' : 'none';
-    customFilters.style.display = isCustom && !isRadar ? '' : 'none';
+    customFilters.style.display = isCustom && !isRadar && optimizeVersion() !== 'v9' ? '' : 'none';
     customZWrap.style.display = isCustom && is3d ? '' : 'none';
     if (!isCustom || isRadar) return;
 
@@ -3326,7 +3376,9 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     state.playground.quickView = payload.quick_view || state.playground.quickView;
     state.playground.customXMetric = (payload.metrics && payload.metrics.x_metric) || state.playground.customXMetric || '';
     state.playground.customYMetric = (payload.metrics && payload.metrics.y_metric) || state.playground.customYMetric || '';
-    state.playground.customZMetric = (payload.metrics && payload.metrics.z_metric) || state.playground.customZMetric || '';
+    if (payload.viz_type === '3D Scatter' || payload.viz_type === '3D Projections' || !state.playground.customZMetric) {
+      state.playground.customZMetric = (payload.metrics && payload.metrics.z_metric) || state.playground.customZMetric || '';
+    }
     state.playground.colorMetric = (payload.metrics && payload.metrics.color_metric) || state.playground.colorMetric || 'None';
 
     quickViewNode.innerHTML = '';
@@ -3335,6 +3387,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       : state.playground.vizType === 'Radar Chart'
         ? ['Top Comparison', 'Risk Profile']
         : ['Risk-Reward Triangle', 'Recovery Performance', 'Trading Efficiency', 'Risk Spectrum', 'Stability Analysis', 'Trading Activity', 'Stress Test', 'Custom...'];
+    if (Array.isArray(payload.quick_views)) quickOptions = payload.quick_views;
     quickOptions.forEach(function(optionValue) {
       var option = document.createElement('option');
       option.value = optionValue;
@@ -3352,6 +3405,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       colorNode.appendChild(option);
     });
     updatePlaygroundCustomUi(payload);
+    updateLocationState();
 
     bestMatchNode.textContent = payload.best_match && payload.best_match.config_index != null
       ? 'Best Match: Config #' + String(payload.best_match.config_index) + ' | Score: ' + String(payload.best_match.score == null ? '-' : payload.best_match.score) + ' | ' + String(payload.best_match.style || '')
@@ -3362,11 +3416,12 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }
     metricNode.textContent = payload.viz_type === 'Radar Chart'
       ? 'Radar Chart: ' + String(payload.quick_view || 'Top Comparison')
-      : String(payload.viz_type || '2D Scatter') + ': ' + String(((payload.metrics || {}).x_metric) || '-') + ' vs ' + String(((payload.metrics || {}).y_metric) || '-') + (((payload.metrics || {}).z_metric) ? (' vs ' + String(payload.metrics.z_metric)) : '') + (((payload.metrics || {}).color_metric) ? (' | Color: ' + String(payload.metrics.color_metric)) : '');
+      : String(payload.viz_type || '2D Scatter') + ': ' + String(((payload.metrics || {}).x_metric) || '-') + ' vs ' + String(((payload.metrics || {}).y_metric) || '-') + ((payload.viz_type === '3D Scatter' || payload.viz_type === '3D Projections') && ((payload.metrics || {}).z_metric) ? (' vs ' + String(payload.metrics.z_metric)) : '') + (((payload.metrics || {}).color_metric) ? (' | Color: ' + String(payload.metrics.color_metric)) : '');
 
     renderPreview(payload.visualizations ? payload.visualizations.preview : null);
 
     chartNode.className = 'small-chart';
+    chartNode.textContent = '';
     chartWrap.style.display = '';
     projectionWrap.style.display = 'none';
     updateProjectionLayoutUi();
@@ -3873,12 +3928,13 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       return { name: key, value: detail.risk_profile[key] };
     }));
 
-    var positionsPerDay = detail.all_metrics && detail.all_metrics.find ? detail.all_metrics.find(function(item) { return item.name === 'positions_held_per_day'; }) : null;
-    var holdHours = detail.all_metrics && detail.all_metrics.find ? detail.all_metrics.find(function(item) { return item.name === 'position_held_hours_mean'; }) : null;
+    var native = optimizeVersion() === 'v9';
+    var positionsPerDay = detail.all_metrics && detail.all_metrics.find ? detail.all_metrics.find(function(item) { return item.name === (native ? 'gross_turnover_ratio_per_day' : 'positions_held_per_day'); }) : null;
+    var holdHours = detail.all_metrics && detail.all_metrics.find ? detail.all_metrics.find(function(item) { return item.name === (native ? 'position_held_time_weighted_mean_hours' : 'position_held_hours_mean'); }) : null;
     el('detail-style-panel').innerHTML = ''
       + '<div class="detail-item"><div class="detail-head"><strong>' + escapeHtml(detail.style || '-') + '</strong><span class="chip">Style</span></div></div>'
-      + '<div class="detail-item"><div class="detail-head"><strong>Positions/Day</strong><span class="chip">' + escapeHtml(String(positionsPerDay && positionsPerDay.value != null ? positionsPerDay.value : '-')) + '</span></div></div>'
-      + '<div class="detail-item"><div class="detail-head"><strong>Avg Hold Hours</strong><span class="chip">' + escapeHtml(String(holdHours && holdHours.value != null ? holdHours.value : '-')) + '</span></div></div>'
+      + '<div class="detail-item"><div class="detail-head"><strong>' + (native ? 'Gross Turnover/Day' : 'Positions/Day') + '</strong><span class="chip">' + escapeHtml(String(positionsPerDay && positionsPerDay.value != null ? positionsPerDay.value : '-')) + '</span></div></div>'
+      + '<div class="detail-item"><div class="detail-head"><strong>' + (native ? 'Time-weighted Hold Hours' : 'Avg Hold Hours') + '</strong><span class="chip">' + escapeHtml(String(holdHours && holdHours.value != null ? holdHours.value : '-')) + '</span></div></div>'
       + '<div class="detail-item"><div class="detail-head"><strong>Explorer Score</strong><span class="chip">' + escapeHtml(String(detail.explorer_score == null ? '-' : detail.explorer_score)) + '</span></div></div>';
 
     el('detail-robustness-panel').innerHTML = ''
@@ -4114,6 +4170,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }).then(function(data) {
       if (requestSeq !== state.detailRequestSeq || contextGeneration !== state.resultContextGeneration || resultPath !== state.resultPath) return data;
       renderDetail(data && data.detail ? data.detail : null);
+      updateLocationState();
       renderChampions(state.commandCenter);
       if (skipPlaygroundRefresh) return data;
       return loadPlayground().then(function() { return data; });
@@ -4130,6 +4187,15 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     else url.searchParams.delete('result_path');
     url.searchParams.set('stage', state.stage);
     url.searchParams.set('deep_tab', state.deepTab);
+    ['vizType', 'quickView', 'customXMetric', 'customYMetric', 'customZMetric', 'colorMetric',
+     'perfWeight', 'riskWeight', 'robustWeight'].forEach(function(key) {
+      url.searchParams.set('chart_' + key, String(state.playground[key]));
+    });
+    ['showAll', 'useWeighted', 'useBtc'].forEach(function(key) {
+      url.searchParams.set('chart_' + key, state.playground[key] ? '1' : '0');
+    });
+    if (state.selectedConfigIndex != null) url.searchParams.set('selected_config', String(state.selectedConfigIndex));
+    else url.searchParams.delete('selected_config');
     history.replaceState(null, '', url.toString());
   }
 
@@ -4188,6 +4254,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     }
     window.PBGuiBacktestQueue.perform(el('btn-run-backtest'), async function() {
       if (detail.config_index !== state.selectedConfigIndex) throw new Error('Wait for the selected configuration to load.');
+      if (detail.native_config_error) throw new Error(detail.native_config_error);
       if (detail.override_error) throw new Error(detail.override_error);
       return window.PBGuiBacktestQueue.submit([{name:'pareto_config_' + detail.config_index,
         config:extractConfigSections(detail.full_config), override_configs:detail.override_configs || {}}]);
@@ -4202,6 +4269,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
       await window.PBGuiBacktestQueue.perform(button, async function() {
       var detail = state.selectedDetail;
       if (!detail || detail.config_index !== state.selectedConfigIndex) throw new Error('Wait for the selected configuration to load.');
+      if (detail.native_config_error) throw new Error(detail.native_config_error);
       var name = 'pareto_config_' + String(detail.config_index);
       var items = window.PBGuiParetoValidation.buildItems(detail, el('explorer-validation-mode').value, name, 'explorer-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2));
       await window.PBGuiBacktestQueue.submit(items);
@@ -4344,12 +4412,11 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
     el('deep-correlations-weighted').addEventListener('change', function() {
       state.deepCorrelationsUseWeighted = !!el('deep-correlations-weighted').checked;
       syncFormState();
+      refreshDeepIntelligence().catch(function() {});
     });
     el('deep-correlations-btc').addEventListener('change', function() {
       state.deepCorrelationsUseBtc = !!el('deep-correlations-btc').checked;
       syncFormState();
-    });
-    el('btn-deep-correlations-refresh').addEventListener('click', function() {
       refreshDeepIntelligence().catch(function() {});
     });
     el('btn-command-load').addEventListener('click', function() {
@@ -4764,7 +4831,7 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
 
   window.PBGUI_NAV_CONFIG = {
     subtitle: 'PB' + String(window.OPTIMIZE_VERSION || 'v7') + ' PARETO EXPLORER',
-    current: optimizeVersion() === 'v8' ? 'v8_pareto_explorer' : 'v7_pareto_explorer',
+    current: optimizeVersion() + '_pareto_explorer',
     apiBase: API_BASE,
     version: PBGUI_VERSION,
     serial: PBGUI_SERIAL
@@ -4818,8 +4885,8 @@ window.PBGUI_SERIAL = "%%SERIAL%%";
   });
 }());
 </script>
-<script src="/app/js/pareto_validation.js?v=1"></script>
-<script src="/app/js/backtest_queue_actions.js?v=3"></script>
+<script src="/app/js/pareto_validation.js?v=2"></script>
+<script src="/app/js/backtest_queue_actions.js?v=4"></script>
 <script src="/app/js/shared_help_overlay.js?v=12"></script>
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 </body>

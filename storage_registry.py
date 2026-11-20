@@ -47,7 +47,7 @@ _COPY_RE = re.compile(r"(?:\s\((?:Kopie|Kopieren|Copy|copy)(?:\s\d+)?\)|\s(?:cop
 _LEFTOVER_CACHE_RE = re.compile(r"(?:_old|_org|_orig|_bak|_backup|\.bak)$")
 _VAST_ID_RE = re.compile(r"^[0-9a-f]{32}$")
 _PB_VENV_RE = re.compile(r"^\.?venv[_-]?(?:pb|passivbot)", re.IGNORECASE)
-_RUN_LOG_DIRS = ("optimizes", "optimizes_v8", "backtests", "backtests_v8")
+_RUN_LOG_DIRS = ("optimizes", "optimizes_v8", "optimizes_v9", "backtests", "backtests_v8", "backtests_v9")
 
 
 class ScanCancelled(Exception):
@@ -88,6 +88,8 @@ class StorageContext:
     fresh_stats: bool = False
     only_ids: set[str] | None = None
     stop: Callable[[], bool] | None = None
+    pb9: Path | None = None
+    pb9_python: str = ""
 
     @classmethod
     def from_settings(cls, pbgui: Path | None = None, **kwargs: Any) -> "StorageContext":
@@ -107,6 +109,8 @@ class StorageContext:
             pb8=_dir("pb8dir"),
             pb7_python=str(load_ini("main", "pb7venv") or "").strip(),
             pb8_python=str(load_ini("main", "pb8venv") or "").strip(),
+            pb9=_dir("pb9dir"),
+            pb9_python=str(load_ini("main", "pb9venv") or "").strip(),
             **kwargs,
         )
 
@@ -541,6 +545,8 @@ def _list_protected_market(ctx: StorageContext) -> Listing:
         ("PBGui market data archive", ctx.data / "ohlcv"),
         ("PB7 OHLCV cache", _sub(ctx.pb7, "caches", "ohlcv")),
         ("PB7 OHLCV store", _sub(ctx.pb7, "caches", "ohlcvs")),
+        ("PB9 OHLCV cache", _sub(ctx.pb9, "caches", "ohlcv")),
+        ("PB9 OHLCV store", _sub(ctx.pb9, "caches", "ohlcvs")),
     ])
 
 
@@ -586,7 +592,8 @@ def venv_usage(ctx: StorageContext) -> dict[str, str]:
     current = _real(Path(sys.prefix))
     if current:
         used[current] = "Used by PBGui"
-    for python, reason in ((ctx.pb7_python, "Configured for PB7"), (ctx.pb8_python, "Configured for PB8")):
+    for python, reason in ((ctx.pb7_python, "Configured for PB7"), (ctx.pb8_python, "Configured for PB8"),
+                           (ctx.pb9_python, "Configured for PB9")):
         root = _venv_root(python)
         if root is not None:
             used.setdefault(_real(root), reason)
@@ -665,7 +672,7 @@ def _venv_candidates(ctx: StorageContext) -> list[Path]:
         path = Path(entry.path)
         if _PB_VENV_RE.match(entry.name) and (path / "pyvenv.cfg").is_file():
             found[_real(path)] = path
-    for python in (ctx.pb7_python, ctx.pb8_python):
+    for python in (ctx.pb7_python, ctx.pb8_python, ctx.pb9_python):
         root = _venv_root(python)
         if root is not None and not root.is_symlink():
             found.setdefault(_real(root), root)
@@ -691,6 +698,7 @@ def _list_protected_core(ctx: StorageContext) -> Listing:
         ("Instances", ctx.data / "instances"),
         ("Run configs v7", ctx.data / "run_v7"),
         ("Run configs v8", ctx.data / "run_v8"),
+        ("Run configs v9", ctx.data / "run_v9"),
         ("Configuration backups", ctx.data / "backup" / "api-keys"),
     ])
 
@@ -819,6 +827,8 @@ def _scan_roots(ctx: StorageContext) -> list[tuple[str, str, Path]]:
         roots.append(("pb7", "PB7", ctx.pb7))
     if ctx.pb8 is not None:
         roots.append(("pb8", "PB8", ctx.pb8))
+    if ctx.pb9 is not None:
+        roots.append(("pb9", "PB9", ctx.pb9))
     return roots
 
 

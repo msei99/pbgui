@@ -73,6 +73,71 @@ def test_template_is_loaded_in_own_process_and_preserves_authored_shape(runtime)
     assert list(runtime.root.rglob("__pycache__")) == []
 
 
+def test_market_catalog_reuses_pb8_algorithm_in_selected_native_process(runtime):
+    """Native coin names and imported exact IDs survive the isolated shared resolver."""
+    from pb9_market import get_market_identifiers
+    (runtime.root/'src/simulation_data.py').write_text(
+        'from contextlib import contextmanager\n'
+        '@contextmanager\ndef simulation_data_policy(config):\n'
+        '    assert config["backtest"]["offline"] is True\n    yield\n')
+    (runtime.root/'src/utils.py').write_text('''
+import json
+from pathlib import Path
+class AmbiguousMarketIdentifier(RuntimeError): pass
+class MarketIdentifierExchangeMismatch(RuntimeError): pass
+class UnknownMarketIdentifier(RuntimeError): pass
+async def load_markets(exchange, **kwargs):
+    return json.loads(Path('caches',exchange,'markets.json').read_text())
+def filter_markets(markets, exchange, **kwargs): return markets, None
+def get_quote(exchange, quote=None): return quote or ('USDC' if exchange=='hyperliquid' else 'USDT')
+def _approved_all_market_identifiers(rows): return {'BTC','HYPE'}
+def to_standard_exchange_name(value): return value
+def split_exchange_qualified_market_identifier(value):
+    return tuple(value.split('::',1)) if '::' in value else (None,value)
+def looks_like_exact_market_identifier(value): return '::' in value or '/' in value
+def symbol_to_coin(symbol, **kwargs): return symbol.split('/')[0]
+def coin_to_symbol(value, exchange, **kwargs):
+    venue, identifier=split_exchange_qualified_market_identifier(value)
+    if venue and venue!=exchange: raise MarketIdentifierExchangeMismatch()
+    markets=json.loads(Path('caches',exchange,'markets.json').read_text())
+    for symbol, market in markets.items():
+        if identifier in (symbol,market['id'],symbol.split('/')[0]): return symbol
+    raise UnknownMarketIdentifier()
+async def reject_cross_exchange_market_identifier_collisions(*args,**kwargs): pass
+''')
+    originals={}
+    for exchange,quote,ids in [('bybit','USDT',['BTCUSDT','HYPEUSDT']),('hyperliquid','USDC',['0','150'])]:
+        directory=runtime.root/'caches'/exchange
+        directory.mkdir(parents=True)
+        rows={f'{coin}/{quote}:{quote}':{'symbol':f'{coin}/{quote}:{quote}','id':identifier}
+              for coin,identifier in zip(['BTC','HYPE'],ids)}
+        path=directory/'markets.json'
+        path.write_text(json.dumps(rows))
+        originals[path]=path.read_bytes()
+    result=get_market_identifiers({'pb9dir':str(runtime.root),'pb9venv':str(runtime.python)},
+        ['bybit','hyperliquid'],['HYPE','hyperliquid::0','all'],None,coindata=runtime.root/'empty-shared')
+    assert result['symbols']==['BTC','HYPE']
+    assert [(row['config_id'],row['display']) for row in result['catalog']]==[('BTC','BTC'),('HYPE','HYPE')]
+    assert result['statuses']['hyperliquid::0']['normalized']=='hyperliquid::0'
+    assert result['statuses']['hyperliquid::0']['resolutions']==[{'exchange':'hyperliquid','symbol':'BTC/USDC:USDC'}]
+    assert result['statuses']['HYPE']['status']=='valid'
+    assert result['statuses']['all']['status']=='valid'
+    assert all(path.read_bytes()==before for path,before in originals.items())
+    assert not list(runtime.root.rglob('__pycache__'))
+
+
+@pytest.mark.parametrize('exchanges,identifiers',[
+    ([],[]),(['../bybit'],[]),(['BYBIT'],[]),(['fake'],[]),
+    (['bybit'],['HYPE\n']),(['bybit'],['HYPE']*1001),(['bybit'],'HYPE'),
+])
+def test_market_selection_rejected_before_helper_launch(monkeypatch,exchanges,identifiers):
+    """Untrusted selections never inspect a runtime or create a helper process."""
+    from pb9_market import get_market_identifiers
+    monkeypatch.setattr(pb9_config,'_config_operation',lambda *args,**kwargs:pytest.fail('helper launched'))
+    with pytest.raises((ValueError,TypeError)):
+        get_market_identifiers({},exchanges,identifiers,None)
+
+
 def test_requests_have_no_shared_module_or_template_cache(runtime):
     """Every call owns a new process instead of retaining native module state."""
     first = pb9_config.load_pb9_template(runtime.root, runtime.python)
@@ -318,6 +383,77 @@ def _assert_no_native_import(runtime):
     """Both package initialization and the native loader must remain untouched."""
     assert not runtime.source_import_marker.exists()
     assert not runtime.import_marker.exists()
+
+
+@pytest.fixture
+def result_runtime(validation_runtime):
+    """Provide a selected-runtime result reader and a strict authored-key validator."""
+    runtime = validation_runtime
+    runtime.extract_marker = runtime.root / 'extracted.json'
+    runtime.records = runtime.root / 'src/config/result_records.py'
+    runtime.records.write_text(
+        'from copy import deepcopy\nimport json\nfrom pathlib import Path\n'
+        'def extract_result_config(source):\n'
+        f'    Path({str(runtime.extract_marker)!r}).write_text(json.dumps(source))\n'
+        '    result = deepcopy(source)\n'
+        '    if "metrics" in result:\n'
+        '        result.pop("metrics")\n'
+        '        result.pop("disable_plotting", None)\n'
+        '        result.get("backtest", {}).pop("coins", None)\n'
+        '        result.get("backtest", {}).pop("cache_dir", None)\n'
+        '    return result\n', encoding='utf-8')
+    runtime.loader.write_text(runtime.loader.read_text() +
+        '\n_original_prepare = prepare_config\n'
+        'def prepare_config(config, **kwargs):\n'
+        '    if any(key in config.get("backtest", {}) for key in ("coins", "unknown_field")):\n'
+        '        raise ValueError("unknown authored backtest field")\n'
+        '    return _original_prepare(config, **kwargs)\n', encoding='utf-8')
+    return runtime
+
+
+def test_native_result_reader_extracts_authored_config_without_expanding_defaults(result_runtime):
+    """Runtime dataset membership is removed natively; sparse policy and GUI values survive."""
+    runtime = result_runtime
+    document = {'config_version': 'v9.0.0', 'bot': {'long': {}, 'short': {'enabled': False}},
+                'backtest': {'coins': {'bybit': ['HYPE']}, 'cache_dir': '/fixture/cache',
+                             'start_date': '2025-01-01'},
+                'metrics': {'objectives': {'fixture': 0.3}}, 'disable_plotting': True,
+                'pbgui': {'note': 'preserved'}}
+    before = copy.deepcopy(document)
+    result = pb9_config.validate_pb9_document(document, runtime.root, runtime.python,
+                                             validation_target='result')
+    assert document == before
+    assert result['config'] == {'config_version': 'v9.0.0', 'bot': before['bot'],
+                               'backtest': {'start_date': '2025-01-01'}}
+    assert result['pbgui'] == before['pbgui']
+    assert result['source']['result_records_module_file'] == str(runtime.records)
+    assert 'pbgui' not in json.loads(runtime.extract_marker.read_text())
+    assert json.loads(runtime.record.read_text())['config'] == result['config']
+
+
+@pytest.mark.parametrize('record', [False, True])
+def test_result_reader_preserves_unknown_fields_for_native_rejection(result_runtime, record):
+    """Unknown authored fields are never filtered by a GUI-side whitelist."""
+    document = {'config_version': 'v9.0.0', 'bot': {},
+                'backtest': {'unknown_field': 1} if record else {'coins': {'bybit': ['HYPE']}}}
+    if record:
+        document['metrics'] = {}
+    with pytest.raises(pb9_config.PB9ConfigError) as error:
+        pb9_config.validate_pb9_document(document, result_runtime.root, result_runtime.python,
+                                        validation_target='result')
+    assert error.value.error_codes == ('native_config_rejected',)
+
+
+@pytest.mark.parametrize('field,value', [('approved_coins', '/fixture/coins.json'),
+                                        ('_raw', {'fixture': True})])
+def test_result_conversion_keeps_inline_security_gate(result_runtime, field, value):
+    """External-file discovery and internal compiler data never reach native preparation."""
+    document = {'config_version': 'v9.0.0', 'metrics': {},
+                'bot': {'global': {'universe': {field: value}}}}
+    with pytest.raises(pb9_config.PB9ConfigError):
+        pb9_config.validate_pb9_document(document, result_runtime.root, result_runtime.python,
+                                        validation_target='result')
+    assert not result_runtime.record.exists()
 
 
 def test_native_validation_preserves_caller_source_and_uses_canonical_kwargs(validation_runtime):

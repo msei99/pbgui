@@ -106,7 +106,7 @@ def test_queue_settings_and_five_vast_views_are_separate(cloud_page):
         assert page.locator('#sidebar #vast-performance-actions').count() == 0
         if view == 'performance':
             assert page.locator('#vast-performance #vast-performance-actions').is_visible()
-            assert page.locator('#vast-performance #performance-refresh').is_visible()
+            assert page.locator('#vast-performance #performance-refresh').count() == 0
     page.evaluate("setPanel('queue')")
     page.locator('#btn-queue-settings').click()
     assert page.locator('#settings-cpu-value').is_visible()

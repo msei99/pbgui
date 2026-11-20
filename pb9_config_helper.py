@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import redirect_stdout
+from copy import deepcopy
 import importlib
 import json
 import math
@@ -128,6 +129,18 @@ def check_inline_config(config: dict, expected_schema: str | None = None, *, all
         raise _HelperError("invalid_config") from exc
 
 
+def _exchange_metadata(src: Path) -> dict:
+    """Describe native connector/history capabilities, independently of selected defaults."""
+    gate = importlib.import_module('live.order_churn_gate')
+    utils = importlib.import_module('utils')
+    ccxt = importlib.import_module('ccxt.async_support')
+    _module_path(gate, src)
+    _module_path(utils, src)
+    live = sorted(set(gate.ORDER_CHURN_GATE_SUPPORTED_EXCHANGES) - {'fake'})
+    historical = [exchange for exchange in live if utils.to_ccxt_client_id(exchange) in ccxt.exchanges]
+    return {'live':live, 'backtest':historical, 'optimize':historical, 'suite':historical}
+
+
 def _editor_metadata(schema, src: Path) -> dict:
     """Describe native fields and strategies without coupling to the PB8 schema."""
     def arrays(value):
@@ -173,6 +186,7 @@ def _editor_metadata(schema, src: Path) -> dict:
         "prototype": schema.get_expanded_config_prototype(), "fields": fields,
         "strategies": kinds, "strategy_specs": {kind: strategy.get_strategy_spec(kind) for kind in kinds},
         "strategy_defaults": strategy.get_all_strategy_defaults(),
+        "exchange_options": _exchange_metadata(src),
     }
     metadata = arrays(metadata)
     _require_json_value(metadata)
@@ -301,18 +315,158 @@ def _migrate_v8(envelope, src, schema_version):
             os.chdir(previous)
 
 
+def _optimize_metadata(schema, src, metadata):
+    """Project native PB9 definitions into the shared Optimize editor contract."""
+    import copy
+    from config.metrics import KNOWN_METRICS
+    from config.scoring import OBJECTIVE_GOALS, DEFAULT_OBJECTIVE_GOALS
+    from config.reducers import SUPPORTED_REDUCERS
+    from config.optimize_bounds import get_optimize_bounds_defaults
+    from config.field_registry import get_field_registry
+    from optimization.backends import BACKEND_RUNNERS
+    from optimizer_overrides import KNOWN_OPTIMIZER_OVERRIDES
+    from importlib import util
+    import ast
+
+    # Read the native parser declarations without importing the executable CLI.
+    declared_flags = set()
+    for node in ast.walk(ast.parse((src / 'optimize.py').read_text(encoding='utf-8-sig'))):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == 'add_argument':
+            declared_flags.update(arg.value for arg in node.args if isinstance(arg, ast.Constant) and isinstance(arg.value, str))
+    cli_options = [key for key in ('scenarios', 'filter_starting_configs', 'compress_starting_configs', 'preparation_manifest')
+                   if '--' + key.replace('_', '-') in declared_flags]
+
+    bounds = get_optimize_bounds_defaults()
+    template = schema.get_starter_config()
+    optimize = copy.deepcopy(template['optimize'])
+    strategies = metadata['strategies']
+    bounds['global'] = copy.deepcopy(bounds['long'])
+    bounds['portfolio'] = copy.deepcopy(template['optimize']['bounds'].get('portfolio', {}))
+    active = {}
+    for kind in strategies:
+        selected = copy.deepcopy(bounds)
+        for side in ('global', 'long', 'short'):
+            values = selected.setdefault(side, {})
+            values['strategy'] = {kind: copy.deepcopy(values.get('strategy', {}).get(kind, {}))}
+        active[kind] = selected
+    # Share only the existing hardware probe. It imports no PB8 bot modules.
+    spec = util.spec_from_file_location('_pbgui_gpu_probe', Path(__file__).with_name('optimizer_gpu_runtime.py'))
+    probe = util.module_from_spec(spec);spec.loader.exec_module(probe)
+    runtime = probe.gpu_runtime_contract(list(BACKEND_RUNNERS))
+    runtime['reason'] = str(runtime.get('reason', '')).replace('PB8', 'PB9')
+    metrics = sorted(KNOWN_METRICS)
+    backend_items = {'pymoo':{'recognized':True, 'available':True, 'metric_set':'cpu', 'reason':''},
+        'gpu':{'recognized':True, 'available':runtime['device_available'], 'metric_set':'gpu_proxy',
+            'metric_eligibility_known':True, 'reason':runtime.get('reason', ''), 'runtime':runtime,
+            'effective_defaults':copy.deepcopy(optimize.get('gpu', {})), 'exact_only_metrics':[]}}
+    bound_catalog = {
+        '.'.join(field.path[1:]): list(field.recommended_bounds) if field.recommended_bounds else None
+        for field in get_field_registry()
+        if field.path[0] == 'bot' and field.optimizable and '*' not in field.path
+    }
+    return {**metadata, 'template': template, 'bounds': optimize.get('bounds', {}), 'all_bounds': bounds,
+        'bound_catalog': bound_catalog,
+        'active_bounds': active, 'optimize_defaults': optimize,
+        'bot_parameter_paths':['.'.join(field['path']) for field in metadata['fields'] if field['path'][0]=='bot'
+            and '*' not in field['path'] and any(kind in ('number','integer') for kind in field['types'])],
+        'backends': list(BACKEND_RUNNERS), 'backend_default': optimize.get('backend', 'pymoo'),
+        'backend_contract': {'contract_version':1, 'runtime':runtime, 'items':backend_items, 'metric_sets':{'cpu':metrics, 'gpu_proxy':metrics},
+            'backends':{'pymoo':{'available':True,'metric_set':'cpu'}, 'gpu':{'available':runtime['device_available'],
+                'metric_set':'gpu_proxy', 'reason':runtime.get('reason', ''), 'supported_metrics':metrics}}},
+        'pymoo':{'algorithms':['auto', *optimize.get('pymoo', {}).get('algorithms', {})],
+            'ref_dir_methods':['das_dennis', 'energy'], 'defaults':optimize.get('pymoo', {})},
+        'scoring':{'metrics':metrics, 'goals':list(OBJECTIVE_GOALS), 'default_goals':dict(DEFAULT_OBJECTIVE_GOALS),
+            'basis_field':'reducer', 'defaults':optimize.get('scoring', [])},
+        'limits':{'metrics':metrics, 'statistics':sorted(SUPPORTED_REDUCERS), 'basis_field':'reducer',
+            'scoring_basis_field':'reducer', 'operators':['greater_than','greater_than_or_equal','less_than',
+                'less_than_or_equal','equal_to','not_equal','outside_range','inside_range','auto'],
+            'defaults':optimize.get('limits', [])},
+        'optimizer_overrides':sorted(KNOWN_OPTIMIZER_OVERRIDES), 'runtime_overrides':[], 'hsl_signal_modes':['coin','position_side','portfolio'],
+        'native_cli_options':cli_options,
+        'runtime_options':{'mode':{'choices':['fresh','pareto_seed','checkpoint_resume'],'default':'fresh'},
+            'fine_tune_params':{'type':'array','default':[]}, 'polish_percentage':{'type':'number_or_null','default':None},
+            'polish_bounds_mode':{'choices':['clamp','override-tunable','override-all'],'default':'clamp'}}}
+
+
+def _optimizer_effective_config(prepared,schema):
+    """Resolve resume policy with native defaults, excluding derived runtime metadata."""
+    import copy
+    from config.bot_inheritance import get_bot_policy
+    prototype=schema.get_expanded_config_prototype()
+    result={key:copy.deepcopy(prepared.get(key,{})) for key in
+        ('config_version','bot','backtest','live','coin_overrides','optimize')}
+    policy=get_bot_policy(prepared)
+    if policy is not None:result['bot']=policy.effective_view()
+    result['backtest']={key:value for key,value in result['backtest'].items()
+        if key in prototype['backtest'] and key!='base_dir'}
+    for key in ('iters','n_cpus'):result['optimize'].pop(key,None)
+    gpu=result['optimize'].get('gpu')
+    if isinstance(gpu,dict):
+        for key in ('tuning_mode','batch_size','max_dispatch_candidate_bars','checkpoint_interval_seconds'):
+            gpu.pop(key,None)
+    def public(value):
+        """Native source/transform annotations do not change simulation policy."""
+        if isinstance(value,dict):return {key:public(item) for key,item in value.items() if not key.startswith('_')}
+        if isinstance(value,(list,tuple)):return [public(item) for item in value]
+        return value
+    return public(result)
+
+
+def _cloud_export_plan(prepared):
+    """Derive export-only data policy from native effective universe and bounds.
+
+    The projection is consumed only by PBGui's shard planner; optimize.json is
+    always the original native PB9 document. No PB8 bot module is imported.
+    """
+    import copy
+    from config.universe import get_side_universe_sources
+    from config.age_policy import minimum_coin_age_days
+    from optimization.warmup import compute_optimizer_backtest_warmup_minutes
+    from warmup_utils import compute_backtest_warmup_minutes
+    from suite_runner import build_scenarios, apply_scenario_overrides
+
+    configs = [prepared]
+    if prepared['backtest'].get('suite_enabled'):
+        scenarios,_ = build_scenarios(prepared['backtest'], base_exchanges=prepared['backtest']['exchanges'])
+        for scenario in scenarios:
+            config=copy.deepcopy(prepared)
+            patches={}
+            for field,value in (('approved_coins',scenario.coins),('ignored_coins',scenario.ignored_coins)):
+                if value is not None:
+                    patches.update({f'bot.{side}.universe.{field}':value for side in ('long','short')})
+            patches.update(scenario.overrides or {})
+            apply_scenario_overrides(config,patches)
+            for key in ('start_date','end_date','exchanges'):
+                value=getattr(scenario,key,None)
+                if value: config['backtest'][key]=value
+            configs.append(config)
+    plans=[]
+    for config in configs:
+        approved = get_side_universe_sources(config, 'approved_coins', {})
+        if any(not isinstance(approved.get(side), list) for side in ('long','short')):
+            raise _HelperError('external_reference_rejected')
+        plans.append({'backtest':copy.deepcopy(config['backtest']),
+            'live':{'approved_coins':copy.deepcopy(approved),
+                'minimum_coin_age_days':max(minimum_coin_age_days(config,side) for side in ('long','short'))},
+            'warmup_minutes':max(compute_backtest_warmup_minutes(config),
+                compute_optimizer_backtest_warmup_minutes(config))})
+    return {'data_plans':plans}
+
+
 def handle(request: dict) -> dict:
     """Return templates or validate in-memory native configs, never save user configs."""
     if not isinstance(request, dict) or not isinstance(request.get("operation"), str):
         raise _HelperError("invalid_request")
     required = {"operation", "pb9_dir", "config_schema", "package_version"}
-    if isinstance(request, dict) and request.get("operation") in {"validate", "validate_live", "validate_backtest", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates"}:
+    if isinstance(request, dict) and request.get("operation") in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates"}:
         required.add("config")
-    if request.get("operation") in {"ohlcv_preflight", "ohlcv_start_dates"}:
+    if request.get("operation") in {"ohlcv_preflight", "ohlcv_start_dates", "market_identifiers"}:
         required.update({"work_dir", "metadata_roots"})
+    if request.get('operation') == 'market_identifiers':
+        required.add('market_request')
     if not isinstance(request, dict) or set(request) != required:
         raise _HelperError("invalid_request")
-    if request.get("operation") in {"ohlcv_preflight", "ohlcv_start_dates"}:
+    if request.get("operation") in {"ohlcv_preflight", "ohlcv_start_dates", "market_identifiers"}:
         work = request["work_dir"]
         roots = request["metadata_roots"]
         if (not isinstance(work, str) or not Path(work).is_absolute() or Path(work).is_symlink()
@@ -322,21 +476,25 @@ def handle(request: dict) -> dict:
                 or any(not isinstance(root, str) or not Path(root).is_absolute()
                        or len(root) > 4096 or any(ord(char) < 32 for char in root) for root in roots)):
             raise _HelperError("invalid_request")
-    if not isinstance(request["operation"], str) or request["operation"] not in {"template", "metadata", "validate", "validate_live", "validate_backtest", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates"} or any(
+    if not isinstance(request["operation"], str) or request["operation"] not in {"template", "metadata", "optimize_metadata", "validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config", "migrate_v8", "ohlcv_preflight", "ohlcv_start_dates", "market_identifiers"} or any(
         not isinstance(request[key], str) or not request[key]
         for key in ("pb9_dir", "config_schema", "package_version")
     ):
         raise _HelperError("invalid_request")
-    if request["operation"] in {"validate", "validate_live", "validate_backtest", "ohlcv_preflight", "ohlcv_start_dates"}:
+    if request["operation"] == "result_config":
+        _require_json_value(request["config"])
+        if not isinstance(request["config"], dict):
+            raise _HelperError("invalid_config")
+    elif request["operation"] in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "ohlcv_preflight", "ohlcv_start_dates"}:
         check_inline_config(request["config"], request["config_schema"],
-                            allow_inline_overrides=request["operation"] in {"validate_live", "validate_backtest", "ohlcv_preflight", "ohlcv_start_dates"})
+                            allow_inline_overrides=request["operation"] in {"validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "ohlcv_preflight", "ohlcv_start_dates"})
     if request["operation"] == "migrate_v8":
         check_migration_input(request["config"])
     root = Path(request["pb9_dir"])
     if not root.is_absolute():
         raise _HelperError("invalid_request")
     root = root.resolve()
-    if request["operation"] in {"ohlcv_preflight", "ohlcv_start_dates"}:
+    if request["operation"] in {"ohlcv_preflight", "ohlcv_start_dates", "market_identifiers"}:
         work = Path(request["work_dir"]).resolve()
         if work.is_relative_to(root) or root.is_relative_to(work):
             raise _HelperError("invalid_request")
@@ -355,6 +513,23 @@ def handle(request: dict) -> dict:
                 or schema_version != request["config_schema"]
                 or package_version != request["package_version"]):
             raise _HelperError("runtime_identity_mismatch")
+        if request['operation'] == 'market_identifiers':
+            try:
+                from importlib import util
+                spec = util.spec_from_file_location('_pbgui_native_market', Path(__file__).with_name('pb9_market.py'))
+                market = util.module_from_spec(spec)
+                spec.loader.exec_module(market)
+                if not isinstance(request['market_request'],dict):
+                    raise _HelperError('invalid_request')
+                catalog = market.resolve(request['market_request'], root, Path(request['work_dir']), request['metadata_roots'])
+                resolver_file = _module_path(importlib.import_module('utils'), src)
+            except _HelperError:
+                raise
+            except Exception:
+                raise _HelperError('native_metadata_failed') from None
+            return {'market_catalog':catalog,'resolver_module_file':resolver_file,
+                    'config_schema':schema_version,'package_version':package_version,
+                    'schema_module_file':schema_file,'version_module_file':version_file}
         if request["operation"] in {"ohlcv_preflight", "ohlcv_start_dates"}:
             try:
                 from importlib import util
@@ -375,16 +550,18 @@ def handle(request: dict) -> dict:
             return {"migration": migration, "converter_module_file": converter_file,
                     "config_schema": schema_version, "package_version": package_version,
                     "schema_module_file": schema_file, "version_module_file": version_file}
-        if request["operation"] == "metadata":
+        if request["operation"] in {"metadata", "optimize_metadata"}:
             try:
                 result = _editor_metadata(schema, src)
+                if request["operation"] == "optimize_metadata":
+                    result["metadata"] = _optimize_metadata(schema, src, result["metadata"])
             except _HelperError:
                 raise
             except Exception as exc:
                 raise _HelperError("native_metadata_failed") from exc
             return {**result, "config_schema": schema_version, "package_version": package_version,
                     "schema_module_file": schema_file, "version_module_file": version_file}
-        if request["operation"] in {"validate", "validate_live", "validate_backtest"}:
+        if request["operation"] in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config"}:
             try:
                 loader = importlib.import_module("config.load")
                 load_file = _module_path(loader, src)
@@ -393,11 +570,21 @@ def handle(request: dict) -> dict:
             except Exception as exc:
                 raise _HelperError("native_validation_failed") from exc
             try:
+                authored = request["config"]
+                records_file = None
+                if request["operation"] == "result_config":
+                    records = importlib.import_module("config.result_records")
+                    records_file = _module_path(records, src)
+                    authored = records.extract_result_config(authored)
+                    check_inline_config(authored, schema_version, allow_inline_overrides=True)
                 options = {"live_only": True} if request["operation"] == "validate_live" else {}
                 prepared = loader.prepare_config(
-                    request["config"], base_config_path="", verbose=False,
+                    deepcopy(authored), base_config_path="", verbose=False,
                     target="canonical", runtime=None, **options,
                 )
+                if request["operation"] in {"validate_optimize", "optimize_cloud_plan", "optimize_effective"}:
+                    from optimization.config_adapter import extract_bounds_tuple_list_from_config
+                    extract_bounds_tuple_list_from_config(prepared)
                 if not isinstance(prepared, dict) or prepared.get("config_version") != schema_version:
                     raise _HelperError("runtime_identity_mismatch")
             except _HelperError:
@@ -406,7 +593,10 @@ def handle(request: dict) -> dict:
                 raise _HelperError("native_config_rejected") from exc
             except Exception as exc:
                 raise _HelperError("native_validation_failed") from exc
-            return {"valid": True, "config_schema": schema_version, "package_version": package_version,
+            return {**({**_cloud_export_plan(prepared),'config':request['config']} if request["operation"] == "optimize_cloud_plan" else
+                       {'effective':_optimizer_effective_config(prepared,schema)} if request['operation']=='optimize_effective' else
+                       {'config':authored, 'result_records_module_file':records_file} if request['operation']=='result_config' else {}),
+                    "valid": True, "config_schema": schema_version, "package_version": package_version,
                     "schema_module_file": schema_file, "version_module_file": version_file,
                     "load_module_file": load_file}
         config = schema.get_template_config()
@@ -438,7 +628,7 @@ def main() -> int:
     except Exception:
         # The PBGui owner logs this fixed error code, never native exception data.
         operation = request.get("operation") if isinstance(request, dict) else None
-        code = "native_validation_failed" if isinstance(operation, str) and operation in {"validate", "validate_live", "validate_backtest"} else "native_template_failed"
+        code = "native_validation_failed" if isinstance(operation, str) and operation in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config"} else "native_template_failed"
         response = {"ok": False, "error_code": code}
     try:
         encoded = json.dumps(response, allow_nan=False).encode("utf-8")

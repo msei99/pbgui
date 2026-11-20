@@ -16,7 +16,7 @@ def freeze_relative_dates(config):
             item['end_date'] = day
 
 
-def history_window(config, contexts):
+def history_window(config, contexts, *, warmup_minutes=None):
     """Match the suite preload envelope, including base dates and native warmup."""
     from pb8_config import _call_helper, PB8ConfigurationError
 
@@ -35,10 +35,10 @@ def history_window(config, contexts):
         starts.append(start)
         ends.append(end)
     try:
-        values = _call_helper('optimizer_warmup', configs=configs)['minutes']
+        values = warmup_minutes if warmup_minutes is not None else _call_helper('optimizer_warmup', configs=configs)['minutes']
     except (PB8ConfigurationError, KeyError) as exc:
         raise ValueError('Cannot determine PB8 optimizer warmup; input export stopped') from exc
-    if (not isinstance(values, list) or len(values) != len(configs)
+    if (not isinstance(values, list) or warmup_minutes is None and len(values) != len(configs)
             or any(type(value) is not int or value < 0 for value in values)):
         raise ValueError('Invalid PB8 optimizer warmup response')
     # The suite preloads a shared continuous envelope before slicing scenarios.
@@ -50,7 +50,7 @@ def history_window(config, contexts):
     return first.isoformat(), max(ends).isoformat()
 
 
-def integrity_requirements(config, contexts):
+def integrity_requirements(config, contexts, *, warmup_minutes=None):
     """Describe minute windows for the pinned suite's shared dataset preloads.
 
     Keep the daily export envelope above unchanged. Dataset windows, unlike
@@ -61,10 +61,10 @@ def integrity_requirements(config, contexts):
 
     configs = [config, *(context['config'] for context in contexts)]
     try:
-        minutes = _call_helper('optimizer_warmup', configs=configs)['minutes']
+        minutes = warmup_minutes if warmup_minutes is not None else _call_helper('optimizer_warmup', configs=configs)['minutes']
     except (PB8ConfigurationError, KeyError) as exc:
         raise ValueError('Cannot determine PB8 optimizer warmup for integrity validation') from exc
-    if (not isinstance(minutes, list) or len(minutes) != len(configs)
+    if (not isinstance(minutes, list) or warmup_minutes is None and len(minutes) != len(configs)
             or any(type(value) is not int or value < 0 for value in minutes)):
         raise ValueError('Invalid PB8 optimizer warmup response')
     bt = config['backtest']

@@ -71,6 +71,28 @@ def test_snapshot_parse_failure_can_recover_without_file_change(tmp_path, monkey
     assert estimate_snapshot(path, tmp_path) == 11520
 
 
+def test_snapshot_cache_keeps_estimator_owners_and_source_revisions_separate(tmp_path):
+    """One unchanged file cannot share estimates across runtimes or native revisions."""
+    path = tmp_path / 'job.json'
+    path.write_text('{}')
+    calls = []
+
+    def native(_path):
+        """Represent a native data-plan estimate without any runtime imports."""
+        calls.append('native')
+        return 100 + len(calls)
+
+    def legacy(_path):
+        """A second owner must retain its own cache entry."""
+        return 900
+
+    assert estimate_snapshot(path, tmp_path, estimator=native, context=('pb9', 'a')) == 101
+    assert estimate_snapshot(path, tmp_path, estimator=native, context=('pb9', 'a')) == 101
+    assert estimate_snapshot(path, tmp_path, estimator=legacy, context=('pb8', 'a')) == 900
+    assert estimate_snapshot(path, tmp_path, estimator=native, context=('pb9', 'b')) == 102
+    assert calls == ['native', 'native']
+
+
 def config():
     """Two coins across both sides with one inclusive two-day base window."""
     return {'live': {'approved_coins': {'long': ['ETH', 'SOL'], 'short': ['ETH']}},

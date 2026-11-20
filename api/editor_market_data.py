@@ -138,6 +138,35 @@ def classify_coins(exchanges: list[str], coins: list[str]) -> dict[str, dict]:
     return statuses
 
 
+def project_filtered_catalog(resolved, approved, ignored) -> dict:
+    """Project shared Coin Data filters onto an unchanged native resolver catalog."""
+    approved_coins = {str(item).upper() for item in approved}
+    ignored_coins = {str(item).upper() for item in ignored}
+    projected_approved, projected_ignored, matched = [], [], set()
+    for entry in resolved['catalog']:
+        if not isinstance(entry.get('resolutions'), list) or not entry['resolutions']:
+            continue
+        coin = str(entry.get('coin') or '').upper()
+        coin_aliases = {coin}
+        if ':' in coin:
+            namespace, market_name = coin.split(':', 1)
+            if namespace and market_name:
+                coin_aliases.add(f'{namespace.upper()}-{market_name.upper()}')
+        config_id = str(entry.get('config_id') or '')
+        if not config_id:
+            continue
+        approved_match = coin_aliases & approved_coins
+        ignored_match = coin_aliases & ignored_coins
+        if approved_match:
+            projected_approved.append(config_id)
+            matched.update(approved_match)
+        elif ignored_match:
+            projected_ignored.append(config_id)
+            matched.update(ignored_match)
+    return {'approved':projected_approved, 'ignored':projected_ignored,
+            'unresolved':sorted((approved_coins | ignored_coins) - matched)}
+
+
 def exact_market_catalog(root, exchanges, identifiers=None) -> dict:
     """Resolve exact native IDs using published local mappings, without network IO.
 

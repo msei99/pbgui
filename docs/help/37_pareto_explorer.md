@@ -1,16 +1,35 @@
-# Pareto Explorer (PBv7 / PBv8)
+# Pareto Explorer (PBv7 / PBv8 / PBv9)
+
+Chart mode, axes, weights and the selected config are restored after a browser reload.
 
 Custom Z-axis metrics are retained while viewing 2D plots and restored when returning to 3D.
 
-Pareto Explorer helps you analyze PBv7 and PBv8 optimize results, compare tradeoffs, shortlist configs, and create follow-up Optimize presets. It is designed for multi-objective results where no single metric is the whole answer.
+Pareto Explorer helps you analyze PBv7, PBv8 and PBv9 optimize results, compare tradeoffs, shortlist configs, and create follow-up Optimize presets. It is designed for multi-objective results where no single metric is the whole answer.
 
 ## Where to Open It
 
-- PBGui: **PBv7/PBv8 -> Optimize -> Results**, or the matching **Pareto Explorer** navigation entry.
+- PBGui: **PBv7/PBv8/PBv9 -> Optimize -> Results**, or the matching **Pareto Explorer** navigation entry.
+
+For PBv9 results, Backtest, Validation and preset handoffs use the installed PB9 result reader, so result-only fields are not passed on as authored settings. Shared `global` and `portfolio` parameters appear as dotted paths such as `global.risk.max_positions`. PB9 presets use native PB9 metrics (for example CAGR, Sortino and maximum drawdown fractions) and keep the run's limits unchanged. Strategy Explorer is not available for PB9 yet.
 - Open a result with **Pareto Explorer** from the Optimize results table or result sidebar.
 - The page can start in fast pareto-only mode and later scan the full `all_results.bin` stream from the sidebar.
 
 ## Core Idea
+
+PB9 charts use the native metric names and units, including the saved mean,
+minimum or maximum reduction. Compressed full results use the same incremental
+reader as PB8. Quick Views are offered when
+their required metrics exist in the loaded result. **Use CAGR EW** switches
+between the two CAGR variants when both exist. Risk metrics remain available
+alongside weighted CAGR. The BTC switch applies to PB7/PB8.
+
+PB9 **Risk Metrics** shows the reported metric values. Missing risk or activity
+data stays unavailable. Activity details use gross turnover per day and
+time-weighted holding hours when present. Multi-scenario robustness requires
+multiple scenarios and contributes to ranking only when supported.
+
+For definitions, units and objective/limit recommendations for all 27 native
+metrics, select **PBv9 Optimize** in Guide and open **Metric reference**.
 
 Every score, chart, and Pareto star is relative to the currently loaded and visible config set.
 

@@ -79,8 +79,41 @@ def _claim_is_active(payload: dict) -> bool:
         return False
 
 
+def _belongs_to_pbgui(process, command: list[str], native_runner: bool) -> bool:
+    """Associate an untracked launch with this checkout, never just its bot path."""
+    root = Path(PBGDIR).resolve()
+
+    def absolute(argument: str) -> Path:
+        """Resolve relative command paths against their process, not this API."""
+        path = Path(argument)
+        return (path if path.is_absolute() else Path(process.cwd()) / path).resolve()
+
+    if native_runner:
+        return any(
+            absolute(argument) == root / Path(argument).name
+            for argument in command
+            if Path(argument).name.lower() in {"pb8_backtest_runner.py", "pb9_backtest_runner.py"}
+        )
+    for index, argument in enumerate(command[:-1]):
+        if Path(argument).name.lower() == "backtest.py":
+            config = command[index + 1]
+            if Path(config).suffix.lower() == ".json" and absolute(config).is_relative_to(root):
+                return True
+    # Legacy PB7 launches may use an external archive config. Associate those
+    # with their actual PBGui coordinator; separate GUIs can share one PB7 tree.
+    for parent in process.parents()[:3]:
+        if Path(parent.cwd()).resolve() != root:
+            continue
+        args = parent.cmdline()
+        if "PBApiServer:app" in args or any(
+            Path(argument).name in {"PBApiServer.py", "PBGBacktests.py"} for argument in args
+        ):
+            return True
+    return False
+
+
 def _managed_processes() -> dict[int, float]:
-    """Find PBGui-compatible PB7 and PB8 backtest parent processes."""
+    """Find this PBGui installation's untracked PB7/PB8/PB9 backtests."""
     active = {}
     for process in psutil.process_iter(["pid", "create_time", "cmdline"]):
         try:
@@ -88,9 +121,9 @@ def _managed_processes() -> dict[int, float]:
             names = [Path(part).name.lower() for part in command]
             is_pb7 = "backtest.py" in names
             is_pb8 = any(name in names for name in ("pb8_backtest_runner.py", "pb9_backtest_runner.py")) and "backtest" in command
-            if is_pb7 or is_pb8:
+            if (is_pb7 or is_pb8) and _belongs_to_pbgui(process, command, is_pb8):
                 active[int(process.info["pid"])] = float(process.info["create_time"])
-        except (ValueError, TypeError, psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
+        except (OSError, ValueError, TypeError, psutil.NoSuchProcess, psutil.ZombieProcess, psutil.AccessDenied):
             continue
     return active
 

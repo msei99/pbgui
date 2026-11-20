@@ -85,7 +85,15 @@ def worker_compatible_jobs(store: JobStore, jobs: list[dict], *, image: str = IM
     for row in jobs:
         try:
             snapshot = store.read(row['id'], 'input/optimize.json')
-            errors = worker_compatibility_errors(snapshot, revision)
+            from vast_worker_profiles import config_runtime,worker_profile
+            native=config_runtime(snapshot)=='pb9'
+            profile=worker_profile('pb9')
+            if native:
+                from vast_pb9 import snapshot_errors
+                errors=snapshot_errors(snapshot,revision) if profile.image==image else [{'message':'Native PB9 job requires its own worker image.'}]
+            else:
+                errors=([{'message':'Legacy job cannot run on a native PB9 worker.'}] if profile.image==image
+                    else worker_compatibility_errors(snapshot, revision))
             if snapshot.get('backtest', {}).get('offline') is not True:
                 errors.append({'path': 'backtest.offline',
                                'message': 'Offline input cannot be checked or is disabled. Prepare this job again on PBGui; Vast requires offline=true.'})
@@ -123,7 +131,12 @@ def preflight_gpu_snapshots(store: JobStore, jobs: list[dict], *, reject: bool =
         checking_integrity = False
         try:
             config = store.read(row['id'], 'input/optimize.json')
-            errors, _warnings = validate_gpu_directions(config)
+            from vast_worker_profiles import config_runtime,worker_profile
+            if config_runtime(config)=='pb9':
+                from vast_pb9 import snapshot_errors
+                errors=snapshot_errors(config,worker_profile('pb9').revision)
+            else:
+                errors, _warnings = validate_gpu_directions(config)
             if config.get('backtest', {}).get('offline') is not True:
                 errors.append({'path': 'backtest.offline',
                                'message': 'Vast requires offline input; remote exchange downloads are disabled.'})
@@ -351,7 +364,7 @@ class CloudQueue:
               rental_job_gpu_profiles: dict | None = None, loop_id: str | None = None,
               loop_owner: str | None = None, loop_limits: dict | None = None,
               replacement_authorization: dict | None = None,
-              job_authorization: dict | None = None) -> dict:
+              job_authorization: dict | None = None, runtime: str | None = None) -> dict:
         """Rent once for the queue; duplicate starts return the existing worker."""
         if replacement_authorization is not None and (not loop_id or manual or pool_authorization_id or calibration_id):
             raise VastError('Replacement authorization is restricted to its owning Loop', 409)
@@ -373,7 +386,21 @@ class CloudQueue:
             rows = self.waiting(loop_id, authorization_id=scope['id']) if scope else self.waiting(loop_id)
             if scope and [row['id'] for row in rows] != [scope['job_id']]:
                 raise VastError('The approved cloud optimizer is no longer ready', 409)
-            return rows
+            return [row for row in rows if row.get('runtime','pb8')==selected_runtime]
+        from vast_worker_profiles import worker_profile
+        selected_runtime=runtime
+        if scope:
+            owned_runtime=self.store.read(scope['job_id']).get('runtime','pb8')
+            if runtime is not None and runtime!=owned_runtime:raise VastError('Approved job belongs to another runtime',409)
+            selected_runtime=owned_runtime
+        elif calibration_id:
+            owned_runtime=self.store.read(job_id(calibration_id)).get('runtime','pb8')
+            if runtime is not None and runtime!=owned_runtime:raise VastError('Calibration belongs to another runtime',409)
+            selected_runtime=owned_runtime
+        if selected_runtime is None:
+            selected_runtime='pb8'
+        profile=worker_profile(selected_runtime).require_published()
+        worker_image,worker_revision=profile.image,profile.revision
         if type(idle_seconds) is not int or idle_seconds < -1:
             raise VastError('Idle timeout must be -1 for deadline retention or nonnegative whole seconds', 422)
         if rental_gpu_profile is not None:
@@ -401,7 +428,7 @@ class CloudQueue:
                     and current['rental_state'] not in ('none', 'deletion_verified')):
                 from vast_jobs import SUPPORTED_RENTAL_IMAGE_REVISIONS
                 intent = self.store.read(current['id'], 'intent.json')
-                legacy_reuse = (intent.get('image') != IMAGE and intent.get('image') in SUPPORTED_RENTAL_IMAGE_REVISIONS
+                legacy_reuse = (intent.get('image') != worker_image and intent.get('image') in SUPPORTED_RENTAL_IMAGE_REVISIONS
                                 and SUPPORTED_RENTAL_IMAGE_REVISIONS[intent['image']] == intent.get('pb8_revision'))
             if legacy_reuse:
                 # This path returns an existing paid worker below, rather than
@@ -411,7 +438,7 @@ class CloudQueue:
                     revision=intent['pb8_revision']) if calibration_id is None else []
             elif calibration_id is None:
                 preflight_jobs = preflight_gpu_snapshots(
-                    self.store, worker_compatible_jobs(self.store, waiting_jobs()), checked_inputs=checked_inputs)
+                    self.store, worker_compatible_jobs(self.store, waiting_jobs(),image=worker_image,revision=worker_revision), checked_inputs=checked_inputs)
             else:
                 preflight_jobs = preflight_gpu_snapshots(
                     self.store, [self.store.read(job_id(calibration_id))], reject=True, checked_inputs=checked_inputs)
@@ -446,6 +473,8 @@ class CloudQueue:
             elif loop_id is None and current and current['rental_state'] not in ('none', 'deletion_verified') and not manual:
                 if legacy_reuse and waiting_jobs() and not preflight_jobs:
                     raise VastError('Existing worker cannot run the waiting jobs; use a compatible pool rental or end it first', 409)
+                if current.get('runtime','pb8')!=selected_runtime:
+                    raise VastError('Existing rental belongs to another Passivbot generation; use its compatible worker or end the rental first.',409)
                 return current
             active_workers = self.workers()
             if loop_id is not None:
@@ -484,7 +513,7 @@ class CloudQueue:
                 jobs = preflight_gpu_snapshots(self.store, [calibration], reject=True, checked_inputs=current_inputs)
             else:
                 jobs = preflight_gpu_snapshots(
-                    self.store, worker_compatible_jobs(self.store, waiting_jobs()), checked_inputs=current_inputs)
+                    self.store, worker_compatible_jobs(self.store, waiting_jobs(),image=worker_image,revision=worker_revision), checked_inputs=current_inputs)
                 if [row['id'] for row in jobs] != [row['id'] for row in preflight_jobs]:
                     raise VastError('Cloud queue changed during local metadata preparation; retry rental', 409)
             if current_inputs != checked_inputs:
@@ -516,7 +545,7 @@ class CloudQueue:
                         or reserved_intent.get('rental_job_gpu_profiles', {}) != job_profiles):
                     raise VastError('Replacement worker reservation belongs to another operation', 409)
                 return self.store.start(identifier, offer, hours, budget)
-            self.store.publish({'id': identifier, 'kind': 'worker', 'status': 'ready',
+            self.store.publish({'id': identifier, 'kind': 'worker', **({'runtime':'pb9'} if selected_runtime=='pb9' else {}), 'status': 'ready',
                        'rental_state': 'none', 'workers': max((1 if row.get('auto_cpu_workers') else row['workers'] for row in jobs), default=1),
                        'created_at': time.time(), 'generation': 0, 'idle_seconds': idle_seconds,
                        'awaiting_queue_start': manual, 'rental_gpu_profile': rental_gpu_profile,
@@ -528,7 +557,7 @@ class CloudQueue:
                        **({'loop_id': loop_id, 'loop_owner': loop_owner} if loop_id else {}),
                        **({'gpu_replacement_id': replacement_authorization['operation_id'],
                            'gpu_replacement_job': replacement_authorization['job_id']} if replacement_authorization else {})},
-                intent={'id': identifier, 'image': IMAGE, 'pb8_revision': REVISION,
+                intent={'id': identifier, 'image': worker_image, 'pb8_revision': worker_revision, 'runtime':selected_runtime,
                        'bundle_bytes': sum(row.get('input_bytes', 0) for row in jobs), 'job_count': len(jobs),
                        'rental_gpu_profile': rental_gpu_profile, 'rental_job_gpu_profiles': job_profiles,
                        **({'job_authorization': scope} if scope else {}),

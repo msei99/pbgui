@@ -61,7 +61,7 @@ Der Sidebar-Eintrag **Workers** öffnet ein eigenes Admin-Panel innerhalb der Se
 
 Das Panel gruppiert Worker in:
 
-- **Queue Workers**: gemeinsamer Market-Data-Queue-Worker sowie getrennte PB7-/PB8-Controller fuer Backtest- und Optimize-Queues. Das Stoppen eines PB8-Controllers pausiert nur das automatische Scheduling; detached PB8-Jobs laufen weiter.
+- **Queue Workers**: gemeinsamer Market-Data-Queue-Worker sowie getrennte PB7-/PB8-Controller fuer Backtest- und Optimize-Queues und der Controller **PB9 Optimize Queue**. Das Stoppen eines PB8- oder PB9-Controllers pausiert nur das automatische Scheduling; detached Optimizer-Jobs laufen weiter.
 - **Sync / Watchers**: API-Key-Dateisync, V7-Config-Sync
 - **Internal Helpers**: Archive-Sync und HLCVS-Cleanup-Hintergrundtasks
 
@@ -108,6 +108,8 @@ Werte besitzen bewusst keinen globalen INI-Watcher.
 Während des Speicherns sind die Einstellungen gegen doppelte Anfragen gesperrt. Validierungsfehler nennen das betroffene Feld.
 
 Die Restart-Aktion in der Navigation zeigt direkt nach der Bestätigung den Fortschritt und verhindert doppelte Anfragen. PBGui verbindet sich automatisch neu und prüft vor dem Neuladen der aktuellen Seite, ob eine neue API-Instanz läuft. Bei verlorener Antwort wird der Status geprüft, ohne den Neustart automatisch erneut anzufordern.
+
+Läuft geschützte Arbeit wie eine PB9-Prüfung, merkt sich der Server den bestätigten Neustart. Die Fortschrittsanzeige nennt den Wartegrund; sobald die Arbeit abgeschlossen ist, geht es automatisch weiter. Neue PB9-Prüfungen werden bis nach dem Neustart zurückgehalten. Ein Neuladen des Browsers stellt die Anzeige des vorgemerkten Neustarts unter der aktuellen URL wieder her; erneutes Klicken ist unnötig. Unabhängig laufende Backtests und Optimierungen laufen weiter.
 
 Mit Escape schließt sich der aktive Hilfe-, Preis-, Ergebnis-, CMC-Schlüssel- oder CMC-Authority-Dialog im Services Monitor. Während einer laufenden CMC-Änderung bleibt der entsprechende Dialog geöffnet.
 

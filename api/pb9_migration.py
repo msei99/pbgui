@@ -22,6 +22,11 @@ _LIMIT = 1024 * 1024 - 8192
 _LOCK = threading.RLock()
 _reviews = {}
 _METADATA = {'pbgui', '_raw', '_raw_effective', '_transform_log', '_coins_sources', '_original_backtest_config'}
+# Authored sections of a PB8 Pareto record; metrics and evaluation contracts are results.
+_AUTHORED_SECTIONS = ('config_version', 'backtest', 'bot', 'live', 'logging', 'monitor', 'optimize', 'coin_overrides')
+_TARGETS = ('backtest', 'optimize')
+_OPTIMIZE_NOTE = ('PBGui optimize run settings (starting configs, fine-tune, polish and execution) '
+                  'are not migrated; set them in the PB9 Optimize editor.')
 
 
 def _read(path, root, *, decode=True, limit=_LIMIT):
@@ -71,13 +76,37 @@ def _clean(value, depth=0):
     return value
 
 
-def source_snapshot(selection, *, with_preferences=False):
+def _optimize_source(kind, value):
+    """Resolve one saved PB8 Optimize config or managed PB8 Pareto config."""
+    from api.optimize_v8 import engine as pb8_optimize
+    if kind == 'config':
+        name = pb8_optimize._validate_name(value)
+        root = pb8_optimize._configs_dir()
+        # Same writer lock as PB8 Optimize config persistence, without its recovery/write path.
+        return pb8_optimize._config_file(name), root, name, lambda: advisory_file_lock(root / '.write')
+    if kind == 'pareto':
+        # PB8 result readers and deletion share this lock outside the bot source tree.
+        with pb8_optimize._result_lock():
+            path = pb8_optimize._resolve_result_path(value, require_directory=False)
+        if not path.is_file() or path.parent.name != 'pareto' or path.suffix != '.json':
+            raise HTTPException(422, 'Select a managed PB8 Pareto config')
+        return (path, pb8_optimize._results_root(), f'{path.parent.parent.name[:80]}_{path.stem[:24]}',
+                pb8_optimize._result_lock)
+    raise HTTPException(422, 'Select a saved PB8 Optimize config or PB8 Pareto config')
+
+
+def source_snapshot(selection, *, with_preferences=False, target='backtest'):
     """Resolve one saved config or local PB8 result through the existing PB8 boundaries."""
     from api import backtest_v8 as pb8
+    if target not in _TARGETS:
+        raise HTTPException(422, 'Unknown PB9 migration target')
     if not isinstance(selection, dict) or set(selection) != {'source_type', 'source'} or not isinstance(selection['source'], str):
         raise HTTPException(422, 'Select a saved PB8 config or local PB8 result')
     kind, value = selection['source_type'], selection['source']
-    if kind == 'config':
+    lock = None
+    if target == 'optimize':
+        path, root, name, lock = _optimize_source(kind, value)
+    elif kind == 'config':
         name = pb8._validate_name(value)
         path = pb8._config_file(name)
         root = pb8._configs_dir()
@@ -92,7 +121,7 @@ def source_snapshot(selection, *, with_preferences=False):
     if not root.is_dir():
         raise HTTPException(404, 'PB8 source not found')
     # Same writer lock as PB8 config persistence, without its recovery/write path.
-    with advisory_file_lock(root / '.write'):
+    with (lock() if lock is not None else advisory_file_lock(root / '.write')):
         document, raw = _read(path, root)
         preferences = {}
         if with_preferences:
@@ -104,6 +133,8 @@ def source_snapshot(selection, *, with_preferences=False):
         config = _clean(document)
         if not isinstance(config, dict):
             raise HTTPException(422, 'Expected a PB8 config object')
+        if target == 'optimize' and kind == 'pareto':
+            config = {key: config[key] for key in _AUTHORED_SECTIONS if key in config}
         files, originals = {}, {path.name: raw}
         try:
             pending = migration_file_references(config)
@@ -127,14 +158,14 @@ def source_snapshot(selection, *, with_preferences=False):
                        'Use inline coin lists and local JSON overrides; external paths, legacy coin flags and credentials cannot be migrated here')
             raise HTTPException(422, message) from None
     fingerprint = hashlib.sha256(json.dumps({name: hashlib.sha256(raw).hexdigest() for name, raw in sorted(originals.items())}).encode()).hexdigest()
-    name = re.sub(r'[^A-Za-z0-9_. -]', '_', str(name)).strip(' ._') or 'backtest'
+    name = re.sub(r'[^A-Za-z0-9_. -]', '_', str(name)).strip(' ._') or target
     result = (bundle, fingerprint, name[:112] + '_v9')
     return (*result, preferences) if with_preferences else result
 
 
-def preview(body, owner, paths, cancel):
+def preview(body, owner, paths, cancel, target='backtest'):
     """Create a bounded owner-bound proposal, never a saved config or queue job."""
-    bundle, fingerprint, name, preferences = source_snapshot(body, with_preferences=True)
+    bundle, fingerprint, name, preferences = source_snapshot(body, with_preferences=True, target=target)
     native = migrate_pb8_config_to_pb9(bundle, paths['pb9dir'], paths['pb9venv'],
               {key: value for key, value in paths.items() if not key.startswith('pb9')}, cancel_event=cancel)
     proposal = native['migration']
@@ -146,10 +177,13 @@ def preview(body, owner, paths, cancel):
         from pb9_config import PB9ConfigError
         raise PB9ConfigError('helper_cancelled')
     reference = None
-    try:
-        reference = make_comparison_reference(body, fingerprint)
-    except HTTPException:
-        proposal['report'].setdefault('warnings', []).append('The PB8 comparison reference could not be captured; use manual Compare for this migration.')
+    if target == 'optimize':
+        proposal['report'].setdefault('warnings', []).append(_OPTIMIZE_NOTE)
+    else:
+        try:
+            reference = make_comparison_reference(body, fingerprint)
+        except HTTPException:
+            proposal['report'].setdefault('warnings', []).append('The PB8 comparison reference could not be captured; use manual Compare for this migration.')
     token = str(uuid.uuid4())
     with _LOCK:
         for key, item in list(_reviews.items()):
@@ -160,22 +194,23 @@ def preview(body, owner, paths, cancel):
             del _reviews[owned[0]]
         if len(_reviews) >= 20:
             raise HTTPException(429, 'Migration review capacity is busy; try again later')
-        _reviews[token] = {'created': time.monotonic(), 'owner': owner, 'selection': copy.deepcopy(body),
+        _reviews[token] = {'created': time.monotonic(), 'owner': owner, 'target': target, 'selection': copy.deepcopy(body),
                           'fingerprint': fingerprint, 'name': name, 'config': proposal['config'],
                           'report': proposal['report'], 'source': copy.deepcopy(native['source']),
                           'comparison_reference': reference}
     return {'status': 'ready', 'review_id': token, 'suggested_name': name, 'report': proposal['report']}
 
 
-def reviewed(body, owner, runtime):
+def reviewed(body, owner, runtime, target='backtest'):
     """Recheck both sources before adopting a proposal; source edits require a new preview."""
     if not isinstance(body, dict) or set(body) != {'review_id'} or not isinstance(body['review_id'], str):
         raise HTTPException(422, 'Invalid PB9 migration review')
     with _LOCK:
         item = copy.deepcopy(_reviews.get(body['review_id']))
-    if not item or item['owner'] != owner or time.monotonic() - item['created'] > 600:
+    if (not item or item['owner'] != owner or item.get('target', 'backtest') != target
+            or time.monotonic() - item['created'] > 600):
         raise HTTPException(404, 'Migration review expired or not owned by this user')
-    _, fingerprint, _ = source_snapshot(item['selection'])
+    _, fingerprint, _ = source_snapshot(item['selection'], target=target)
     if fingerprint != item['fingerprint']:
         raise HTTPException(409, 'PB8 source changed; create a new migration preview')
     if any(item['source'].get(key) != runtime.get(key) for key in ('commit', 'config_schema', 'package_version')):

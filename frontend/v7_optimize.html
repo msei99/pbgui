@@ -21,14 +21,16 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>PBGui - %%OPTIMIZE_LABEL%% Optimize</title>
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
-<script src="/app/js/optimize_editor_adapter.js?v=17"></script>
+<script src="/app/js/optimize_editor_adapter.js?v=21"></script>
+<script src="/app/js/optimize_v9_editor.js?v=18"></script>
+<link rel="stylesheet" href="/app/css/metadata_fields.css?v=2">
 <script src="/app/js/floating_window.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/ai_loop_templates.css?v=6">
 <script src="/app/js/ai_loop_windows.js?v=1"></script>
 <script src="/app/js/ai_loop_templates.js?v=18"></script>
 <script src="/app/js/pb8_loop_instructions.js?v=2"></script>
 <script src="/app/js/loop_gpu_replacement.js?v=1"></script>
-<script src="/app/js/pb8_loop_optimizer.js?v=98"></script>
+<script src="/app/js/pb8_loop_optimizer.js?v=99"></script>
 <link rel="stylesheet" href="/app/css/pb8_loop_optimizer.css?v=18">
 <style>
 :root {
@@ -581,6 +583,29 @@ body.pb8-runtime-warning-visible #page-body { height: calc(100vh - 94px); }
   gap: var(--sp-md);
 }
 
+.bounds-disclosure.expander { margin: 0; grid-column: 1 / -1; }
+#opt9-policy-disclosure { margin-bottom: var(--sp-md); }
+.bounds-disclosure > summary.expander-header { list-style: none; }
+.bounds-disclosure > summary::-webkit-details-marker { display: none; }
+.bounds-disclosure[open] > summary.expander-header { border-radius: 6px 6px 0 0; }
+.bounds-disclosure[open] > summary .arrow { transform: rotate(90deg); }
+.expander .bounds-disclosure:not([open]) > summary.expander-header .arrow { transform: none; }
+.bounds-disclosure[open] > .expander-body { display: block; }
+.bounds-disclosure-search { margin-bottom: var(--sp-md); }
+.bounds-disclosure-search input { box-sizing: border-box; width: min(100%, 28rem); }
+.bounds-disclosure .optimize-bound-row[hidden] { display: none; }
+
+.bounds-override-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: var(--sp-sm);
+}
+
+.bounds-override-controls select { min-width: 0; width: 100%; }
+.bounds-override-controls .btn { white-space: nowrap; }
+.bounds-side-card .bounds-override-empty { padding: 0; }
+.optimize-bound-name .inline-btn { flex: 0 0 auto; }
 .optimize-bound-row {
   display: grid;
   gap: var(--sp-xs);
@@ -919,6 +944,51 @@ body.pb8-runtime-warning-visible #page-body { height: calc(100vh - 94px); }
   width: 14px;
   height: 14px;
   accent-color: var(--accent);
+}
+
+.side-override-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: var(--sp-sm);
+  padding-bottom: var(--sp-sm);
+  border-bottom: 1px solid var(--border);
+}
+
+.side-override-title {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+
+.side-override-empty {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+}
+
+.side-override-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-sm);
+  min-width: 0;
+}
+
+.side-override-row code {
+  font-family: var(--mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+
+.optimize-bound-fixed-value {
+  font-size: var(--fs-xs);
+  color: var(--text-dim);
+  font-family: var(--mono);
+  text-align: center;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .limits-table th,
@@ -2824,11 +2894,11 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
 <div id="toast-stack"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=26"></script>
+<script src="/app/js/editor_shared.js?v=31"></script>
 <script src="/app/js/date_overwrite.js?v=2"></script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=9">
 <script src="/app/js/scenario_visual_editor.js?v=24"></script>
-<script src="/app/js/suite_editor.js?v=45"></script>
+<script src="/app/js/suite_editor.js?v=47"></script>
 <script src="/app/js/log_viewer_panel.js?v=50"></script>
 <script src="/app/js/pbgui_dialogs.js?v=12"></script>
 <script>
@@ -4403,7 +4473,10 @@ function validatePb8ScenarioBases(scoring, limits, objectiveScenario, suiteEnabl
     if (hasScenario && entry.scenario != null && !String(entry.scenario).trim()) {
       throw new Error('Scoring scenario label cannot be empty.');
     }
-    if ((hasScenario || aggregate) && !suiteEnabled) throw new Error('Scoring Scenario and Aggregate require Suite mode.');
+    // PB9's native defaults use scenario:null even for a single backtest.
+    // Only named scenarios need a Suite there; retain PB8's existing contract.
+    var needsSuite = optimizeEditorAdapter.isV9 ? namedScenario : (hasScenario || aggregate);
+    if (needsSuite && !suiteEnabled) throw new Error('Scoring Scenario and Aggregate require Suite mode.');
     if (namedScenario && !labels.has(String(entry.scenario))) throw new Error('Unknown scoring scenario: ' + entry.scenario);
     if (namedScenario && aggregate) throw new Error('A named scoring scenario cannot also use Aggregate.');
     if (!hasScenario && objectiveScenario && aggregate) {
@@ -4417,7 +4490,7 @@ function validatePb8ScenarioBases(scoring, limits, objectiveScenario, suiteEnabl
     if (hasScenario && entry.scenario != null && !String(entry.scenario).trim()) {
       throw new Error('Limit scenario label cannot be empty.');
     }
-    if (hasScenario && !suiteEnabled) throw new Error('Limit Scenario requires Suite mode.');
+    if ((optimizeEditorAdapter.isV9 ? namedScenario : hasScenario) && !suiteEnabled) throw new Error('Limit Scenario requires Suite mode.');
     if (namedScenario && !labels.has(String(entry.scenario))) throw new Error('Unknown limit scenario: ' + entry.scenario);
     if (namedScenario && entry[currentLimitsMeta().limit_basis_field]) throw new Error('A named limit scenario cannot also use Stat.');
   });
@@ -5185,7 +5258,7 @@ function collectOptimizeCpuCount(value, backend, strict) {
   var empty = value == null || String(value).trim() === '';
   var number = empty ? null : Number(value);
   if (strict && ((!auto && empty) || (!empty && (!Number.isInteger(number) || number < 1)))) {
-    throw new Error('n_cpus requires a positive integer; Auto is available only for the PB8 GPU backend.');
+    throw new Error('n_cpus requires a positive integer; Auto is available only for the ' + optimizeEditorAdapter.label + ' GPU backend.');
   }
   if (strict && optimizeEditorAdapter.isV8 && number > optimizeCpuCountLimit()) {
     throw new Error('n_cpus exceeds the host limit of ' + optimizeCpuCountLimit() + ' workers.');
@@ -5274,7 +5347,7 @@ function getOptimizeStrategyBotDefault(side, strategy) {
 }
 
 function getOptimizeStrategyFromPath(path) {
-  var match = String(path || '').replace(/^bot\./, '').match(/^(?:long|short)\.strategy\.([^.]+)(?:\.|$)/);
+  var match = String(path || '').replace(/^bot\./, '').match(/^(?:global|long|short)\.strategy\.([^.]+)(?:\.|$)/);
   return match && match[1] !== '*' ? match[1] : '';
 }
 
@@ -5324,9 +5397,22 @@ function initializeOptimizeStrategyState(config) {
   });
 }
 
-function getOptimizeStrategyBoundsView(strategy) {
+function getOptimizeStrategyBoundsView(strategy, previousStrategy) {
   var loaded = deepClone(state.optimizeStrategyBoundsCache[strategy] || {});
-  var configured = Object.keys(loaded).length ? {} : deepClone((state.settings.strategy_bounds || {})[strategy] || {});
+  var suggestions = (state.settings.strategy_bounds || {})[strategy] || {};
+  var configured = {};
+  if (!Object.keys(loaded).length) {
+    if (!optimizeEditorAdapter.isV9) {
+      configured = deepClone(suggestions);
+    } else if (previousStrategy && Object.keys(state.optimizeStrategyBoundsCache[previousStrategy] || {}).some(function(key) {
+      return key.indexOf('global.strategy.') === 0;
+    })) {
+      // Replace an existing shared strategy search with the new strategy's shared defaults.
+      Object.keys(suggestions).filter(function(key) {
+        return key.indexOf('global.strategy.') === 0;
+      }).forEach(function(key) { configured[key] = deepClone(suggestions[key]); });
+    }
+  }
   return Object.assign(configured, deepClone(state.optimizeSharedBoundsCache), loaded);
 }
 
@@ -5397,7 +5483,9 @@ function changeOptimizeStrategyKind(nextStrategy) {
   if (current === cleanNext) return;
   cacheOptimizeStrategyState(current);
 
-  var editorConfig = state.editorLastConfig || {};
+  var strategySource = state.editorLastConfig || {};
+  var editorConfig = optimizeEditorAdapter.isV9
+    ? window.PBGuiOptimizeV9Editor.toView(strategySource) : strategySource;
   editorConfig.live = editorConfig.live && typeof editorConfig.live === 'object' ? editorConfig.live : {};
   editorConfig.bot = editorConfig.bot && typeof editorConfig.bot === 'object' ? editorConfig.bot : {};
   editorConfig.live.strategy_kind = cleanNext;
@@ -5418,9 +5506,13 @@ function changeOptimizeStrategyKind(nextStrategy) {
     if (node) node.value = prettyJson(sideConfig);
   });
 
-  var nextBounds = getOptimizeStrategyBoundsView(cleanNext);
+  var nextBounds = getOptimizeStrategyBoundsView(cleanNext, current);
   var nextFixed = getOptimizeStrategyFixedView(cleanNext);
   setOptimizeBoundsData(nextBounds, nextFixed, state.runtimeOverrideValues, { suppressSync: true });
+  if (optimizeEditorAdapter.isV9) {
+    state.editorLastConfig = window.PBGuiOptimizeV9Editor.fromView(editorConfig, strategySource, false);
+    window.PBGuiOptimizeV9Editor.decorate(state.editorLastConfig);
+  }
   if (selector) {
     selector.value = cleanNext;
     selector.setAttribute('data-current-strategy', cleanNext);
@@ -5499,7 +5591,7 @@ function setPb8RuntimeWarning(error) {
   var detail = el('pb8-runtime-warning-detail');
   var visible = !!error;
   if (detail && visible) {
-    detail.textContent = (error && error.message) || 'Passivbot V8 is unavailable. Run Update PB8.';
+    detail.textContent = (error && error.message) || (optimizeEditorAdapter.isV9 ? 'Native PB9 runtime is unavailable. Check Runtime paths.' : 'Passivbot V8 is unavailable. Run Update PB8.');
   }
   document.body.classList.toggle('pb8-runtime-warning-visible', visible);
 }
@@ -5554,6 +5646,7 @@ async function apiFetch(path, opts) {
 }
 
 function applyOptimizeMetadata(payload) {
+  if (optimizeEditorAdapter.isV9) window.PBGuiOptimizeV9Editor.configure(payload);
   setPb8RuntimeWarning(null);
   var metadata = optimizeEditorAdapter.normalizeMetadata(payload || {});
   if (metadata.optimizeDefaults && Object.keys(metadata.optimizeDefaults).length) {
@@ -6959,12 +7052,18 @@ function renderOptimizeBoundRow(entry, fixedSet) {
   var lowPercent = getOptimizeBoundPercent(entry.lowValue, meta);
   var highPercent = getOptimizeBoundPercent(entry.highValue, meta);
   var autoFixed = isOptimizeHslAutoFixedBound(entry.key);
-  var fixedTip = getOptimizeBoundFixedTip(entry);
+  var fixedChecked = fixedSet.has(optimizeEditorAdapter.canonicalFixedParam(entry.key));
+  var fixedValueText = formatOptimizeFixedEffectiveValue(entry.key);
+  var fixedTip = getOptimizeBoundFixedTip(entry)
+    + ' A fixed parameter keeps its current config value, shown below the checkbox; the range is ignored.';
   if (autoFixed) fixedTip += ' Auto-fixed because HSL is disabled for this side during optimize runs.';
+  var removeOverride = optimizeEditorAdapter.isV9 && /^(global|portfolio|long|short)\./.test(entry.key)
+    ? '<button type="button" class="inline-btn" data-remove-bound-override="' + escAttr(entry.key)
+      + '" aria-label="Remove ' + escAttr(entry.key) + ' override">Remove</button>' : '';
   return ''
     + '<div class="optimize-bound-row" id="' + getOptimizeBoundDomId(entry.key) + '">'
     +   '<div class="optimize-bound-head">'
-    +     '<div class="optimize-bound-name"><span class="bound-key-text" data-tip="' + escAttr(getOptimizeBoundLabelTip(entry)) + '">' + escapeHtml(entry.key) + '</span></div>'
+    +     '<div class="optimize-bound-name"><span class="bound-key-text" data-tip="' + escAttr(getOptimizeBoundLabelTip(entry)) + '">' + escapeHtml(entry.key) + '</span>' + removeOverride + '</div>'
     +     '<div class="optimize-bound-step-label"><span data-tip="' + escAttr(getOptimizeBoundStepTip(entry)) + '">step</span></div>'
     +   '</div>'
     +   '<div class="optimize-bound-body">'
@@ -6982,21 +7081,147 @@ function renderOptimizeBoundRow(entry, fixedSet) {
     +     '</div>'
     +     '<div class="optimize-bound-step-col">'
     +       '<input class="optimize-bound-step-input" type="text" inputmode="decimal" spellcheck="false" autocomplete="off" value="' + escapeHtml(entry.stepText) + '" oninput="updateOptimizeBoundField(' + escAttr(JSON.stringify(entry.key)) + ', &quot;step&quot;, this.value, this)" onblur="finalizeOptimizeBoundStepField(' + escAttr(JSON.stringify(entry.key)) + ', this)">'
-    +       '<label class="optimize-bound-fixed"><input type="checkbox" ' + (fixedSet.has(optimizeEditorAdapter.canonicalFixedParam(entry.key)) ? 'checked ' : '') + (autoFixed ? 'disabled ' : '') + 'onchange="toggleOptimizeFixedParam(' + escAttr(JSON.stringify(entry.key)) + ', this.checked)"><span data-tip="' + escAttr(fixedTip) + '">fixed</span></label>'
+    +       '<label class="optimize-bound-fixed"><input type="checkbox" ' + (fixedChecked ? 'checked ' : '') + (autoFixed ? 'disabled ' : '') + 'onchange="toggleOptimizeFixedParam(' + escAttr(JSON.stringify(entry.key)) + ', this.checked)"><span data-tip="' + escAttr(fixedTip) + '">fixed</span></label>'
+    +       '<div class="optimize-bound-fixed-value" data-fixed-value-for="' + escAttr(entry.key) + '" title="' + escAttr(fixedValueText) + '"' + (fixedChecked || autoFixed ? '' : ' hidden') + '>' + escapeHtml(fixedValueText) + '</div>'
     +     '</div>'
     +   '</div>'
     + '</div>';
 }
 
-function renderOptimizeBoundsGroup(title, entries, fixedSet, wide) {
-  if (!entries.length) return '';
+function renderOptimizeBoundsGroup(title, entries, fixedSet, wide, controls) {
+  if (!entries.length && !controls) return '';
   return ''
     + '<div class="bounds-side-card' + (wide ? ' bounds-side-card-wide' : '') + '">'
     +   '<div class="bounds-side-title">' + escapeHtml(title) + '</div>'
+    +   (controls || '')
     +   '<div class="bounds-side-list">'
     +     entries.map(function(entry) { return renderOptimizeBoundRow(entry, fixedSet); }).join('')
     +   '</div>'
     + '</div>';
+}
+
+function optimizeNativeBoundsViewPreference(name, value) {
+  var key = 'pbgui.optimize.v9.bounds.' + name + ':' + window.location.pathname;
+  try {
+    if (value !== undefined) sessionStorage.setItem(key, value);
+    return sessionStorage.getItem(key) || '';
+  } catch (error) {
+    return '';
+  }
+}
+
+function renderOptimizeNativeBoundDisclosure(group, title, entries, fixedSet) {
+  var open = optimizeNativeBoundsViewPreference(group) === 'open';
+  var search = group === 'global' ? '<div class="form-group bounds-disclosure-search">'
+    + '<input type="search" data-native-bound-filter aria-label="Search global bounds" placeholder="Search global bounds…"'
+    + ' maxlength="120" value="' + escAttr(optimizeNativeBoundsViewPreference('filter')) + '">'
+    + '<div class="limits-empty bounds-override-empty" data-native-bound-empty hidden>No matching bounds.</div></div>' : '';
+  return '<details class="bounds-disclosure expander bounds-side-card-wide" data-native-bound-section="' + group + '"' + (open ? ' open' : '') + '>'
+    + '<summary class="expander-header"><span class="arrow" aria-hidden="true">▶</span> '
+    + escapeHtml(title) + ' (' + entries.length + ')</summary>'
+    + '<div class="expander-body">' + renderOptimizeNativeBoundPicker(group, group === 'global' ? 'Global bound' : 'Portfolio bound', []) + search + '<div class="bounds-side-list">'
+    + entries.map(function(entry) { return renderOptimizeBoundRow(entry, fixedSet); }).join('')
+    + '</div></div></details>';
+}
+
+function filterOptimizeNativeBounds(search) {
+  var section = search.closest('[data-native-bound-section]');
+  var query = search.value.trim().toLowerCase();
+  var matches = 0;
+  section.querySelectorAll('.optimize-bound-row').forEach(function(row) {
+    var label = row.querySelector('.bound-key-text').textContent.toLowerCase();
+    row.hidden = query !== '' && !label.includes(query);
+    if (!row.hidden) matches++;
+  });
+  section.querySelector('[data-native-bound-empty]').hidden = matches > 0;
+  resolveOptimizeBoundChipCollisions(section);
+}
+
+function rememberOptimizeNativeBoundsSection(event) {
+  var section = event.currentTarget;
+  if (!section.isConnected) return;
+  optimizeNativeBoundsViewPreference(section.dataset.nativeBoundSection, section.open ? 'open' : 'closed');
+  if (section.open) resolveOptimizeBoundChipCollisions(section);
+}
+
+function getOptimizeNativeBoundChoices(scope, globalEntries) {
+  var hslMode = el('opted-hsl-signal-mode');
+  var hslScope = hslMode ? hslMode.value : 'coin';
+  var strategy = el('opted-strategy-kind')?.value;
+  var choices = new Set(window.PBGuiOptimizeV9Editor.boundChoices(scope, strategy, hslScope));
+  (globalEntries || []).forEach(function(entry) {
+    if (hslScope !== 'portfolio' || !entry.key.startsWith('global.hsl.')) {
+      choices.add(scope + entry.key.slice('global'.length));
+    }
+  });
+  var authored = new Set((state.optimizeBounds || []).map(function(entry) { return entry.key; }));
+  return Array.from(choices).filter(function(key) { return !authored.has(key); }).sort();
+}
+
+function renderOptimizeNativeBoundPicker(scope, label, globalEntries) {
+  var directional = scope === 'long' || scope === 'short';
+  var options = getOptimizeNativeBoundChoices(scope, globalEntries);
+  var inherited = [], pinned = [], available = [];
+  var globalKeys = new Set(globalEntries.map(function(entry) { return entry.key; }));
+  var configPath = window.PBGuiEditorShared.configPath;
+  options.forEach(function(key) {
+    var suffix = key.slice(scope.length + 1);
+    var option = '<option value="' + escAttr(key) + '">' + escapeHtml(suffix) + '</option>';
+    if (directional && configPath.has(state.editorLastConfig, ['bot', scope].concat(suffix.split('.')))) pinned.push(option);
+    else if (directional && globalKeys.has('global.' + suffix)) inherited.push(option);
+    else available.push(option);
+  });
+  return '<div class="bounds-override-controls">'
+    + '<select data-bound-override-source="' + scope + '" aria-label="' + label + ' parameter"' + (options.length ? '' : ' disabled') + '>'
+    + '<option value="">' + (options.length ? 'Choose a parameter' : 'No additional bounds available') + '</option>'
+    + (inherited.length ? '<optgroup label="Inherited global ranges">' + inherited.join('') + '</optgroup>' : '')
+    + (pinned.length ? '<optgroup label="Pinned side values">' + pinned.join('') + '</optgroup>' : '')
+    + (available.length ? '<optgroup label="Available parameters">' + available.join('') + '</optgroup>' : '')
+    + '</select><button type="button" class="btn" data-add-bound-override="' + scope + '" aria-label="Add ' + label
+    + (directional ? ' override' : '') + '" disabled>' + (directional ? 'Add override' : 'Add bound') + '</button></div>';
+}
+
+function renderOptimizeSideBounds(side, entries, globalEntries, fixedSet) {
+  var label = side === 'long' ? 'Long' : 'Short';
+  var controls = renderOptimizeNativeBoundPicker(side, label + ' bound', globalEntries)
+    + (entries.length ? '' : '<div class="limits-empty bounds-override-empty">No ' + label + ' bound overrides.</div>');
+  return renderOptimizeBoundsGroup(label + ' bound overrides (' + entries.length + ')', entries, fixedSet, false, controls);
+}
+
+function handleOptimizeSideBoundClick(event) {
+  var button = event.target.closest('[data-add-bound-override], [data-remove-bound-override]');
+  if (!button) return;
+  var panel = event.currentTarget;
+  var side = button.dataset.addBoundOverride;
+  var key = button.dataset.removeBoundOverride;
+  if (/^(global|portfolio|long|short)$/.test(side || '')) {
+    var source = panel.querySelector('[data-bound-override-source="' + side + '"]');
+    key = source.value;
+    var directional = side === 'long' || side === 'short';
+    var globalEntries = directional ? state.optimizeBounds.filter(function(entry) { return entry.group === 'global'; }) : [];
+    if (!getOptimizeNativeBoundChoices(side, globalEntries).includes(key)) return;
+    var globalKey = 'global' + key.slice(side.length);
+    var range = (directional && collectOptimizeBounds({strict:false})[globalKey])
+      || window.PBGuiOptimizeV9Editor.initialBound(key, state.editorLastConfig);
+    state.optimizeBounds.push(normalizeOptimizeBoundEntry(key, range));
+    state.optimizeBounds.sort(compareOptimizeBoundEntries);
+    if (side === 'global') optimizeNativeBoundsViewPreference('filter', '');
+  } else if (/^(global|portfolio|long|short)\./.test(key || '')) {
+    state.optimizeBounds = state.optimizeBounds.filter(function(entry) { return entry.key !== key; });
+    delete state.optimizeSharedBoundsCache[key];
+    var strategy = getOptimizeStrategyFromPath(key);
+    if (state.optimizeStrategyBoundsCache[strategy]) delete state.optimizeStrategyBoundsCache[strategy][key];
+    var fixedKey = optimizeEditorAdapter.canonicalFixedParam(key);
+    state.optimizeFixedParams = (state.optimizeFixedParams || []).filter(function(param) { return param !== fixedKey; });
+  } else {
+    return;
+  }
+  renderOptimizeBoundsEditor();
+  updateOptimizeBoundsHeader();
+  scheduleStructuredEditorSync();
+  var focus = side ? document.getElementById(getOptimizeBoundDomId(key))?.querySelector('.js-bound-range-low')
+    : panel.querySelector('[data-bound-override-source="' + key.split('.')[0] + '"]');
+  if (focus) focus.focus();
 }
 
 function renderOptimizeBoundsEditor() {
@@ -7012,8 +7237,12 @@ function renderOptimizeBoundsEditor() {
   var html = ''
     + '<div class="limits-panel">'
     +   '<div class="bounds-surface">'
-    +     renderOptimizeBoundsGroup('Bounds long', groups.long || [], fixedSet, false)
-    +     renderOptimizeBoundsGroup('Bounds short', groups.short || [], fixedSet, false)
+    +     (optimizeEditorAdapter.isV9 ? renderOptimizeSideBounds('long', groups.long, groups.global || [], fixedSet)
+          + renderOptimizeSideBounds('short', groups.short, groups.global || [], fixedSet)
+          + renderOptimizeNativeBoundDisclosure('global', 'Global bounds', groups.global || [], fixedSet)
+          + renderOptimizeNativeBoundDisclosure('portfolio', 'Portfolio bounds', groups.portfolio || [], fixedSet)
+        : renderOptimizeBoundsGroup('Bounds long', groups.long, fixedSet, false)
+          + renderOptimizeBoundsGroup('Bounds short', groups.short, fixedSet, false))
     +     renderOptimizeBoundsGroup('Other bounds', groups.other || [], fixedSet, true)
     +   '</div>';
   if (!(state.optimizeBounds || []).length) {
@@ -7021,12 +7250,32 @@ function renderOptimizeBoundsEditor() {
   }
   html += '</div>';
   panel.innerHTML = html;
+  if (optimizeEditorAdapter.isV9) {
+    panel.onclick = handleOptimizeSideBoundClick;
+    panel.onchange = function(event) {
+      var side = event.target.dataset.boundOverrideSource;
+      if (side) panel.querySelector('[data-add-bound-override="' + side + '"]').disabled = !event.target.value;
+    };
+    panel.querySelectorAll('[data-native-bound-section]').forEach(function(section) {
+      section.addEventListener('toggle', rememberOptimizeNativeBoundsSection);
+    });
+    var search = panel.querySelector('[data-native-bound-filter]');
+    if (search) {
+      filterOptimizeNativeBounds(search);
+      search.addEventListener('input', function() {
+        optimizeNativeBoundsViewPreference('filter', search.value);
+        filterOptimizeNativeBounds(search);
+      });
+    }
+  }
   resolveOptimizeBoundChipCollisions(panel);
 }
 
 function renderOptimizeRuntimeOverridesEditor() {
   var panel = el('opted-runtime-overrides-panel');
   if (!panel) return;
+  // PB9 has no runtime overrides; this panel hosts its native policy fields.
+  if (optimizeEditorAdapter.isV9) return;
   if (optimizeEditorAdapter.isV8) {
     var active = typeof document !== 'undefined' ? document.activeElement : null;
     var focusAttribute = active && active.hasAttribute('data-runtime-override-help')
@@ -7092,7 +7341,7 @@ function renderOptimizeRuntimeOverridesEditor() {
       + renderRuntimeOverrideGroup('Other runtime overrides', groups.other, true);
     panel.innerHTML = fields
       ? '<div class="limits-panel runtime-overrides-panel"><div class="bounds-surface">' + fields + '</div></div>'
-      : '<div class="limits-empty">No runtime overrides reported by the installed PB8 runtime.</div>';
+      : '<div class="limits-empty">No runtime overrides reported by the installed ' + optimizeEditorAdapter.label + ' runtime.</div>';
     if (focusKey !== null) {
       Array.prototype.some.call(panel.querySelectorAll('[' + focusAttribute + ']'), function(node) {
         if (node.getAttribute(focusAttribute) !== focusKey || node.disabled) return false;
@@ -7300,6 +7549,52 @@ function refreshOptimizeBoundsPrecision() {
   renderOptimizeBoundsEditor();
 }
 
+// Remove one authored PB9 Long/Short value so it inherits Shared defaults.
+// Pending structured edits are committed first; the removal then uses the
+// regular Raw JSON synchronization path and re-renders every view.
+function resetOptimizeSideOverride(side, path) {
+  if (!optimizeEditorAdapter.isV9 || (side !== 'long' && side !== 'short')) return;
+  var raw = el('opted-raw-json');
+  if (!raw) return;
+  recordOptimizeEditorChange(false);
+  var parsed;
+  try { parsed = JSON.parse(raw.value || ''); }
+  catch (error) {
+    toast('Fix the Raw JSON before resetting an override.', 'err');
+    return;
+  }
+  var parts = ['bot', side].concat(String(path || '').split('.').filter(Boolean));
+  if (!window.PBGuiEditorShared.configPath.remove(parsed, parts, 2)) return;
+  raw.value = JSON.stringify(parsed, null, 2);
+  recordOptimizeEditorChange(true);
+}
+
+// Passivbot freezes a fixed parameter at its current config value, not at a
+// value from the displayed range. Show the effective value that will be used.
+function getOptimizeFixedEffectiveValue(key) {
+  var config = state.editorLastConfig || {};
+  if (optimizeEditorAdapter.isV9) return window.PBGuiOptimizeV9Editor.effectiveBotValue(config, key);
+  var path = String(key || '').replace(/^bot\./, '').split('.').filter(Boolean);
+  return window.PBGuiEditorShared.configPath.get(config.bot || {}, path);
+}
+
+function formatOptimizeFixedEffectiveValue(key) {
+  var value = getOptimizeFixedEffectiveValue(key);
+  if (value === undefined) return 'uses: not set';
+  return 'uses: ' + (typeof value === 'string' ? value : JSON.stringify(value));
+}
+
+function refreshOptimizeFixedEffectiveValues() {
+  var fixed = new Set(state.optimizeFixedParams || []);
+  document.querySelectorAll('[data-fixed-value-for]').forEach(function(node) {
+    var key = node.getAttribute('data-fixed-value-for');
+    var text = formatOptimizeFixedEffectiveValue(key);
+    node.textContent = text;
+    node.title = text;
+    node.hidden = !fixed.has(optimizeEditorAdapter.canonicalFixedParam(key)) && !isOptimizeHslAutoFixedBound(key);
+  });
+}
+
 function toggleOptimizeFixedParam(key, checked) {
   var current = new Set(state.optimizeFixedParams || []);
   var canonical = optimizeEditorAdapter.canonicalFixedParam(key);
@@ -7307,6 +7602,7 @@ function toggleOptimizeFixedParam(key, checked) {
   else current.delete(canonical);
   state.optimizeFixedParams = Array.from(current).sort();
   scheduleStructuredEditorSync();
+  refreshOptimizeFixedEffectiveValues();
 }
 
 function updateOptimizeRuntimeOverrideValue(key, rawValue, inputNode) {
@@ -7705,6 +8001,7 @@ if (optimizeEditorAdapter.isV8) {
     KNOWN_OPT_EXTRA_PARAMS.optimize.add(key);
   });
 }
+if (optimizeEditorAdapter.isV9) KNOWN_OPT_EXTRA_PARAMS.optimize.add('prefilter');
 var OPT_ENABLE_OVERRIDE_VALUES = [
   'lossless_close_trailing',
   'forward_tp_grid',
@@ -8111,7 +8408,7 @@ function collectOptimizeGpuSettings(optimize, strict) {
   }
   if (supports('successive_halving')) gpu.successive_halving = halving;
   optimize.gpu = gpu;
-  if (el('opted-opt-backend')?.value === 'gpu') optimize.population_size = null;
+  if (el('opted-opt-backend')?.value === 'gpu' && !optimizeEditorAdapter.isV9) optimize.population_size = null;
 }
 
 function populateOptimizeGpuSettings(optimize) {
@@ -8258,9 +8555,17 @@ function applyOptimizeBackendMigration(previousBackend, nextBackend) {
   }
 }
 
+// PB9's GPU backend keeps CPU orchestration: it uses optimize.pymoo and
+// optimize.population_size exactly like the pymoo backend.
+function optimizeBackendUsesPymooSettings(backend) {
+  var normalized = normalizeOptimizeBackendValue(backend);
+  var isV9Editor = typeof optimizeEditorAdapter !== 'undefined' && optimizeEditorAdapter.isV9;
+  return normalized === 'pymoo' || (isV9Editor && normalized === 'gpu');
+}
+
 function cleanupOptimizeBackendFields(optimize) {
   if (!optimize || typeof optimize !== 'object' || Array.isArray(optimize)) return;
-  if (normalizeOptimizeBackendValue(optimize.backend) === 'pymoo') {
+  if (optimizeBackendUsesPymooSettings(optimize.backend)) {
     delete optimize.offspring_multiplier;
     delete optimize.crossover_probability;
     delete optimize.mutation_probability;
@@ -8376,7 +8681,7 @@ function resolveOptimizePymooRequestedPopulationSize(populationModeValue, rawPop
 
 function shouldPreserveOptimizePymooAutoPopulation(backend, effectiveAlgorithm, populationMode) {
   var isV8Editor = typeof optimizeEditorAdapter !== 'undefined' && optimizeEditorAdapter.isV8;
-  return normalizeOptimizeBackendValue(backend) === 'pymoo'
+  return optimizeBackendUsesPymooSettings(backend)
     && normalizeOptimizePymooPopulationMode(populationMode) === 'auto'
     && (isV8Editor || effectiveAlgorithm !== 'nsga2');
 }
@@ -8387,7 +8692,7 @@ function optimizeObjectiveCount(fallbackCount) {
 }
 
 function getEffectiveOptimizePymooAlgorithm(backend, algorithm, objectiveCount) {
-  if (normalizeOptimizeBackendValue(backend) !== 'pymoo') return '';
+  if (!optimizeBackendUsesPymooSettings(backend)) return '';
   var normalized = normalizeOptimizePymooAlgorithmValue(algorithm);
   var count = optimizeObjectiveCount(objectiveCount);
   if (normalized === 'auto') return count <= 3 ? 'nsga2' : 'nsga3';
@@ -8407,10 +8712,10 @@ function optimizeSectionVisibility() {
     algorithm: algorithm,
     objectiveCount: objectiveCount,
     effectiveAlgorithm: effectiveAlgorithm,
-    showPymoo: backend === 'pymoo',
+    showPymoo: optimizeBackendUsesPymooSettings(backend),
     showDeap: backend === 'deap',
     showGpu: backend === 'gpu',
-    showNsga3: backend === 'pymoo' && effectiveAlgorithm === 'nsga3'
+    showNsga3: optimizeBackendUsesPymooSettings(backend) && effectiveAlgorithm === 'nsga3'
   };
 }
 
@@ -8831,7 +9136,8 @@ function getOptimizeExtraParamKeyMap(cfg) {
     var sectionCfg = cfg && cfg[section];
     if (!sectionCfg || typeof sectionCfg !== 'object' || Array.isArray(sectionCfg)) return;
     next[section] = Object.keys(sectionCfg).filter(function(key) {
-      return !KNOWN_OPT_EXTRA_PARAMS[section].has(key);
+      return !['__proto__', 'constructor', 'prototype'].includes(key)
+        && !KNOWN_OPT_EXTRA_PARAMS[section].has(key);
     }).sort();
   });
   return next;
@@ -8891,6 +9197,7 @@ var _optKvSymCache = {};
 var _optKvLabelCache = {};
 var _optKvHighlight = {};
 var _optMarketStatusVerified = !optimizeEditorAdapter.isV8;
+var _optMarketStatusLoad = null;
 var _optKvMeta = {
   'opt-kv-cs': { expId: 'exp-opt-coin-sources', label: 'coin_sources' },
   'suite-kv-cs': { expId: 'suite-exp-csrc', label: 'coin_sources' }
@@ -9513,7 +9820,7 @@ function buildOptimizeAdditionalParamField(section, key, value) {
     + hint + '</div>';
 }
 
-function buildOptimizeAdditionalParamsHtml(config, configName) {
+function buildOptimizeAdditionalParamsHtml(config) {
   var cfg = config || {};
   var keyMap = getOptimizeExtraParamKeyMap(cfg);
   var hasExtras = OPT_EXTRA_SECTION_ORDER.some(function(section) {
@@ -9549,7 +9856,7 @@ function buildOptimizeAdditionalParamsHtml(config, configName) {
 }
 
 function syncOptimizeExtraFields(config) {
-  var extraInfo = buildOptimizeAdditionalParamsHtml(config || {}, el('opted-name') ? el('opted-name').value : '');
+  var extraInfo = buildOptimizeAdditionalParamsHtml(config);
   var nextKeys = extraInfo.keys;
   var currentEl = el('exp-opt-extra');
   var rawEl = el('exp-raw');
@@ -9668,7 +9975,7 @@ function collectOptimizeSplitMutation(shared, strict) {
 }
 
 function buildOptimizeEditorHtml(config, name, sourceName) {
-  var cfg = deepClone(config || {});
+  var cfg = optimizeEditorAdapter.isV9 ? window.PBGuiOptimizeV9Editor.toView(config || {}) : deepClone(config || {});
   var backtest = cfg.backtest || {};
   var bot = cfg.bot || {};
   var live = cfg.live || {};
@@ -9706,7 +10013,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
   var objectiveCount = normalizeScoringEntries(optimize.scoring).length;
   var effectiveAlgorithm = getEffectiveOptimizePymooAlgorithm(backendValue, pymooAlgorithmValue, objectiveCount);
   var populationVisibility = {
-    showPymoo: backendValue === 'pymoo',
+    showPymoo: optimizeBackendUsesPymooSettings(backendValue),
     effectiveAlgorithm: effectiveAlgorithm,
     algorithm: pymooAlgorithmValue,
     objectiveCount: objectiveCount
@@ -9862,7 +10169,12 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       + '<div class="expander-body">'
         + '<input type="checkbox" id="opted-enable-lossless-close-trailing" style="display:none"' + (enableOverrides.indexOf('lossless_close_trailing') >= 0 ? ' checked' : '') + '>'
         + '<input type="text" id="opted-enable-tp-grid-direction" style="display:none" value="' + escapeHtml(getOptimizeTpGridDirection(enableOverrides)) + '">'
-        + '<div id="opted-runtime-overrides-panel"></div>'
+        + (optimizeEditorAdapter.isV9
+          ? '<details class="bounds-disclosure expander" id="opt9-policy-disclosure" data-native-bound-section="policy"'
+            + (optimizeNativeBoundsViewPreference('policy') === 'open' ? ' open' : '') + '>'
+            + '<summary class="expander-header"><span class="arrow" aria-hidden="true">▶</span> Policy settings</summary>'
+            + '<div class="expander-body" id="opted-runtime-overrides-panel"></div></details>'
+          : '<div id="opted-runtime-overrides-panel"></div>')
         + '<div id="opted-bounds-panel"></div>'
       + '</div>'
     + '</div>'
@@ -9921,7 +10233,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       + '</div>'
     + '</div>'
 
-    + '<div id="optimize-pymoo-section" style="display:' + (backendValue === 'pymoo' ? '' : 'none') + '">'
+    + '<div id="optimize-pymoo-section" style="display:' + (optimizeBackendUsesPymooSettings(backendValue) ? '' : 'none') + '">'
       + '<div class="form-row cols-8">'
         + fieldSelect('opted-pymoo-algorithm', 'pymoo_algorithm', getOptimizePymooAlgorithmOptions(pymoo.algorithm), pymooAlgorithmValue, false, optimizeEditorAdapter.label + ' supports auto, nsga2 and nsga3. Auto resolves from the current objective count.')
         + fieldText2('opted-pymoo-effective-algorithm', 'effective_algorithm', formatOptimizeEffectiveAlgorithmLabel({ showPymoo: true, algorithm: pymooAlgorithmValue, effectiveAlgorithm: effectiveAlgorithm }), false, '', optimizeEditorAdapter.label + ' derives the effective algorithm from backend plus objective count.', 1)
@@ -9946,7 +10258,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 
     + buildOptimizeSplitMutationHtml(pymooShared)
 
-    + '<div id="optimize-pymoo-nsga3-section" style="display:' + (backendValue === 'pymoo' && effectiveAlgorithm === 'nsga3' ? '' : 'none') + '">'
+    + '<div id="optimize-pymoo-nsga3-section" style="display:' + (optimizeBackendUsesPymooSettings(backendValue) && effectiveAlgorithm === 'nsga3' ? '' : 'none') + '">'
       + '<div class="form-row cols-8">'
         + buildOptimizePymooRefDirMethodField(pymooRefDirs.method)
         + fieldSelect('opted-pymoo-ref-dir-npartitions-mode', 'ref_dirs_n_partitions_mode', [{ value: 'auto', label: 'auto' }, { value: 'value', label: 'explicit' }], pymooRefDirPartitionsMode, false, 'Auto lets ' + optimizeEditorAdapter.label + ' choose n_partitions from the active objective count and current requested population size.')
@@ -9969,6 +10281,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       + '</div>'
     + '</div>'
 
+    + (optimizeEditorAdapter.isV9 ? '<div class="section-title">Configuration prefilter</div><div id="opt9-prefilter"></div>' : '')
     + '<div class="section-title">Run Settings</div>'
     + '<div class="form-row cols-8" style="align-items:end">'
       + fmtGroupSpan('opted-seed-mode', 'seed_mode', '<select id="opted-seed-mode" onchange="toggleOptimizeSeedPathInput();syncOptimizeSeedRuntimeFromControls()"><option value="none"' + (seedState.mode === 'none' ? ' selected' : '') + '>none</option><option value="self"' + (seedState.mode === 'self' ? ' selected' : '') + '>self</option><option value="path"' + (seedState.mode === 'path' ? ' selected' : '') + '>path</option></select>', 'Choose how Passivbot should populate --start for this optimize run. `self` uses the current config. `path` uses a config file, pareto file, or directory of seeds.', 2)
@@ -9994,7 +10307,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
       + '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row"><input type="checkbox" id="opted-write-all-results"' + (optimize.write_all_results ? ' checked' : '') + '><label for="opted-write-all-results"><span data-tip="Persist the full result set, not only paretos.">write_all_results</span></label></div></div>'
     + '</div>'
 
-    + buildOptimizeAdditionalParamsHtml(cfg, name || '').html
+    + buildOptimizeAdditionalParamsHtml(optimizeEditorAdapter.isV9 ? config : cfg).html
 
     + '<div class="expander" id="exp-raw">'
       + '<div class="expander-header" onclick="toggleExpander(\'exp-raw\')">'
@@ -10006,7 +10319,7 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
           + '<div class="raw-json-wrap" id="opted-raw-json-wrap">'
             + '<div id="opted-raw-json-status" class="field-status" aria-live="polite"></div>'
             + '<pre id="opted-raw-json-highlight" class="raw-json-highlight" aria-hidden="true"></pre>'
-            + '<textarea id="opted-raw-json" rows="22" spellcheck="false" style="overflow:hidden;resize:vertical" oninput="scheduleRawJsonEditorSync()">' + escapeHtml(prettyJson(cfg)) + '</textarea>'
+            + '<textarea id="opted-raw-json" rows="22" spellcheck="false" style="overflow:hidden;resize:vertical" oninput="scheduleRawJsonEditorSync()">' + escapeHtml(prettyJson(optimizeEditorAdapter.isV9 ? config : cfg)) + '</textarea>'
           + '</div>'
           + '<div class="editor-help">The raw JSON stays the base object on save so untouched keys survive the structured editor.</div>'
         + '</div>'
@@ -10016,6 +10329,8 @@ function buildOptimizeEditorHtml(config, name, sourceName) {
 }
 
 function populateOptimizeEditor(config, opts) {
+  var nativeSource = optimizeEditorAdapter.isV9 ? deepClone(config || {}) : null;
+  if (nativeSource) config = window.PBGuiOptimizeV9Editor.toView(nativeSource);
   opts = opts || {};
   var wasStructuredSyncing = _optStructuredEditorSyncing;
   if (optimizeEditorAdapter.isV8) _optStructuredEditorSyncing = true;
@@ -10125,6 +10440,7 @@ function populateOptimizeEditor(config, opts) {
   el('opted-hsl-signal-mode').onchange = function() {
     scheduleStructuredEditorSync();
     renderOptimizeRuntimeOverridesEditor();
+    if (optimizeEditorAdapter.isV9) renderOptimizeBoundsEditor();
     updateOptimizeHslBudgetScalingValidation();
   };
   var enableOverrides = filterOptimizeEnableOverridesForStrategy(optimize.enable_overrides, live.strategy_kind);
@@ -10195,11 +10511,11 @@ function populateOptimizeEditor(config, opts) {
   }
   setScoringEntries(optimize.scoring, { suppressSync: true });
   setLimitEntries(optimize.limits, { suppressSync: true });
-  syncOptimizeExtraFields(cfg);
+  syncOptimizeExtraFields(nativeSource || cfg);
   if (!opts.skipRawUpdate) {
     var rawEl = el('opted-raw-json');
     if (rawEl) {
-      rawEl.value = prettyJson(cfg);
+      rawEl.value = prettyJson(nativeSource || cfg);
       autoResizeTa(rawEl);
       _optRawLastApplied = rawEl.value;
     }
@@ -10209,7 +10525,7 @@ function populateOptimizeEditor(config, opts) {
   toggleOptimizeObjectiveScenarioInput();
   updateOptimizeBackendSections();
   toggleOptimizeSeedPathInput();
-  loadOptSymbols(cfg, { preferConfigValues: true }).catch(function(error) {
+  _optMarketStatusLoad = loadOptSymbols(cfg, { preferConfigValues: true }).catch(function(error) {
     console.error('loadOptSymbols failed:', error);
   });
   getOptimizeJsonFieldIds().forEach(function(id) {
@@ -10222,7 +10538,11 @@ function populateOptimizeEditor(config, opts) {
   setRawJsonValidationError(null);
   bindStructuredJsonFieldValidation();
   bindStructuredEditorSync();
-  try { _optStructuredBaseline = collectEditorConfig(cfg, {strict: false}).config; }
+  if (nativeSource) {
+    el('opt9-policy-disclosure').ontoggle = rememberOptimizeNativeBoundsSection;
+    window.PBGuiOptimizeV9Editor.decorate(nativeSource);
+  }
+  try { _optStructuredBaseline = collectEditorConfig(nativeSource || cfg, {strict: false}).config; }
   catch (error) {
     _optStructuredBaseline = null;
     console.error('Could not capture the normalized Optimize editor state.');
@@ -10234,10 +10554,19 @@ function applyOptimizeSweepLongBoundsPreset() {
   var approvedLong = optGetMs('ms-opt-app-long').filter(function(value) { return value !== 'all'; });
   approvedLong = uniqStrings(approvedLong);
   if (!approvedLong.length) return;
-  var positionsKey = 'long.risk.n_positions';
-  var tweKey = 'long.risk.total_wallet_exposure_limit';
-  var positions = (state.optimizeBounds || []).find(function(entry) { return entry.key === positionsKey; });
-  var twe = (state.optimizeBounds || []).find(function(entry) { return entry.key === tweKey; });
+  var native = optimizeEditorAdapter.isV9;
+  function findBound(key) {
+    return (state.optimizeBounds || []).find(function(entry) { return entry.key === key; });
+  }
+  // PB9 Long inherits shared bounds unless it has its own override.
+  function sideBound(leaf) {
+    if (!native) return findBound('long.risk.' + leaf);
+    return findBound('long.risk.' + leaf) || findBound('global.risk.' + leaf);
+  }
+  var positions = sideBound(native ? 'max_positions' : 'n_positions');
+  var twe = sideBound(native ? 'total_wallet_exposure_limit_ratio' : 'total_wallet_exposure_limit');
+  var positionsKey = positions ? positions.key : '';
+  var tweKey = twe ? twe.key : '';
   var fixed = new Set(state.optimizeFixedParams || []);
 
   function setRange(entry, low, high) {
@@ -10252,13 +10581,18 @@ function applyOptimizeSweepLongBoundsPreset() {
 
   setRange(positions, 1, approvedLong.length);
   setRange(twe, 6, 10);
-  var oneCoinRankingSuffixes = new Set([
+  var oneCoinRankingSuffixes = new Set(native ? [
+    'forager.score_weights.ema_readiness',
+    'forager.score_weights.log_range',
+    'forager.score_weights.rms_directionality',
+    'forager.score_weights.volume'
+  ] : [
     'forager.score_weights_ema_readiness',
     'forager.score_weights_volatility',
     'forager.score_weights_volume'
   ]);
   (state.optimizeBounds || []).forEach(function(entry) {
-    if (entry.group !== 'long') return;
+    if (entry.group !== 'long' && !(native && entry.group === 'global')) return;
     var canonical = entry.key;
     var legacyCanonical = optimizeEditorAdapter.canonicalFixedParam(entry.key);
     fixed.delete(canonical);
@@ -10273,7 +10607,8 @@ function applyOptimizeSweepLongBoundsPreset() {
       return;
     }
     var zeroWidth = optimizeBoundNumbersMatch(entry.lowValue, entry.highValue);
-    var irrelevantRanking = approvedLong.length === 1 && oneCoinRankingSuffixes.has(entry.suffix);
+    var rankingSuffix = native ? String(entry.suffix || '').replace(/^global\./, '') : entry.suffix;
+    var irrelevantRanking = approvedLong.length === 1 && oneCoinRankingSuffixes.has(rankingSuffix);
     if (zeroWidth || isOptimizeHslAutoFixedBound(entry.key) || irrelevantRanking) fixed.add(canonical);
     else fixed.delete(canonical);
   });
@@ -10305,9 +10640,10 @@ function applyOptimizeSweepPreset(preview) {
   if (preview.template === 'sweep_cycles' || !cloud || !getScoringEntries().length) {
     setScoringEntries(
       [
-        {metric: cloud ? 'adg_strategy_eq' : 'gain_strategy_eq', goal: 'max'},
-        {metric: 'sortino_ratio_strategy_eq', goal: 'max'},
-        {metric: 'drawdown_worst_strategy_eq', goal: 'min'}
+        // PB9 Sweep derives each window's gain from per-window native CAGR.
+        {metric: optimizeEditorAdapter.isV9 ? (preview.template === 'sweep_cycles' ? 'cagr_fraction_strategy_equity' : 'cagr_fraction_strategy_equity_ew') : cloud ? 'adg_strategy_eq' : 'gain_strategy_eq', goal: 'max'},
+        {metric: optimizeEditorAdapter.isV9 ? 'sortino_ratio_strategy_equity' : 'sortino_ratio_strategy_eq', goal: 'max'},
+        {metric: optimizeEditorAdapter.isV9 ? 'drawdown_max_fraction_strategy_equity' : 'drawdown_worst_strategy_eq', goal: 'min'}
       ],
       {suppressSync: true}
     );
@@ -10325,8 +10661,8 @@ function applyOptimizeSweepPreset(preview) {
   if (preview.contract_version === 2) return;
   setLimitEntries(
     [
-      {metric: 'drawdown_worst_strategy_eq', penalize_if: 'greater_than', value: 0.8},
-      {metric: 'backtest_completion_ratio', penalize_if: 'less_than', value: 0.99}
+      {metric: optimizeEditorAdapter.isV9 ? 'drawdown_max_fraction_strategy_equity' : 'drawdown_worst_strategy_eq', penalize_if: 'greater_than', value: 0.8},
+      {metric: optimizeEditorAdapter.isV9 ? 'backtest_completion_fraction' : 'backtest_completion_ratio', penalize_if: 'less_than', value: 0.99}
     ],
     {suppressSync: true}
   );
@@ -10400,6 +10736,8 @@ function collectEditorConfig(baseConfig, opts) {
   opts = opts || {};
   var strict = !!opts.strict;
   var cfg = baseConfig == null ? editorBaseConfig(false) : deepClone(baseConfig);
+  var nativeSource = optimizeEditorAdapter.isV9 ? deepClone(cfg) : null;
+  if (nativeSource) cfg = window.PBGuiOptimizeV9Editor.toView(nativeSource);
   var backtest = ensureObjectSection(cfg, 'backtest');
   var bot = ensureObjectSection(cfg, 'bot');
 
@@ -10483,8 +10821,8 @@ function collectEditorConfig(baseConfig, opts) {
     optimize.population_size = null;
   } else if (optimize.backend === 'deap') {
     optimize.population_size = resolveOptimizeDeapPopulationDisplayValue(el('opted-deap-population-size').value);
-  } else if (optimize.backend === 'gpu') {
-    // GPU population is owned by optimize.gpu.population_size; its collector clears the outer fallback.
+  } else if (optimize.backend === 'gpu' && !optimizeEditorAdapter.isV9) {
+    // PB8 GPU population is owned by optimize.gpu.population_size; its collector clears the outer fallback.
   } else {
     var populationSize = normalizeOptimizePositiveInteger(el('opted-pymoo-population-size').value);
     if (populationSize == null) {
@@ -10583,7 +10921,7 @@ function collectEditorConfig(baseConfig, opts) {
     }
     if (suite.scenario_template) pbgui.scenario_template = suite.scenario_template;
     else delete pbgui.scenario_template;
-  } else {
+  } else if (!optimizeEditorAdapter.isV9) {
     delete cfg.backtest.scenarios;
     delete cfg.backtest.aggregate;
     delete cfg.backtest.reducer;
@@ -10623,12 +10961,13 @@ function collectEditorConfig(baseConfig, opts) {
   applyOptimizeSeedConfig(cfg, seedMode, seedPath);
   optimizeEditorAdapter.collectVersionRunSettings(cfg, el, strict);
   optimize.enable_overrides = filterOptimizeEnableOverridesForStrategy(optimize.enable_overrides, live.strategy_kind);
-  applyOptimizeExtraParamValues(cfg);
   if (optimizeEditorAdapter.isV8 && el('opted-execution')) {
     cfg.pbgui = cfg.pbgui || {};
     cfg.pbgui.execution = el('opted-execution').value === 'vast' ? 'vast' : 'local';
   }
   var hslRestartNormalized = optimizeEditorAdapter.normalizeHslRestartPolicies(cfg);
+  if (nativeSource) cfg = window.PBGuiOptimizeV9Editor.fromView(cfg, nativeSource, strict);
+  applyOptimizeExtraParamValues(cfg);
   return { name: name, config: cfg, hslRestartNormalized: hslRestartNormalized };
 }
 
@@ -11076,6 +11415,7 @@ function ensureRawJsonValidForSave() {
 function shouldIgnoreOptimizeStructuredSyncTarget(target, phase) {
   if (!target) return true;
   if (target.id === 'opted-raw-json') return true;
+  if (target.dataset && (target.dataset.boundOverrideSource || 'nativeBoundFilter' in target.dataset)) return true;
   if (target.classList && target.classList.contains('ms-input')) return true;
   if (phase === 'input' && target.tagName === 'TEXTAREA' && getOptimizeJsonFieldIds().indexOf(target.id) >= 0) {
     return !optimizeEditorAdapter.isV8;
@@ -11193,7 +11533,13 @@ function commitOptimizeEditorChange(rawEdit) {
     var node = el(id);
     if (node && validateJsonFieldTextarea(node).error) invalidFields.push({id: id, node: node});
   });
-  var collected = collectEditorConfig(_optStructuredBaseline, {strict: false});
+  // Collecting saves the open Suite scenario, which notifies a structured
+  // change. That notification must not re-enter this commit recursively.
+  var collected;
+  var wasStructuredSyncing = _optStructuredEditorSyncing;
+  _optStructuredEditorSyncing = true;
+  try { collected = collectEditorConfig(_optStructuredBaseline, {strict: false}); }
+  finally { _optStructuredEditorSyncing = wasStructuredSyncing; }
   // The collector uses valid Bot JSON fallbacks. Extra JSON fields instead return
   // their editing text on parse errors; exclude that text from config deltas.
   invalidFields.forEach(function(field) {
@@ -11217,6 +11563,7 @@ function commitOptimizeEditorChange(rawEdit) {
   }
   // An unfinished Raw edit remains editing text. It is never persisted as a config.
   if (validation.error) throw new Error('Raw JSON is invalid. Fix it and retry.');
+  if (optimizeEditorAdapter.isV9 && window.PBGuiOptimizeV9Editor.hasSideJsonEdits()) _optRawNeedsRender = true;
   if (_optRawNeedsRender) {
     _optRawEditorSyncing = true;
     try { optSyncEditorFromParsed(collected.name, merged); }
@@ -11225,6 +11572,10 @@ function commitOptimizeEditorChange(rawEdit) {
   } else {
     state.editorDraftName = collected.name;
     state.editorBackendHint = '';
+    if (optimizeEditorAdapter.isV9) {
+      window.PBGuiOptimizeV9Editor.syncSideJson(merged, prettyJson);
+      ['opted-bot-long', 'opted-bot-short'].forEach(function(id) { if (el(id)) autoResizeTa(el(id)); });
+    }
   }
   var anchor = captureOptimizeRawAnchor();
   if (optimizeOhlcvStartLookupSignature({value: merged}) !== optimizeOhlcvStartLookupSignature({value: validation.parsed})) {
@@ -11236,6 +11587,7 @@ function commitOptimizeEditorChange(rawEdit) {
   var status = el('opted-ohlcv-start-status');
   if (_optEditorSyncError && status && status.textContent === _optEditorSyncError) setOptimizeStartDateStatus('');
   _optEditorSyncError = '';
+  refreshOptimizeFixedEffectiveValues();
   return merged;
 }
 
@@ -11256,7 +11608,9 @@ async function reconcileOptimizeEditorSync() {
   if (optimizeEditorAdapter.isV8) {
     if (_optRawEditorSyncing || _optStructuredEditorSyncing) throw new Error('Raw JSON is still synchronizing. Retry when it finishes.');
     var currentRaw = el('opted-raw-json');
-    return commitOptimizeEditorChange(!!currentRaw && currentRaw.value !== _optRawLastApplied);
+    var config = commitOptimizeEditorChange(!!currentRaw && currentRaw.value !== _optRawLastApplied);
+    if (optimizeEditorAdapter.isV9) await _optMarketStatusLoad;
+    return config;
   }
   var raw = el('opted-raw-json');
   if (!raw || _optRawEditorSyncing) throw new Error('Raw JSON is still synchronizing. Retry when it finishes.');
@@ -11643,11 +11997,11 @@ function openFastApiParetoExplorer(resultPath) {
     return;
   }
   var apiBase = String(API_BASE || '');
-  if (!/\/api\/optimize-v[78]\/?$/.test(apiBase)) {
+  if (!/\/api\/optimize-v[789]\/?$/.test(apiBase)) {
     toast('Pareto Explorer route is unavailable.', 'err');
     return;
   }
-  var apiRoot = apiBase.replace(/\/api\/optimize-v[78]\/?$/, '');
+  var apiRoot = apiBase.replace(/\/api\/optimize-v[789]\/?$/, '');
   var params = new URLSearchParams();
   params.set('result_path', path);
   params.set('optimize_version', optimizeEditorAdapter.version);
@@ -12193,6 +12547,7 @@ function renderConfigs() {
         + '<button class="icon-btn cfg-edit" data-name="' + escapeHtml(cfg.name) + '" title="Edit config">✏️</button>'
         + '<button class="icon-btn cfg-queue" data-name="' + escapeHtml(cfg.name) + '" title="Queue config">▶</button>'
         + (!optimizeEditorAdapter.isV8 ? '<button class="icon-btn cfg-migrate-v8" data-name="' + escapeHtml(cfg.name) + '" title="Convert to PB8 Optimize">V8</button>' : '')
+        + (optimizeEditorAdapter.isV8 && !optimizeEditorAdapter.isV9 ? '<button class="icon-btn" data-migrate-pb9-optimize="config" data-config-name="' + escapeHtml(cfg.name) + '" title="Open as PB9 Optimize">V9</button>' : '')
         + '<button class="icon-btn danger cfg-delete" data-name="' + escapeHtml(cfg.name) + '" title="Delete config">🗑</button>'
         + '</td>';
       tr.configSignature = signature;
@@ -12813,6 +13168,7 @@ function renderParetos() {
       + '<button class="icon-btn pareto-open" data-path="' + escapeHtml(item.path) + '" title="View JSON">👁</button>'
       + '<button class="icon-btn pareto-seed" data-path="' + escapeHtml(item.path) + '" data-name="' + escapeHtml(item.name) + '" title="Use as seed">🧬</button>'
       + (!optimizeEditorAdapter.isV8 ? '<button class="icon-btn pareto-migrate-v8" data-path="' + escapeHtml(item.path) + '" data-name="' + escapeHtml(item.name) + '" title="Convert Pareto config to PB8 Optimize">V8</button>' : '')
+      + (optimizeEditorAdapter.isV8 && !optimizeEditorAdapter.isV9 ? '<button class="icon-btn" data-migrate-pb9-optimize="pareto" data-path="' + escapeHtml(item.path) + '" title="Open Pareto config as PB9 Optimize">V9</button>' : '')
       + '</td></tr>';
     return rowHtml;
   });
@@ -12960,20 +13316,8 @@ function optimizeDraftStorageKey() {
 }
 
 function storeOptimizeDraft(payload) {
-  // Configs do not need credentials. Never persist credential-bearing custom fields.
-  function check(value, path) {
-    if (!value || typeof value !== 'object') return;
-    Object.keys(value).forEach(function(key) {
-      var symbolKey = path === 'override_configs' && value[key] && typeof value[key] === 'object' && !Array.isArray(value[key]);
-      if (!symbolKey && /(password|secret|private.?key|api.?key|token|credential)/i.test(key)) {
-        throw new Error('This draft contains credential fields and cannot be kept in browser storage.');
-      }
-      check(value[key], path ? path + '.' + key : key);
-    });
-  }
   try {
-    check(payload, '');
-    window.sessionStorage.setItem(optimizeDraftStorageKey(), JSON.stringify(payload));
+    window.sessionStorage.setItem(optimizeDraftStorageKey(), window.PBGuiEditorShared.stringifyNonSecretDraft(payload));
     return true;
   } catch (error) {
     try { window.sessionStorage.removeItem(optimizeDraftStorageKey()); } catch (storageError) {}
@@ -14387,7 +14731,7 @@ function configCountText(cfg) {
 }
 
 function configNavigationKey() {
-  return 'pbgui.optimize.' + (optimizeEditorAdapter.isV8 ? 'v8' : 'v7') + '.configs.navigation.v1';
+  return 'pbgui.optimize.' + optimizeEditorAdapter.version + '.configs.navigation.v1';
 }
 
 function persistConfigNavigation() {
@@ -15515,6 +15859,13 @@ function attachEventHandlers() {
     toggleResultSort(header.dataset.sortKey);
   });
 
+  document.addEventListener('keydown', function(event) {
+    // The shared Guide closes at document level. Reserve its Escape before
+    // the same key reaches the editor's window-level shortcut.
+    if (event.key === 'Escape' && el('pbgui-shared-help-ovl')?.classList.contains('visible')) {
+      event.preventDefault();
+    }
+  }, true);
   window.addEventListener('keydown', function(event) {
     if (event.key === 'Escape') {
       if (event.defaultPrevented || event.pbguiKeepLogOpen) return;
@@ -15740,10 +16091,14 @@ async function handleIncomingDraft() {
     });
     if (prepared && typeof prepared === 'object') prepared.override_configs = draft.override_configs || {};
     var payload = normalizeOptimizeEditorPayload(prepared);
-    applyOptimizeSeedConfig(payload.config, 'self', '');
+    // A reviewed PB8 -> PB9 migration is a new Optimize config, not a seed handoff.
+    var migrated = !!(draft && draft.migration_report);
+    if (!migrated) applyOptimizeSeedConfig(payload.config, 'self', '');
     var suggested = draftName || (((payload.config || {}).backtest || {}).base_dir || '').split('/').slice(-1)[0] || '';
     openEditorWithConfig(payload, suggested, '');
-    setPageEditorStatus('Loaded backtest result into Optimize with Starting Seeds = self.', 'ok');
+    setPageEditorStatus(migrated
+      ? 'Loaded the reviewed PB8 → PB9 migration as an unsaved draft. Check run settings, then save.'
+      : 'Loaded backtest result into Optimize with Starting Seeds = self.', 'ok');
     url = new URL(window.location.href);
     url.searchParams.delete('opt_draft_id');
     url.searchParams.delete('draft_name');
@@ -15837,6 +16192,16 @@ async function handleOpenConfigParam() {
 (function() {
   var tip = document.getElementById('data-tip-tooltip');
   if (!tip) return;
+  if (optimizeEditorAdapter.isV9) {
+    tip.remove();
+    var style = document.createElement('link');
+    style.rel = 'stylesheet'; style.href = '/app/css/data_tip.css?v=2';
+    document.head.appendChild(style);
+    var script = document.createElement('script');
+    script.src = '/app/js/data_tip.js?v=3';
+    document.body.appendChild(script);
+    return;
+  }
   var activeTarget = null;
 
   function applyTooltipFromTarget(target) {
@@ -16298,10 +16663,15 @@ init().catch(handleError);
 
   window._openOptimizeHelp = function(anchor) {
     if (!window.PBGuiSharedHelp || typeof window.PBGuiSharedHelp.open !== 'function') return;
-    var topic = optimizeEditorAdapter.isV8 ? '43_pbv8_optimize' : '36_pbv7_optimize';
+    var topic = optimizeEditorAdapter.guideTopic;
     if (!anchor && state.panel === 'vast') {
-      topic = optimizeEditorAdapter.isV8 ? '48_vast_gpu' : '36_pbv7_optimize';
-      anchor = 'optimizer-settings';
+      if (optimizeEditorAdapter.isV9) {
+        topic = '55_pbv9_optimize';
+        anchor = 'vastai';
+      } else {
+        topic = optimizeEditorAdapter.isV8 ? '48_vast_gpu' : '36_pbv7_optimize';
+        anchor = 'optimizer-settings';
+      }
     }
     if (!anchor && state.panel === 'settings') anchor = 'optimizer-settings';
     window.PBGuiSharedHelp.open(topic, { anchor: anchor || '' });
@@ -16393,9 +16763,10 @@ window.PBGUI_NAV_CONFIG = {
 <script src="/app/pbgui_nav.js?v=%%NAV_HASH%%"></script>
 
 
-<script src="/app/js/backtest_queue_actions.js?v=3"></script>
-<script src="/app/js/vast_performance.js?v=3"></script>
+<script src="/app/js/backtest_queue_actions.js?v=4"></script>
+<script src="/app/js/backtest_v9_migration.js?v=2" defer></script>
+<script src="/app/js/vast_performance.js?v=4"></script>
 <script src="/app/js/optimizer_log_layout.js?v=7"></script>
-<script src="/app/js/vast.js?v=184"></script>
+<script src="/app/js/vast.js?v=186"></script>
 </body>
 </html>

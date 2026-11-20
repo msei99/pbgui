@@ -2,6 +2,186 @@
 
 ## Development
 
+- Complete the PB9 Optimize launch controls on the shared PB8/PB9 page: select
+  Suite scenarios, filter/compress managed seeds, and import a completed native
+  preparation report. Keep large reports in bounded private attachments; configs/drafts hold references.
+  Freeze report bytes and native selections in queue/result
+  provenance and retain them for checkpoint resume. Preserve PB8 CLI arguments.
+- Package native launch options and seeds through the shared Vast archive,
+  verify their hashes, and use the same argv builder locally and in the worker.
+  Fix PB9 admission incorrectly comparing against the PB8 source revision.
+  Build an unpublished PB9 worker with its missing runtime entry and a public
+  pinned source; verify all four CLI options in offline synthetic CPU runs.
+  Publication, a matching local runtime and physical GPU validation remain pending.
+
+- Document all 27 native PB9 metric selectors in the EN/DE Optimize guides,
+  with definitions, units, objective/limit guidance and availability rules.
+  Point Pareto Explorer users to the metric reference.
+
+- Use native PB9 metrics in Pareto Explorer charts, Quick Views, activity
+  details and risk panels. Limit Quick Views to available metrics, retain
+  unavailable values, and omit single-scenario robustness from ranking. Read
+  PB9 min/max reductions and reuse PB8 incremental replay for compressed results.
+  Restore chart choices and the selected candidate on browser reload.
+  Preserve the shared PB7/PB8 Explorer workflows.
+
+- PB9 Sweep Cycles restore each window's gain from native CAGR and the actual
+  evaluated period PB9 recorded for that window. Sweep is marked unavailable
+  when that period is missing, a window averages several exchanges, CAGR is
+  -100% (or too close to it), or values overflow. Suite scenario `coins` and
+  `ignored_coins` now keep explicitly empty lists, text and sides; use
+  **Inherit (base config)** to remove an override and **Not set** to omit a side.
+
+- Fix PB9 Optimize review findings. Side JSON and native policy edits no longer
+  revert each other, and changing the HSL scope keeps the policy fields. Suite
+  scenario coins keep their list, text or Long/Short form. Editing a Suite
+  scenario no longer hangs the PB8/PB9 Optimize editor. The GPU backend keeps
+  `population_size` and Pymoo settings. Pareto Explorer, Results Strategy and
+  Sweep Cycles now work for PB9, and saved PB9 results
+  stay readable with local source changes while launches still require a clean
+  checkout.
+
+- Close PB9 Optimize editor gaps: show the value a fixed bound keeps, reset Long
+  or Short overrides to inherited values, edit non-optimizable numeric policy
+  values such as `forager.score_hysteresis_margin`, and select GPU screening
+  scenarios from Suite labels.
+
+- Add the official PB8 → PB9 Optimize migration (V9 on PB8 configs and Pareto
+  configs) with the shared review dialog, the PB9 Optimize Queue controller on
+  Services, PB9 Pareto Explorer navigation and corrected PB9 preload, Vast help
+  and fine-tune selector guidance.
+
+- Add dedicated PB9 Optimize configuration-prefilter controls for checks,
+  directional selection, nullable thresholds, probe fractions, assumptions and
+  penalties. Reuse shared native field controls, preserve sparse defaults and
+  validate enabled checks before saving. Add editable GPU-screening scenario
+  labels and verify the shared optimizer-override controls. Keep the fallback for
+  future keys.
+
+- Let PB9 Optimize add and remove native Global, Portfolio, Long, and Short
+  bounds, including fields absent from the starter config. Reuse the PB8
+  Additional Parameters controls for unmapped keys in the optimizer config.
+
+- Make PB9 Optimize bounds easier to scan with collapsible policy and range
+  sections, a global range filter and visible side override counts. Group side
+  choices by inheritance and retain view preferences when the draft is reloaded.
+  Keep the Optimize editor open when Escape closes its Guide.
+
+- Stack portfolio policy and shared defaults above Long and Short in PB9
+  Optimize. Keep both side-bound panels visible and let users copy or remove
+  individual global ranges as explicit side overrides.
+
+- Show only authored PB9 Optimize bounds. Keep shared starter and strategy
+  ranges under Global and preserve intentional Long and Short overrides.
+
+- Align native PB9 Optimize policy labels and checkboxes with PB8's shared
+  runtime-override layout. Restore dotted, keyboard-accessible parameter help
+  using the installed PB9 documentation and explicit inheritance context, sharing
+  PB8's bounded document reader without borrowing unrelated field descriptions.
+
+- Scope shared PB7/PB8/PB9 backtest capacity to the current PBGui installation.
+  Another checkout's legacy backtest daemon no longer blocks local starts when
+  both installations use the same native Passivbot checkout.
+
+- Queue confirmed navigation restarts until protected work finishes instead of
+  rejecting them with a Restart blocked dialog. Coalesce duplicate requests,
+  defer new PB9 inspections, restore progress after browser reload and drain
+  owned restart preparation safely on shutdown.
+
+- Estimate local PB9 optimizer queue workloads through the PB9 config gateway
+  and native training data plans, sharing PB8's candle-count calculation and
+  bounded snapshot cache. Keep unresolved inputs unknown and stop routing PB9
+  snapshots through the PB8 persistent helper.
+
+- Extract authored PB9 Pareto configurations through the installed native result
+  reader before handing them to Backtest. Remove native result-only fields such
+  as `backtest.coins`, preserve sparse policy and GUI provenance, and retain
+  strict validation for genuinely unknown configuration fields.
+
+- Route PB9 optimizer candidates, validation jobs and Open Queue to PB9
+  Backtests through the shared queue client. Preserve mounted application
+  prefixes and keep queue status scoped to the selected generation.
+
+- Follow up the separately maintained local PB9 external-source test build:
+  reject corrupt/empty daily candle files, invalidate prepared caches on selected
+  source-file changes, and warn about missing post-warmup coverage. The approved
+  local native commit is `93ff594`; PBGui does not install or publish this
+  bot-source patch automatically.
+- Publish the reviewed native external-source fix against current Passivbot v9
+  as [PR #2268](https://github.com/enarjord/passivbot/pull/2268), preserving the
+  upstream cache publication lock. The active local bot checkout is unchanged.
+
+- Correct PB9 source Readiness to preserve exact minute bounds instead of
+  truncating the checked day to midnight. Read the actual native coverage catalog
+  offline, restoring the temporary helper context and original manager range.
+
+- Correct local PB9 Backtest and Optimize execution to use the configured bot
+  checkout and its persistent native cache, as PB8 does. Reuse downloads,
+  coverage proofs and prepared data across runs; do not create per-job raw stores.
+- Share the PB8 persistent backtest launcher with PB9 while retaining isolated
+  native environments, exact unit cleanup and legacy process recovery. Harden
+  runner log creation and keep native Dash processes on the filtered environment.
+- Readiness inspects the execution cache read-only, checks the same native
+  offline metadata, and asks the native loader to admit an external source's
+  first day. Preserve native acquisition warmup independently of trading-age
+  gates; report native source rejection instead of treating daily files as proof.
+- Enable PB9 Optimize from Result through PB8's shared handoff. Account for the
+  PB9 installation in Storage and protect its configured environment, candle
+  store and live configurations from unused-data cleanup.
+- Restore unsaved Backtest names, values and sections on browser reload through
+  the same credential-rejecting serialization as Optimize. Retain native source
+  revisions, load unchanged documents afresh and reject stale editor requests.
+  Allow native coin names such as TOKEN in inline override maps while continuing
+  to reject credential fields inside those overrides.
+- Show PBGui's selected candle source in new native Optimize drafts instead of
+  presenting an empty path that differs from the queue's default execution source.
+
+- Relocate the local PB9 installation and its environment outside PBGui, alongside
+  PB8. Update the configured paths, environment launchers and result links while
+  preserving the existing checkout, installed dependencies and job data.
+
+- Fix the shared Run/Backtest/Optimize coin search for PB8 and PB9: match coin
+  names and native contracts without treating the `hyperliquid` venue prefix
+  as a HYPE match. Keep explicit qualified searches and stored IDs intact.
+
+- Reuse PB8's native market-catalog algorithm and filter projection for PB9 Run,
+  Backtest and Optimize. Show ordinary coins once by name, retain exact IDs for
+  genuine collisions and imported selections, and read public metadata through
+  an isolated cancellable PB9 helper without changing shared caches.
+
+- Fix PB9 Optimize 1st/All lookups in unsaved drafts: stale effective side JSON
+  no longer reintroduces cleared coin selections or causes false input-change
+  errors. Synchronize side-JSON edits back to the pickers and retain rejection
+  of results after actual edits during a running lookup.
+
+- Fix PB9 Optimize saving without Suite mode: accept the native template's
+  explicit null scoring/limit scenarios and reducers while still requiring
+  Suite mode for named scenarios. Preserve PB8 validation and authored values.
+
+- Fix native PB9 Optimize and Backtest exchange pickers: discover the installed
+  connector/history capabilities instead of limiting choices to the two venues
+  selected in the template. Use the same catalog in Suite Mode and coin sources.
+
+- Build PB9 Optimize on an instance-owned engine shared with PB8: one editor,
+  isolated native configs/queues, immutable provenance, cancellation and detached
+  runner lifecycle. Reuse bounds, scoring, scenarios, results and Pareto controls;
+  preserve sparse native inheritance and canonical PB9 names when editing.
+- Add native PB9 cloud data planning and explicit Vast worker profiles. Reuse the
+  existing account, marketplace and export pipeline; keep paid PB9 actions blocked
+  until a verified native worker digest is published.
+- Share Vast calibration, pool/requeue ownership and retained performance browsing
+  with explicit PB9 runtime checks. Native performance comparisons survive job
+  cleanup; history updates automatically without a manual refresh action.
+- Preserve native strategy, GPU and inherited policy edits in the shared editor.
+  Validate native checkpoint identities through effective policy, including coin
+  overrides; retain the PB8 CLI contract while using PB9 polish option names.
+- Keep the unpublished PB8 rental-protocol candidate source hash current after
+  runtime dispatch changes; preserve its previous build receipt as historical
+  evidence rather than claiming a new verified image.
+- Build and verify a local PB9 worker candidate from the shared Docker recipe.
+  No image publication, GPU rental or remote deployment is included. Keep PB8 AI
+  Loops unavailable on PB9 until its separate execution protocol is adapted.
+
 - Add native PB9 Retest & Replace and daily/weekly Retest Schedules through the
   existing shared archive dialog and scheduler. Native jobs keep their own queue,
   immutable snapshot and completion provenance; failed, altered or ambiguous
@@ -128,8 +308,8 @@
   queue cleanup. Translate native NPZ equity timestamps for the existing charts
   and retain missing balance samples as gaps.
   Keep native jobs independent of API restarts and guard process control by
-  exact PID/create-time/command ownership. Cloud, automatic startup, archives
-  and optimizer handoffs remain unavailable for PB9.
+  exact PID/create-time/command ownership. Subsequent additions above provide
+  autostart, archives and optimizer handoffs; paid cloud execution stays gated.
 
 - Bring PB9 Add/Edit closer to the shared PB8 form: keep native basic live
   fields visible, group remaining settings under Advanced Settings, remove

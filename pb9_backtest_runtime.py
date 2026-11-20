@@ -39,6 +39,12 @@ def prepare_native_import(repo: Path, config: Path) -> None:
     from pb9_config_helper import check_inline_config
     document = json.loads(config.read_text(encoding="utf-8"))
     check_inline_config(document, identity["config_schema"], allow_inline_overrides=True)
+    verify_native_extension(repo)
+
+
+def verify_native_extension(repo: Path) -> None:
+    """Verify the selected native Rust/source pairing without building either generation."""
+    source = repo.resolve() / 'src'
     rust_utils = importlib.import_module("rust_utils")
     if not Path(rust_utils.__file__).resolve().is_relative_to(source):
         raise RuntimeError("PB9 Rust tools were loaded from another source")
@@ -125,11 +131,30 @@ def _public_metadata(root: Path, relative: Path, *, version=False):
             os.close(descriptor)
 
 
+def require_cached_market_metadata(repo: Path, config: dict) -> None:
+    """Reject missing offline exchange inputs without creating cache files or links."""
+    import re
+
+    backtest = config.get('backtest', {})
+    if backtest.get('offline') is not True:
+        return
+    exchanges = backtest.get('exchanges', [])
+    if not isinstance(exchanges, list) or not exchanges:
+        raise ValueError('Select an exchange before starting an offline PB9 job')
+    for exchange in exchanges:
+        if not isinstance(exchange, str) or not re.fullmatch(r'[a-z][a-z0-9_]{0,39}', exchange):
+            raise ValueError('Invalid offline PB9 exchange')
+        markets = _public_metadata(repo / 'caches', Path(exchange) / 'markets.json')
+        if not markets or not all(isinstance(item, dict) and isinstance(item.get('symbol'), str)
+                                  and item['symbol'] for item in markets.values()):
+            raise ValueError(f'Offline PB9 market metadata missing for {exchange}. Prepare the PB9 cache online first.')
+
+
 def prepare_market_metadata(work: Path, config: dict, coindata: Path, repo: Path, metadata_roots=()) -> None:
     """Reference existing public offline inputs without copying candles or metadata.
 
-    Native v9 only reads these inputs in offline mode. Derived caches remain in
-    the job directory. Extra configured bot caches are optional data sources;
+    Used only by disposable read-only inspection helpers. Execution uses the
+    native bot directory directly. Extra configured bot caches are optional data sources;
     no bot code is imported and no PB7/PB8 installation is required.
     """
     import re
@@ -152,7 +177,7 @@ def prepare_market_metadata(work: Path, config: dict, coindata: Path, repo: Path
                 raise ValueError('PB9 metadata directories must not be links')
         shared = (coindata, Path(exchange) / 'ccxt_markets.json')
         native = [(root, Path(exchange) / 'markets.json') for root in caches if root != coindata]
-        candidates = [shared, *native] if backtest.get('ohlcv_source_dir') else [*native, shared]
+        candidates = [*native, shared]
         if target.is_file() and not target.is_symlink():
             candidates.insert(0, (work, target.relative_to(work)))
         selected = None

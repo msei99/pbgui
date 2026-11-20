@@ -563,6 +563,9 @@ def _resolve_managed_backtest_result(path: str | Path, declared_version: str | N
 
 def _optimize_config_file(config_name: str, version: str) -> Path:
     """Return one generation-owned local Optimize config path."""
+    if version == "v9":
+        from api.optimize_v9 import engine
+        return engine._config_file(config_name)
     if version == "v8":
         from api import optimize_v8
 
@@ -575,7 +578,10 @@ def _load_local_optimize_config(config_name: str, version: str) -> dict:
     config_file = _optimize_config_file(config_name, version)
     if config_file.is_symlink() or not config_file.is_file():
         raise HTTPException(404, f"{version.upper()} Optimize config '{config_name}' not found")
-    if version == "v8":
+    if version == "v9":
+        from api.optimize_v9 import engine
+        config=engine.native.load(config_file)
+    elif version == "v8":
         from pb8_config import load_pb8_config
 
         config = load_pb8_config(config_file)
@@ -4765,7 +4771,7 @@ async def add_optimize_config_to_archive(name: str, body: dict, session: Session
     _validate_name(config_name)
     version = _normalize_archive_version(
         (body or {}).get("optimize_version") or (body or {}).get("version"),
-        default="v7",
+        default="v7", allow_v9=True,
     )
     try:
         if version == "v7" and not ((body or {}).get("optimize_version") or (body or {}).get("version")):
@@ -4788,7 +4794,7 @@ def _add_optimize_config_to_archive_sync(
     candidate = _archives_dir() / name
     with archive_transaction(candidate):
         archive_dir = _require_own_archive(name, "Adding Optimize configs")
-        version = _normalize_archive_version(version, default="v7") or "v7"
+        version = _normalize_archive_version(version, default="v7", allow_v9=True) or "v7"
         cfg = _load_local_optimize_config(config_name, version)
         override_payloads = {}
         if version == "v8":
@@ -4880,7 +4886,7 @@ def list_archive_optimize(
     archive_dir = _archives_dir() / name
     if not archive_dir.exists():
         raise HTTPException(404, f"Archive '{name}' not found")
-    selected_version = _normalize_archive_version(version)
+    selected_version = _normalize_archive_version(version, allow_v9=True)
     configs = list_archive_optimize_configs(archive_dir)
     if selected_version:
         configs = [item for item in configs if item.get("optimize_version") == selected_version]
@@ -4898,10 +4904,13 @@ def get_archive_optimize_config(
     _validate_name(name)
     archive_dir = _archives_dir() / name
     config_file, metadata = _resolve_archive_optimize_file(archive_dir, path)
-    selected_version = _normalize_archive_version(version)
+    selected_version = _normalize_archive_version(version, allow_v9=True)
     actual_version = metadata["optimize_version"]
     if selected_version and selected_version != actual_version:
         raise HTTPException(409, f"Optimize config belongs to {actual_version.upper()}")
+    if actual_version == "v9":
+        from api.optimize_v9 import engine
+        return engine.native.load(config_file)
     if actual_version == "v8":
         from pb8_config import load_pb8_config
 
@@ -4937,7 +4946,7 @@ def import_archive_optimize_config(name: str, body: dict, session: SessionToken 
     if collision not in {"error", "overwrite", "copy"}:
         raise HTTPException(400, "collision must be error, overwrite, or copy")
     requested_version = _normalize_archive_version(
-        (body or {}).get("optimize_version") or (body or {}).get("version")
+        (body or {}).get("optimize_version") or (body or {}).get("version"), allow_v9=True
     )
     with archive_transaction(archive_dir):
         if not archive_dir.exists() or not archive_dir.is_dir() or archive_dir.is_symlink():
@@ -4968,7 +4977,10 @@ def import_archive_optimize_config(name: str, body: dict, session: SessionToken 
                 snapshot_path = snapshot.name
                 json.dump(raw_cfg, snapshot, indent=4)
                 snapshot.write("\n")
-            if version == "v8":
+            if version == "v9":
+                from api.optimize_v9 import engine
+                cfg=engine.native.load(snapshot_path)
+            elif version == "v8":
                 from pb8_config import load_pb8_config
 
                 cfg = load_pb8_config(snapshot_path)
@@ -4983,7 +4995,11 @@ def import_archive_optimize_config(name: str, body: dict, session: SessionToken 
         finally:
             if snapshot_path:
                 Path(snapshot_path).unlink(missing_ok=True)
-    if version == "v8":
+    if version == "v9":
+        from api.optimize_v9 import engine as optimize_v8
+        local_configs=optimize_v8._configs_dir()
+        config_lock=optimize_v8._config_lock()
+    elif version == "v8":
         from api import optimize_v8
 
         local_configs = optimize_v8._configs_dir()
@@ -5003,7 +5019,7 @@ def import_archive_optimize_config(name: str, body: dict, session: SessionToken 
                     "name": import_name,
                     "suggested_copy_name": _next_optimize_import_copy_name(import_name, version),
                 }
-                if version == "v8":
+                if version in {"v8","v9"}:
                     detail["optimize_version"] = version
                 raise HTTPException(409, detail=detail)
             if collision == "copy":
@@ -5012,7 +5028,7 @@ def import_archive_optimize_config(name: str, body: dict, session: SessionToken 
                 collision_action = "copy"
             else:
                 collision_action = "overwrite"
-        if version == "v8":
+        if version in {"v8","v9"}:
             optimize_v8._save_config_bundle(
                 import_name,
                 cfg,
@@ -5027,7 +5043,7 @@ def import_archive_optimize_config(name: str, body: dict, session: SessionToken 
             "name": import_name,
             "collision": collision_action,
         }
-        if version == "v8":
+        if version in {"v8","v9"}:
             response["optimize_version"] = version
         return response
 
@@ -5045,7 +5061,7 @@ def delete_archive_optimize_config(
     with archive_transaction(candidate):
         archive_dir = _require_own_archive(name, "Optimize config deletion")
         config_file, metadata = _resolve_archive_optimize_file(archive_dir, path)
-        selected_version = _normalize_archive_version(version)
+        selected_version = _normalize_archive_version(version,allow_v9=True)
         if selected_version and selected_version != metadata["optimize_version"]:
             raise HTTPException(409, f"Optimize config belongs to {metadata['optimize_version'].upper()}")
         meta_file = config_file.with_name(config_file.stem + ".meta.json")

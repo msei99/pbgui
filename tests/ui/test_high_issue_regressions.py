@@ -30,13 +30,17 @@ const creating=newConversation({type:'click'});await new Promise(resolve=>setImm
     ({'config': {'token': 'blocked'}}, False),
     ({'override_configs': {'TOKEN': {'nested': {'session_token': 'blocked'}}}}, False),
     ({'override_configs': {'TOKEN': 'blocked'}}, False),
+    ({'config': {'coin_overrides': {'TOKEN': {'bot': {'long': {'enabled': False}}}}}}, True),
+    ({'config': {'coin_overrides': {'TOKEN': {'api_key': 'blocked'}}}}, False),
+    ({'config': {'coin_overrides': {'TOKEN': {'nested': {'session_token': 'blocked'}}}}}, False),
+    ({'config': {'coin_overrides': {'TOKEN': 'blocked'}}}, False),
 ])
 def test_draft_symbol_keys_do_not_hide_nested_credentials(payload, allowed):
     """Allow TOKEN override objects while rejecting credential values (#344)."""
-    execute(function('v7_optimize.html', 'storeOptimizeDraft') +
+    execute(function('js/editor_shared.js', 'stringifyNonSecretDraft') + function('v7_optimize.html', 'storeOptimizeDraft') +
             'const payload=' + json.dumps(payload) + '; const allowed=' + json.dumps(allowed) + ';' + r'''
 const assert=browserAssert;let stored=null;
-const window={sessionStorage:{setItem:(_,v)=>stored=v,removeItem:()=>stored=null}};
+const window={PBGuiEditorShared:{stringifyNonSecretDraft},sessionStorage:{setItem:(_,v)=>stored=v,removeItem:()=>stored=null}};
 const optimizeDraftStorageKey=()=> 'draft';const setPageEditorStatus=()=>{};
 assert.equal(storeOptimizeDraft(payload),allowed);assert.equal(stored!==null,allowed);
 ''')

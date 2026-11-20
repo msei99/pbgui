@@ -4,6 +4,7 @@ Provides comprehensive metrics, robustness scores, and parameter analysis
 """
 
 import os
+import math
 import copy
 import heapq
 import msgpack
@@ -34,8 +35,8 @@ _MSGSPEC_MSGPACK_DECODER = msgspec.msgpack.Decoder() if _HAS_MSGSPEC else None
 
 _DISABLE_SCAN_CACHE = os.environ.get("PBG_DISABLE_SCAN_CACHE") == "1"
 _FULL_SCAN_CACHE = os.environ.get("PBG_FULL_SCAN_CACHE") == "1"
-_SCAN_CACHE_VERSION = 8
-_SELECTION_CACHE_VERSION = 1
+_SCAN_CACHE_VERSION = 10
+_SELECTION_CACHE_VERSION = 2
 _DIFF_SNAPSHOT_INTERVAL = 100
 
 
@@ -82,6 +83,35 @@ class ConfigMetrics:
     # Lazy-loading flags (all_results.bin mode)
     details_loaded: bool = True
     bot_params_loaded: bool = True
+
+
+def _native_metric_value(metric_data: Any) -> Optional[float]:
+    """Read PB9 aggregates or saved reductions without fabricating missing values.
+
+    An explicit aggregate (including null) takes precedence. Non-suite PB9
+    records often save only the requested reduction, e.g. ``{"max": value}``.
+    A mean is the conventional display statistic; without one a sole reduction
+    is unambiguous. Dispersion statistics alone are not a metric value.
+    Both decoded JSON and raw msgpack dictionaries are supported.
+    """
+    if isinstance(metric_data, dict):
+        data = {
+            key.decode("utf-8") if isinstance(key, bytes) else key: value
+            for key, value in metric_data.items()
+        }
+        if "aggregated" in data:
+            return _native_metric_value(data["aggregated"])
+        if "stats" in data:
+            return _native_metric_value(data["stats"])
+        if "mean" in data:
+            return _native_metric_value(data["mean"])
+        reductions = [value for key, value in data.items()
+                      if key in {"min", "max", "median", "p10", "p25", "p50", "p75", "p90"}]
+        return _native_metric_value(reductions[0]) if len(reductions) == 1 else None
+    if isinstance(metric_data, (int, float)) and not isinstance(metric_data, bool):
+        value = float(metric_data)
+        return value if math.isfinite(value) else None
+    return None
 
 
 def _extract_scoring_metric_names(scoring_list: list) -> List[str]:
@@ -214,7 +244,11 @@ def _backtest_scenarios(backtest_config: Any) -> List[Dict]:
 
 
 def _flatten_bot_params(bot_config: Any) -> Dict[str, Any]:
-    """Preserve flat PB7 keys and expose nested PB8 leaves as dotted keys."""
+    """Preserve flat PB7 keys and expose nested PB8/PB9 leaves as dotted keys.
+
+    PB9 stores shared and account-wide policy under ``global`` and
+    ``portfolio``; their leaves use the same dotted keys as PB9 bounds.
+    """
     flattened: Dict[str, Any] = {}
     if not isinstance(bot_config, dict):
         return flattened
@@ -230,7 +264,7 @@ def _flatten_bot_params(bot_config: Any) -> Dict[str, Any]:
 
     for raw_side, side_config in bot_config.items():
         side = raw_side.decode('utf-8', errors='replace') if isinstance(raw_side, bytes) else str(raw_side)
-        if side not in {'long', 'short'} or not isinstance(side_config, dict):
+        if side not in {'long', 'short', 'global', 'portfolio'} or not isinstance(side_config, dict):
             continue
         for raw_key, item in side_config.items():
             key = raw_key.decode('utf-8', errors='replace') if isinstance(raw_key, bytes) else str(raw_key)
@@ -507,7 +541,7 @@ class ParetoDataLoader:
         *,
         progress_callback=None,
     ) -> Tuple[Dict[int, Dict], int]:
-        """Reconstruct selected PB8 rows from the nearest 100-row full snapshots."""
+        """Replay PB8 snapshots or the continuous PB9 overlay stream."""
         total_rows = int(len(offsets))
         selected = sorted({int(idx) for idx in selected_order if 0 <= int(idx) < total_rows})
         if not selected:
@@ -515,7 +549,7 @@ class ParetoDataLoader:
 
         targets_by_checkpoint: Dict[int, set[int]] = {}
         for idx in selected:
-            checkpoint = idx - (idx % _DIFF_SNAPSHOT_INTERVAL)
+            checkpoint = 0 if self.optimize_version == 'v9' else idx - (idx % _DIFF_SNAPSHOT_INTERVAL)
             targets_by_checkpoint.setdefault(checkpoint, set()).add(idx)
 
         reconstructed: Dict[int, Dict] = {}
@@ -668,11 +702,12 @@ class ParetoDataLoader:
                 u0 = msgpack.Unpacker(f, raw=False, strict_map_key=False, read_size=1024 * 1024)
                 first_obj = next(iter(u0))
             if isinstance(first_obj, dict):
-                if str(first_obj.get('config_version') or '').lower().startswith('v8'):
-                    self.optimize_version = 'v8'
+                schema = str(first_obj.get('config_version') or '').lower()
+                if schema.startswith(('v8.', 'v9.')):
+                    self.optimize_version = schema.split('.')[0]
                 optimize_block = first_obj.get('optimize', {}) or {}
                 self._diff_compressed_results = bool(
-                    self.optimize_version == 'v8'
+                    self.optimize_version in {'v8', 'v9'}
                     and isinstance(optimize_block, dict)
                     and optimize_block.get('compress_results_file')
                 )
@@ -1040,6 +1075,9 @@ class ParetoDataLoader:
                 self.backtest_scenarios = _backtest_scenarios(backtest_config)
 
         def _aggregated_metric_value(metric_data: Any) -> float:
+            if self.optimize_version == 'v9':
+                value = _native_metric_value(metric_data)
+                return value if value is not None else float('nan')
             if isinstance(metric_data, dict):
                 if 'aggregated' in metric_data:
                     try:
@@ -1174,6 +1212,9 @@ class ParetoDataLoader:
             return _get(m, b'stats', {}) or {}
 
         def _aggregated_metric_value_raw(metric_data: Any) -> float:
+            if self.optimize_version == 'v9':
+                value = _native_metric_value(metric_data)
+                return value if value is not None else float('nan')
             if isinstance(metric_data, dict):
                 if b'aggregated' in metric_data:
                     v = metric_data.get(b'aggregated')
@@ -1470,7 +1511,9 @@ class ParetoDataLoader:
                     "source": scan_source_signature,
                     "optimize_version": self.optimize_version,
                     "diff_compressed": bool(self._diff_compressed_results),
-                    "diff_snapshot_interval": _DIFF_SNAPSHOT_INTERVAL if self._diff_compressed_results else None,
+                    "diff_snapshot_interval": (_DIFF_SNAPSHOT_INTERVAL
+                                               if self._diff_compressed_results and self.optimize_version != "v9"
+                                               else None),
                     "scoring_metrics": self.scoring_metrics,
                     "scoring_goals": self.scoring_goals,
                     "scenario_labels": self.scenario_labels,
@@ -1872,8 +1915,9 @@ class ParetoDataLoader:
             try:
                 with open(json_file, 'r', encoding='utf-8') as f:
                     config_data = json.load(f)
-                    if str(config_data.get('config_version') or '').lower().startswith('v8'):
-                        self.optimize_version = 'v8'
+                    schema = str(config_data.get('config_version') or '').lower()
+                    if schema.startswith(('v8.', 'v9.')):
+                        self.optimize_version = schema.split('.')[0]
                     
                     # Create ConfigMetrics from JSON
                     metrics = self._parse_json_config(config_data, parsed_count)
@@ -2048,7 +2092,8 @@ class ParetoDataLoader:
             for obj in unpacker:
                 cur_pos = unpacker.tell()
                 if self._diff_compressed_results and isinstance(obj, dict):
-                    current = obj if count % 100 == 0 else _apply_incremental_result_diff(current, obj)
+                    snapshot = count == 0 or (self.optimize_version != 'v9' and count % 100 == 0)
+                    current = obj if snapshot else _apply_incremental_result_diff(current, obj)
                     obj = current
                 count += 1
                 if progress_callback and count % 100 == 0:
@@ -2236,6 +2281,10 @@ class ParetoDataLoader:
                         metric_name = str(metric_name)
                 if isinstance(metric_data, dict):
                     aggregated = metric_data.get(b'aggregated', metric_data.get(b'mean', 0.0))
+                    if self.optimize_version == 'v9':
+                        aggregated = _native_metric_value(metric_data)
+                        if aggregated is None:
+                            continue
                     try:
                         suite_metrics[str(metric_name)] = float(aggregated or 0.0)
                     except Exception:
@@ -2405,6 +2454,10 @@ class ParetoDataLoader:
         for metric_name, metric_data in metrics_dict.items():
             if isinstance(metric_data, dict):
                 aggregated = metric_data.get('aggregated', metric_data.get('mean', 0.0))
+                if self.optimize_version == 'v9':
+                    aggregated = _native_metric_value(metric_data)
+                    if aggregated is None:
+                        continue
                 try:
                     suite_metrics[metric_name] = float(aggregated or 0.0)
                 except Exception:
@@ -2577,6 +2630,10 @@ class ParetoDataLoader:
             if isinstance(metric_data, dict):
                 # Try to get aggregated value, fallback to mean if not present
                 aggregated = metric_data.get('aggregated', metric_data.get('mean', 0.0))
+                if self.optimize_version == 'v9':
+                    aggregated = _native_metric_value(metric_data)
+                    if aggregated is None:
+                        continue
                 try:
                     suite_metrics[metric_name] = float(aggregated or 0.0)
                 except Exception:
@@ -2711,6 +2768,10 @@ class ParetoDataLoader:
             for metric_name, metric_data in metrics_dict.items():
                 if isinstance(metric_data, dict):
                     aggregated = metric_data.get('aggregated', metric_data.get('mean', 0.0))
+                    if self.optimize_version == 'v9':
+                        aggregated = _native_metric_value(metric_data)
+                        if aggregated is None:
+                            continue
                     try:
                         suite_metrics[metric_name] = float(aggregated or 0.0)
                     except Exception:
@@ -2938,6 +2999,8 @@ class ParetoDataLoader:
         Returns:
             Overall robustness score [0, 1] (higher is more robust)
         """
+        if getattr(self, 'optimize_version', '') == 'v9' and len(self.scenario_labels or []) < 2:
+            return 0.0
         if config.robustness_scores:
             scores = list(config.robustness_scores.values())
             return float(np.mean(scores))
@@ -3028,7 +3091,9 @@ class ParetoDataLoader:
             return max(0.0, min(1.0, score))
 
         scored_configs = [
-            (c, _primary_score(c) * self.compute_overall_robustness(c))
+            (c, _primary_score(c) * (1.0 if getattr(self, 'optimize_version', '') == 'v9'
+                                     and len(self.scenario_labels or []) < 2
+                                     else self.compute_overall_robustness(c)))
             for c in pareto_configs
         ]
         scored_configs.sort(key=lambda x: x[1], reverse=True)
@@ -3179,6 +3244,8 @@ class ParetoDataLoader:
         Returns:
             Style label: "Sniper", "Scalper", "Balanced", "Idle"
         """
+        if getattr(self, 'optimize_version', '') == 'v9':
+            return "Activity classification unavailable"
         positions_per_day = config.suite_metrics.get('positions_held_per_day', 0)
         holding_hours_mean = config.suite_metrics.get('position_held_hours_mean', 0)
         volume_pct = config.suite_metrics.get('volume_pct_per_day_avg', 0)
@@ -3203,6 +3270,19 @@ class ParetoDataLoader:
         Returns:
             Dict with risk scores [0-10] for different dimensions
         """
+        if getattr(self, 'optimize_version', '') == 'v9':
+            names = (
+                'drawdown_max_fraction_strategy_equity',
+                'ulcer_index_fraction_strategy_equity',
+                'pain_index_fraction_strategy_equity',
+                'peak_recovery_max_days_strategy_equity',
+                'volatility_annual_fraction_strategy_equity',
+                'gross_exposure_max_ratio_strategy_equity',
+                'loss_profit_ratio',
+            )
+            return {name: float(config.suite_metrics[name]) for name in names
+                    if isinstance(config.suite_metrics.get(name), (int, float))
+                    and math.isfinite(config.suite_metrics[name])}
         # Extract key risk metrics (normalize to 0-10 scale)
         dd = config.suite_metrics.get('drawdown_worst_usd', 0)
         choppiness = config.suite_metrics.get('equity_choppiness_usd', 0)

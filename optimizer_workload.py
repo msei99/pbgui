@@ -12,8 +12,10 @@ _snapshot_cache_lock = RLock()
 
 
 @lru_cache(maxsize=256)
-def _estimate_snapshot_cached(path, signature):
-    """Cache immutable estimates by file identity and modification metadata."""
+def _estimate_snapshot_cached(path, signature, estimator=None, context=None):
+    """Cache estimates by file identity, runtime owner and source revision."""
+    if estimator is not None:
+        return estimator(Path(path))
     from pb8_config import load_pb8_config
     return estimate_coin_candles(load_pb8_config(Path(path)))
 
@@ -86,7 +88,7 @@ def estimate_coin_candles(config):
         return None
 
 
-def estimate_snapshot(path, root):
+def estimate_snapshot(path, root, *, estimator=None, context=None):
     """Read an existing contained config snapshot without changing runtime data."""
     path, root = Path(path), Path(root)
     try:
@@ -97,8 +99,9 @@ def estimate_snapshot(path, root):
         if any(part.is_symlink() for part in (path, *path.parents)) or stat.st_size > 16 * 1024**2:
             return None
         signature = (stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size, stat.st_dev, stat.st_ino)
+        context = context() if callable(context) else context
         with _snapshot_cache_lock:
-            return _estimate_snapshot_cached(str(path.resolve()), signature)
+            return _estimate_snapshot_cached(str(path.resolve()), signature, estimator, context)
     except (OSError, ValueError, TypeError, RuntimeError) as exc:
         _log(SERVICE, 'Cannot estimate optimizer snapshot: ' + type(exc).__name__, level='WARNING')
         return None

@@ -60,7 +60,7 @@ def benchmark_configs(source: dict, iterations: int, seed: int, *, gpu_adg_objec
     return cases
 
 
-def select_shards(config: dict, market_root: Path, mapping_root: Path) -> list[tuple[Path, Path]]:
+def select_shards(config: dict, market_root: Path, mapping_root: Path, *, warmup_minutes=None) -> list[tuple[Path, Path]]:
     """Export the suite's complete mapped market pool, including BTC and warmup.
 
     PB8 preloads shared datasets before applying scenario selections. Include all
@@ -76,7 +76,7 @@ def select_shards(config: dict, market_root: Path, mapping_root: Path) -> list[t
     if errors:
         raise ValueError('; '.join(item['path'] + ': ' + item['message'] for item in errors))
     from vast_history import history_window
-    first_day, last_day = history_window(config, contexts)
+    first_day, last_day = history_window(config, contexts, **({"warmup_minutes":warmup_minutes} if warmup_minutes is not None else {}))
     approved = config["live"]["approved_coins"]
     if not isinstance(approved, dict) or any(not isinstance(approved.get(side), list) for side in ("long", "short")):
         raise ValueError("Explicit approved coin lists are required")

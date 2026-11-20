@@ -1,8 +1,63 @@
 """Regression tests for shared PB7/PB8 automatic backtest slots."""
 
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 import backtest_autostart as arbitration
+
+
+@pytest.mark.parametrize('version', ['pb8', 'pb9'])
+@pytest.mark.parametrize('relative', [False, True])
+def test_runner_from_another_gui_does_not_consume_capacity(tmp_path, monkeypatch, version, relative):
+    """Native runners belong to their PBGui checkout even when bot paths are shared."""
+    root = tmp_path / 'pbgui'
+    other = tmp_path / 'pbgui-share'
+    monkeypatch.setattr(arbitration, 'PBGDIR', str(root))
+    filename = f'{version}_backtest_runner.py'
+
+    def process(pid, owner):
+        """Build one process without inspecting the real host."""
+        script = filename if relative else str(owner / filename)
+        return SimpleNamespace(info={'pid': pid, 'create_time': float(pid),
+                                      'cmdline': ['python', script, 'backtest']},
+                               cwd=lambda: str(owner))
+
+    monkeypatch.setattr(arbitration.psutil, 'process_iter', lambda _fields: [process(101, root), process(102, other)])
+    assert arbitration._managed_processes() == {101: 101.0}
+
+
+@pytest.mark.parametrize('own_config,own_parent,expected', [
+    (True, False, True), (False, True, True), (False, False, False),
+])
+def test_pb7_checkout_does_not_determine_gui_ownership(tmp_path, monkeypatch, own_config, own_parent, expected):
+    """Separate GUI daemons may use the same native PB7 checkout."""
+    root = tmp_path / 'pbgui'
+    other = tmp_path / 'pbgui-share'
+    monkeypatch.setattr(arbitration, 'PBGDIR', str(root))
+    config = (root if own_config else other) / 'data/bt_v7_queue/job.json'
+    parent_root = root if own_parent else other
+    parent = SimpleNamespace(cwd=lambda: str(parent_root), cmdline=lambda: ['python', 'PBGBacktests.py'])
+    process = SimpleNamespace(info={'pid': 101, 'create_time': 10.0,
+                                    'cmdline': ['python', '/shared/pb7/src/backtest.py', str(config)]},
+                              parents=lambda: [parent])
+    monkeypatch.setattr(arbitration.psutil, 'process_iter', lambda _fields: [process])
+    assert arbitration._managed_processes() == ({101: 10.0} if expected else {})
+
+
+def test_unrelated_backtest_does_not_block_first_local_slot(tmp_path, monkeypatch):
+    """The actual slot claim ignores a different GUI's legacy PB7 process."""
+    root = tmp_path / 'pbgui'
+    other = tmp_path / 'pbgui-share'
+    monkeypatch.setattr(arbitration, 'PBGDIR', str(root))
+    monkeypatch.setattr(arbitration, '_state_root', lambda: root / 'data/locks')
+    parent = SimpleNamespace(cwd=lambda: str(other), cmdline=lambda: ['python', 'PBGBacktests.py'])
+    process = SimpleNamespace(info={'pid': 101, 'create_time': 10.0,
+                                    'cmdline': ['python', '/shared/pb7/src/backtest.py', str(other / 'job.json')]},
+                              parents=lambda: [parent])
+    monkeypatch.setattr(arbitration.psutil, 'process_iter', lambda _fields: [process])
+    assert arbitration.claim_backtest_slot('v9', 'local-job', 1)
 
 
 def test_pb7_and_pb8_claim_one_shared_backtest_capacity(tmp_path: Path, monkeypatch) -> None:

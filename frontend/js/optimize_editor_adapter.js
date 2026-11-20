@@ -54,32 +54,41 @@
 
   function create(version, options) {
     options = options || {};
-    var normalized = injected(version, 'v7').toLowerCase() === 'v8' ? 'v8' : 'v7';
-    var isV8 = normalized === 'v8';
-    var backtestVersion = injected(options.backtestVersion, normalized).toLowerCase() === 'v8' ? 'v8' : 'v7';
+    var normalized = injected(version, 'v7').toLowerCase();
+    if (['v7','v8','v9'].indexOf(normalized) < 0) throw new Error('Unsupported optimizer version');
+    var isV9 = normalized === 'v9';
+    var isV8 = normalized !== 'v7'; // Shared structured editor capability, retained for existing consumers.
+    var backtestVersion = injected(options.backtestVersion, normalized).toLowerCase();
+    if (['v7','v8','v9'].indexOf(backtestVersion) < 0) throw new Error('Unsupported backtest version');
     var apiBase = injected(options.apiBase, '/api/optimize-' + normalized).replace(/\/$/, '');
     var wsBase = injected(options.wsBase, '').replace(/\/$/, '');
     var versionNumber = normalized.slice(1);
     var runtimeOptions = {};
     var enableOverrideOptions = [];
 
+    function nativeBotKey(key) { return isV9 ? ({total_wallet_exposure_limit:'total_wallet_exposure_limit_ratio',n_positions:'max_positions'}[key] || key) : key; }
+
     function getBotValue(sideConfig, key, fallback) {
+      key = nativeBotKey(key);
       return getPath(sideConfig, isV8 ? ['risk', key] : [key], fallback);
     }
 
     function setBotValue(sideConfig, key, value) {
+      key = nativeBotKey(key);
       return setPath(sideConfig, isV8 ? ['risk', key] : [key], value);
     }
 
     return {
       version: normalized,
       isV8: isV8,
+      isV9: isV9,
+      guideTopic: isV9 ? '55_pbv9_optimize' : (isV8 ? '43_pbv8_optimize' : '36_pbv7_optimize'),
       backtestVersion: backtestVersion,
       apiBase: apiBase,
       wsBase: wsBase,
-      label: isV8 ? 'PB8' : 'PB7',
-      navSubtitle: injected(options.navSubtitle, isV8 ? 'PBv8 OPTIMIZE' : 'PBv7 OPTIMIZE'),
-      navCurrent: injected(options.navCurrent, isV8 ? 'v8_optimize' : 'v7_optimize'),
+      label: 'PB' + versionNumber,
+      navSubtitle: injected(options.navSubtitle, 'PB' + normalized + ' OPTIMIZE'),
+      navCurrent: injected(options.navCurrent, normalized + '_optimize'),
       supportsArchive: true,
       supportsResultPlots: true,
       supportsOhlcvPreflight: true,
@@ -120,6 +129,8 @@
         var clean = String(key || '');
         if (isV8) {
           if (clean.indexOf('bot.') === 0) clean = clean.slice(4);
+          if (isV9 && clean.indexOf('global.') === 0) return 'global';
+          if (isV9 && clean.indexOf('portfolio.') === 0) return 'portfolio';
           if (clean.indexOf('long.') === 0) return 'long';
           if (clean.indexOf('short.') === 0) return 'short';
         }
@@ -155,6 +166,7 @@
       canonicalFixedParam: function (value) {
         var clean = String(value || '').trim();
         if (!isV8 || !clean) return clean;
+        if(isV9)return /^(global|portfolio|long|short)\./.test(clean) ? 'bot.'+clean : clean;
         clean = clean.replace(/^(bot\.)?(long|short)\.forager\.score_weights_(volume|ema_readiness|volatility|unilateralness)$/, '$1$2.forager.score_weights.$3');
         return /^(?:long|short|hsl)(?:\.|$)/.test(clean) ? 'bot.' + clean : clean;
       },
@@ -167,7 +179,7 @@
         return true;
       },
       normalizeHslRestartPolicies: function (config) {
-        if (!isV8) return false;
+        if (!isV8 || isV9) return false;
         var mode = object(config.live).hsl_signal_mode || 'coin';
         var bot = object(config.bot);
         var overrides = object(object(config.optimize).fixed_runtime_overrides);
@@ -200,7 +212,7 @@
       },
       applyHslBudgetScaling: function (config) {
         // One-time import of persisted overrides when populating the editor.
-        if (!isV8) return;
+        if (!isV8 || isV9) return;
         var overrides = object(object(config.optimize).fixed_runtime_overrides);
         ['long', 'short'].forEach(function (side) {
           var key = 'bot.' + side + '.hsl.scale_budget_with_excess_allowance';
@@ -215,7 +227,7 @@
         });
       },
       validateHslBudgetScaling: function (config) {
-        if (!isV8 || object(config.live).hsl_signal_mode === 'coin') return;
+        if (!isV8 || isV9 || object(config.live).hsl_signal_mode === 'coin') return;
         var overrides = object(object(config.optimize).fixed_runtime_overrides);
         ['long', 'short'].forEach(function (side) {
           var key = 'bot.' + side + '.hsl.scale_budget_with_excess_allowance';
@@ -226,22 +238,22 @@
         });
       },
       metadataApiBase: function () {
-        return apiBase.replace(/\/optimize-v[78]$/, isV8 ? '/v8' : '/v7');
+        return apiBase.replace(/\/optimize-v[789]$/, '/' + normalized);
       },
       docsApiBase: function () {
-        return apiBase.replace(/\/optimize-v[78]$/, '');
+        return apiBase.replace(/\/optimize-v[789]$/, '');
       },
       archiveApiBase: function () {
-        return apiBase.replace(/\/optimize-v[78]$/, '/backtest-v7');
+        return apiBase.replace(/\/optimize-v[789]$/, '/backtest-v7');
       },
       backtestApiBase: function () {
-        return apiBase.replace(/\/optimize-v[78]$/, '/backtest-' + backtestVersion);
+        return apiBase.replace(/\/optimize-v[789]$/, '/backtest-' + backtestVersion);
       },
       backtestMainPageUrl: function () {
         return this.backtestApiBase() + '/main_page';
       },
       queueLogFile: function (filename) {
-        return (isV8 ? 'optimizes_v8/' : 'optimizes/') + filename + '.log';
+        return (isV8 ? 'optimizes_' + normalized + '/' : 'optimizes/') + filename + '.log';
       },
       resultsPath: '/results',
       resultConfigPath: function (path) { return '/results/config?path=' + encodeURIComponent(path); },
@@ -299,18 +311,21 @@
         return ''
           + '<div class="form-row cols-8" data-optimize-version="v8">'
           + '<div class="form-group"><label><span data-tip="Optional deterministic optimizer RNG seed.">rng_seed</span></label><input type="number" id="opted-rng-seed" step="1" value="' + escape(optimize.seed == null ? '' : String(optimize.seed)) + '"></div>'
-          + '<div class="form-group span-3"><label><span data-tip="Comma-separated dotted selectors to keep tunable; all other bounds are fixed.">fine_tune_params</span></label><input type="text" id="opted-fine-tune-params" value="' + escape(String(fineTune)) + '" placeholder="long.risk, short.strategy"></div>'
-          + '<div class="form-group"><label><span data-tip="Percentage window used to polish bounds. PB8 receives this as a 0.0 to 1.0 fraction.">polish_percentage (%)</span></label><input type="number" id="opted-polish-pct" min="0" max="100" step="0.01" value="' + escape(polishPercent === '' || !Number.isFinite(polishPercent) ? '' : String(polishPercent)) + '"></div>'
+          + '<div class="form-group span-3"><label><span data-tip="' + escape(isV9
+            ? 'Comma-separated dotted selectors to keep tunable; all other bounds are fixed. Selectors match whole path segments: long.risk, global.forager, *.strategy.close (one-segment wildcard) or a leaf name such as we_excess_allowance_fraction.'
+            : 'Comma-separated dotted selectors to keep tunable; all other bounds are fixed.') + '">fine_tune_params</span></label><input type="text" id="opted-fine-tune-params" value="' + escape(String(fineTune)) + '" placeholder="' + (isV9 ? 'global.risk, *.strategy.close' : 'long.risk, short.strategy') + '"></div>'
+          + '<div class="form-group"><label><span data-tip="Percentage window used to polish bounds. Passivbot receives this as a 0.0 to 1.0 fraction.">polish_percentage (%)</span></label><input type="number" id="opted-polish-pct" min="0" max="100" step="0.01" value="' + escape(polishPercent === '' || !Number.isFinite(polishPercent) ? '' : String(polishPercent)) + '"></div>'
           + '<div class="form-group span-2"><label><span data-tip="Controls whether polished bounds may extend beyond configured bounds.">polish_bounds_mode</span></label><select id="opted-polish-bounds-mode">'
           + polishModes.map(function (value) { return '<option value="' + value + '"' + (polishMode === value ? ' selected' : '') + '>' + value + '</option>'; }).join('')
           + '</select></div></div>'
+          + (isV9 ? '<div id="opt9-run-options"></div>' : '')
           + (additionalOverrides.length ? '<div class="form-row cols-8" data-optimize-version="v8">'
             + additionalOverrides.map(function (value) {
               var id = 'opted-enable-override-' + value.replace(/[^a-z0-9_-]/gi, '-');
               return '<div class="form-group" style="justify-content:flex-end"><label>&nbsp;</label><div class="chk-row">'
                 + '<input type="checkbox" id="' + id + '" data-pb8-enable-override="' + escape(value) + '"'
                 + (enabledOverrides.indexOf(value) >= 0 ? ' checked' : '') + '><label for="' + id + '">'
-                + '<span data-tip="PB8 optimizer override reported by the installed runtime.">' + escape(value) + '</span></label></div></div>';
+                + '<span data-tip="Optimizer override reported by the installed runtime.">' + escape(value) + '</span></label></div></div>';
             }).join('') + '</div>' : '');
       },
       collectVersionRunSettings: function (config, lookup, strict) {
@@ -390,7 +405,7 @@
           if (index >= 0) runtimeOverrides[index] = normalized;
           else runtimeOverrides.push(normalized);
         }
-        if (isV8) {
+        if (isV8 && !isV9) {
           ['long', 'short', 'portfolio'].forEach(function (side) {
             mergeRuntimeOverride({
               key: (side === 'portfolio' ? 'bot' : 'bot.' + side) + '.hsl.restart_after_red_policy',
@@ -470,7 +485,7 @@
           strategies: Array.isArray(source.strategies) ? source.strategies.slice() : [],
           strategyBounds: strategyBounds,
           strategyDefaults: clone(source.strategy_defaults || {}),
-          hslSignalModes: Array.isArray(source.hsl_signal_modes) ? source.hsl_signal_modes.slice() : (isV8 ? ['coin', 'pside', 'unified'] : []),
+          hslSignalModes: Array.isArray(source.hsl_signal_modes) ? source.hsl_signal_modes.slice() : (isV9 ? [] : isV8 ? ['coin', 'pside', 'unified'] : []),
           enableOverrides: enableOverrideOptions.slice(),
           backendOptions: source.backend_options || source.backends || null,
           backendContract: source.backend_contract || null,
@@ -480,22 +495,23 @@
         };
       },
       configureUi: function () {
-        document.title = 'PBGui - ' + (isV8 ? 'V8' : 'V7') + ' Optimize';
+        document.title = 'PBGui - ' + (normalized.toUpperCase()) + ' Optimize';
+        if(isV9){var warning=document.getElementById('pb8-runtime-warning');if(warning){var title=warning.querySelector('strong');if(title)title.textContent='PB9 runtime unavailable';var link=warning.querySelector('a');if(link){link.textContent='Runtime paths';link.href='/api/v9/main_page';}}}
         var resume = document.getElementById('btn-resume-result');
         if (resume) resume.style.display = isV8 ? '' : 'none';
         var plotTitle = document.getElementById('plot-modal-title');
-        if (plotTitle) plotTitle.textContent = (isV8 ? 'PB8' : 'PB7') + ' 3D plot';
+        if (plotTitle) plotTitle.textContent = ('PB' + versionNumber) + ' 3D plot';
         var plotFrame = document.getElementById('plot-frame');
-        if (plotFrame) plotFrame.title = (isV8 ? 'PB8' : 'PB7') + ' 3D plot';
+        if (plotFrame) plotFrame.title = ('PB' + versionNumber) + ' 3D plot';
         var preflight = document.getElementById('opted-sidebar-ohlcv-preflight-btn');
         if (preflight) {
-          preflight.title = 'Check ' + (isV8 ? 'PB8' : 'PB7') + ' OHLCV readiness for the current config';
+          preflight.title = 'Check ' + ('PB' + versionNumber) + ' OHLCV readiness for the current config';
           preflight.style.display = '';
         }
         var importVersion = document.getElementById('optimize-import-version');
-        if (importVersion) importVersion.textContent = isV8 ? 'PB8' : 'PB7';
+        if (importVersion) importVersion.textContent = 'PB' + versionNumber;
         var importJson = document.getElementById('import-config-json');
-        if (importJson) importJson.placeholder = 'Paste full ' + (isV8 ? 'PB8' : 'PB7') + ' optimize config JSON here';
+        if (importJson) importJson.placeholder = 'Paste full ' + ('PB' + versionNumber) + ' optimize config JSON here';
       }
     };
   }

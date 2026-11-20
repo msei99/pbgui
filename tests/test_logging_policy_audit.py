@@ -21,6 +21,7 @@ PRINT_ALLOWLIST = {
     "scripts/stress_inventory_cache_init.py": "Temporary-database concurrency stress CLI reports isolated trial results without production data.",
     "support_debug_crypto.py": "The operator-only decryption CLI prints a fixed completion message, never report contents or key material.",
     "setup/vast_gpu_benchmark/verify_fresh_population.py": "Offline worker-verification CLI emits its non-secret validation result as JSON.",
+    "setup/vast_gpu_benchmark/verify_native_launch.py": "Offline native CPU smoke CLI emits only synthetic verification results as JSON.",
     "setup/vast_gpu_benchmark/resolve_local_inception.py": "Isolated resolver returns machine-readable candle metadata to its parent on stdout.",
     "setup/vast_gpu_benchmark/sync_input.py": "Remote input-sync helper returns a JSON manifest on stdout to its caller.",
     "setup/vast_gpu_benchmark/cloud_worker.py": "Remote worker stdout is the machine-readable SSH control protocol.",
@@ -96,10 +97,10 @@ TIER_3_SERVICES = {
     "PB7Bridge",
     "TaskQueue",
     "AIChat", "AIOpenRouterChat", "AIResearch", "PB8Loop", "PB8Config", "PB9Config", "V9Instances", "OptimizerWorkload",
-    "ApiKeyState", "ApiKeys", "ApiLogging", "Auth", "BacktestQueueAPI",
+    "ApiKeyState", "ApiKeys", "ApiLogging", "Auth", "BacktestQueueAPI", "BacktestV9", "OptimizeV9",
     "BalanceCalc", "BitgetUTA", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
     "HyperliquidAWS", "LiveSession", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",
-    "ParetoDataLoader", "ProfitSweep", "Services", "Status", "Storage", "User", "V7Instances", "V8Instances", "VPSManager",
+    "ParetoDataLoader", "ParetoExplorer", "ProfitSweep", "Services", "Status", "Storage", "User", "V7Instances", "V8Instances", "VPSManager",
     "VPSManagerApi", "Vast", "ScenarioChart", "ScenarioWindows", "StrategyExplorer",
 }
 DEDICATED_SERVICES = {

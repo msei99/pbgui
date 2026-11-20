@@ -10,7 +10,7 @@ Long and short JSON reuse the shared editor. **With global defaults** displays i
 
 Choose **Add PB9 Instance**, select an exchange account and edit the strategy, portfolio, global defaults and long/short overrides. The form reads the installed PB9 field registry and strategy metadata. An inherited side value remains inherited until you explicitly override it. Enable each intended side explicitly.
 
-Coin selections use published local Coin Data mappings. Exact venue-qualified market identifiers preserve distinctions between independently traded markets with the same coin name. Coin overrides are inline PB9 patches. File-backed overrides and external config references are rejected.
+Coin selections use PB8's shared catalog algorithm with the native PB9 resolver and existing local public market metadata. Normal coins appear once by name; exact identifiers distinguish genuinely ambiguous markets. Existing exact selections retain their identity. Apply Filters shares PB8's filter projection. Coin overrides are inline PB9 patches. File-backed overrides and external config references are rejected.
 
 The catalog uses the native venue's default settlement quote: USDT for standard venues and USDC for Hyperliquid/Lighter. Hyperliquid HIP-3 namespaces and numeric native market IDs remain distinct.
 

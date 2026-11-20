@@ -432,7 +432,7 @@ def _build_start_date_options(
     }
 
 
-async def _build(payload: dict[str, Any], modules=None, diagnostic=None) -> dict[str, Any]:
+async def _build(payload: dict[str, Any], modules=None, diagnostic=None, *, cache_root: Path | None = None) -> dict[str, Any]:
     """Prepare a config and evaluate its local ranges with PB8 modules."""
     pb8_dir = Path(str(payload.get("pb8_dir") or "")).resolve()
     if modules is None:
@@ -480,10 +480,11 @@ async def _build(payload: dict[str, Any], modules=None, diagnostic=None) -> dict
     min_coin_age_ms = int(max(0.0, minimum_coin_age_days) * 86_400_000)
     source_value = str(backtest.get("ohlcv_source_dir") or "").strip()
     source_dir = Path(source_value) if source_value else None
-    legacy_root = source_dir or pb8_dir / "caches" / "ohlcv"
+    native_cache = cache_root if cache_root is not None else pb8_dir / "caches"
+    legacy_root = source_dir or native_cache / "ohlcv"
     if not legacy_root.exists():
         legacy_root = None
-    catalog_path = pb8_dir / "caches" / "ohlcvs" / "catalog.sqlite"
+    catalog_path = native_cache / "ohlcvs" / "catalog.sqlite"
     # PB8 deliberately bypasses its v2 store when an explicit caller-managed
     # source is selected, so the readiness result must do the same.
     _set_start_date_stage(diagnostic, "helper")
@@ -625,15 +626,19 @@ async def _build(payload: dict[str, Any], modules=None, diagnostic=None) -> dict
                     if first_available_ts:
                         entry["_available_start_ts"] = first_available_ts
                     age_anchor = market_start_ts or (int(float(first_ts_guess)) if first_ts_guess else None)
-                    adjusted_start_ts = max(
+                    age_adjusted_start_ts = max(
                         effective_start_ts,
                         (age_anchor + (modules["coin_minimum_age_ms"](config, coin_sides.get(coin, []))
                                        if "coin_minimum_age_ms" in modules else min_coin_age_ms))
                         if age_anchor is not None else effective_start_ts,
                     )
+                    # Native PB9 fetches the configured interval plus warmup;
+                    # coin-age gates limit trading, not its acquisition request.
+                    adjusted_start_ts = (age_adjusted_start_ts if modules.get('age_gate_limits_acquisition', True)
+                                         else effective_start_ts)
                     entry["symbol"] = symbol
                     entry["effective_start_date"] = modules["ts_to_date"](adjusted_start_ts)
-                    if adjusted_start_ts > end_ts:
+                    if age_adjusted_start_ts > end_ts:
                         entry.update(
                             status="coin_too_young",
                             status_label=STATUS_LABELS["coin_too_young"],
@@ -667,6 +672,8 @@ async def _build(payload: dict[str, Any], modules=None, diagnostic=None) -> dict
                                 else "No PB8 v2 catalog or complete configured source covers this range."
                             ),
                         )
+                        if source_dir and status == 'legacy_importable' and modules.get('source_window_check'):
+                            entry.update(await modules['source_window_check'](manager, coin, adjusted_start_ts, end_ts))
                     else:
                         _set_start_date_stage(diagnostic, "helper")
                         plan = modules["plan_local_symbol_range"](

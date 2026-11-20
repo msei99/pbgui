@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import hashlib
 import json
 import math
 import threading
@@ -25,7 +26,10 @@ import pandas as pd
 from api.auth import SessionToken, require_auth
 from ParetoDataLoader import ParetoDataLoader
 from pareto_preset_generator import OPTIMIZE_PRESET_DIRECTIONS, build_optimize_preset
+from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGUI_SERIAL, PBGUI_VERSION, load_ini, pb7dir, pb8_runtime_status, save_ini_section
+
+SERVICE = "ParetoExplorer"
 
 router = APIRouter()
 
@@ -41,6 +45,7 @@ _LOAD_KEYS: dict[str, str] = {}
 _LOAD_WORKERS_LOCK = threading.RLock()
 _LOADER_CACHE: dict[str, dict] = {}
 _LOADER_CACHE_LOCK = threading.Lock()
+_NATIVE_RESULT_CONFIG_LOCK = threading.Lock()
 
 
 def _prune_load_jobs() -> None:
@@ -246,7 +251,21 @@ def _optimize_result_roots_by_version() -> list[tuple[str, Path]]:
             roots.append(("v8", (Path(pb8_dir) / "optimize_results").expanduser().resolve()))
     except Exception:
         pass
+    try:
+        from api.v9_instances import _paths as _pb9_paths
+
+        pb9_dir = str(_pb9_paths().get("pb9dir") or "").strip()
+        if pb9_dir:
+            roots.append(("v9", (Path(pb9_dir) / "optimize_results").expanduser().resolve()))
+    except Exception:
+        pass
     return roots
+
+
+def _normalize_optimize_version(value: object) -> str:
+    """Map a requested explorer generation to a supported one."""
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in {"v8", "v9"} else "v7"
 
 
 def _optimize_result_roots() -> list[Path]:
@@ -258,10 +277,6 @@ def _result_optimize_version(result_dir: Path) -> str:
     for version, root in _optimize_result_roots_by_version():
         if resolved.is_relative_to(root):
             return version
-    roots = _optimize_result_roots()
-    for index, root in enumerate(roots):
-        if resolved.is_relative_to(root):
-            return "v8" if index == 1 else "v7"
     return "v7"
 
 
@@ -506,7 +521,7 @@ def _loader_summary(loader: ParetoDataLoader, *, visible_configs: list | None = 
             best_metric_value = min(vals) if _metric_lower_is_better_for_loader(loader, best_metric_name) else max(vals)
 
     avg_robustness = None
-    if pareto_configs:
+    if pareto_configs and not (getattr(loader, 'optimize_version', '') == 'v9' and len(loader.scenario_labels or []) < 2):
         robustness = [loader.compute_overall_robustness(cfg) for cfg in pareto_configs]
         if robustness:
             avg_robustness = sum(robustness) / len(robustness)
@@ -624,6 +639,8 @@ def _build_champions(loader: ParetoDataLoader, limit: int = 5) -> list[dict]:
         performance_score = _normalized_metric_score(performance, performance_bounds, lower_is_better=primary_lower_is_better)
         robustness = float(loader.compute_overall_robustness(config) or 0.0)
         composite_score = performance_score * robustness
+        if getattr(loader, 'optimize_version', '') == 'v9' and len(loader.scenario_labels or []) < 2:
+            composite_score = performance_score
         configs_with_scores.append((config, performance, performance_score, robustness, composite_score))
 
     configs_with_scores.sort(key=lambda item: (-item[4], -item[3], -item[2]))
@@ -653,7 +670,9 @@ def _build_champions(loader: ParetoDataLoader, limit: int = 5) -> list[dict]:
             "config_index": config.config_index,
             "style": loader.compute_trading_style(config),
             "performance": _safe_number(performance),
-            "robustness": _safe_number(robustness, digits=4),
+            "robustness": (None if getattr(loader, "optimize_version", "") == "v9"
+                           and len(loader.scenario_labels or []) < 2
+                           else _safe_number(robustness, digits=4)),
             "composite_score": _safe_number(composite_score, digits=9),
             "risk_overall": _safe_number(risk_profile.get("overall"), digits=3),
         })
@@ -760,11 +779,58 @@ def _resolve_existing_metric(loader: ParetoDataLoader, metric_names: list[str]) 
     configs = [cfg for cfg in (loader.configs or []) if isinstance(getattr(cfg, "suite_metrics", None), dict)]
     if not configs:
         return None
-    sample_metrics = set(configs[0].suite_metrics.keys())
+    sample_metrics = set().union(*(config.suite_metrics.keys() for config in configs))
+    if getattr(loader, 'optimize_version', '') == 'v9':
+        sample_metrics = {name for name in sample_metrics
+                          if any(_metric_numeric_value(config, name) is not None for config in configs)}
     for name in metric_names:
         if name in sample_metrics:
             return name
     return None
+
+
+def _native_explorer_views(loader: ParetoDataLoader, use_weighted: bool) -> tuple[dict, dict]:
+    """Build PB9 views from metrics actually present in this result."""
+    growth = ['cagr_fraction_strategy_equity_ew', 'cagr_fraction_strategy_equity']
+    if not use_weighted:
+        growth.reverse()
+    roles = {
+        'growth': growth,
+        'drawdown': ['drawdown_max_fraction_strategy_equity'],
+        'ulcer': ['ulcer_index_fraction_strategy_equity'],
+        'recovery': ['peak_recovery_max_days_strategy_equity'],
+        'sharpe': ['sharpe_ratio_strategy_equity'],
+        'sortino': ['sortino_ratio_strategy_equity'],
+        'volatility': ['volatility_annual_fraction_strategy_equity'],
+        'exposure': ['gross_exposure_rms_ratio_strategy_equity'],
+        'turnover': ['gross_turnover_ratio_per_day'],
+        'holding': ['position_held_time_weighted_mean_hours'],
+    }
+    resolved = {role: _resolve_existing_metric(loader, names) for role, names in roles.items()}
+    definitions = {
+        'Growth vs Drawdown': ('growth', 'drawdown'),
+        'Growth vs Ulcer': ('growth', 'ulcer'),
+        'Growth vs Recovery': ('growth', 'recovery'),
+        'Risk-Adjusted': ('sharpe', 'sortino'),
+        'Drawdown vs Ulcer': ('drawdown', 'ulcer'),
+        'Growth vs Exposure': ('growth', 'exposure'),
+        'Trading Activity': ('turnover', 'holding'),
+        'Growth and Risk': ('growth', 'drawdown', 'ulcer'),
+        'Recovery and Risk': ('growth', 'recovery', 'drawdown'),
+        'Growth, Ulcer and Recovery': ('growth', 'ulcer', 'recovery'),
+        'Risk Spectrum': ('sharpe', 'sortino', 'volatility'),
+    }
+    views = {label: tuple(resolved[role] for role in role_names)
+             for label, role_names in definitions.items() if all(resolved[role] for role in role_names)}
+    pairs = {label: metrics for label, metrics in views.items() if len(metrics) == 2}
+    triples = {label: metrics for label, metrics in views.items() if len(metrics) == 3}
+    available = sorted(name for name in set().union(*(config.suite_metrics.keys() for config in loader.configs))
+                       if _resolve_existing_metric(loader, [name]))
+    if not pairs and len(available) >= 2:
+        pairs['Available Metrics'] = tuple(available[:2])
+    if not triples and len(available) >= 3:
+        triples['Available Metrics'] = tuple(available[:3])
+    return pairs, triples
 
 
 def _metric_display_name(metric_name: str | None) -> str:
@@ -858,6 +924,9 @@ def _best_match_metric_terms(loader: ParetoDataLoader, configs: list, metrics: l
 
 
 def _compute_weighted_config_score(loader: ParetoDataLoader, config: object, terms: list[dict], *, robust_weight: int, total_weight: float | None = None) -> float:
+    if getattr(loader, 'optimize_version', '') == 'v9' and len(loader.scenario_labels or []) < 2:
+        robust_weight = 0
+        total_weight = None
     weighted_sum = 0.0
     active_weight = 0.0
     for term in terms:
@@ -901,6 +970,10 @@ def _compute_best_match(
 
     primary_metric = performance_metric or (loader.scoring_metrics[0] if loader.scoring_metrics else "adg_w_usd")
     if score_metrics is None:
+        if risk_metric is None and getattr(loader, "optimize_version", "") == "v9":
+            risk_metric = _resolve_existing_metric(loader, [
+                "drawdown_max_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity",
+                "peak_recovery_max_days_strategy_equity"])
         score_metrics = [primary_metric, risk_metric or "drawdown_worst_usd"]
     metric_terms = _best_match_metric_terms(loader, pareto_configs, score_metrics, perf_weight=perf_weight, risk_weight=risk_weight)
 
@@ -1105,6 +1178,11 @@ def _view_configs(loader: ParetoDataLoader, *, all_results_loaded: bool) -> list
 
 
 def _preview_display_metrics(loader: ParetoDataLoader, *, use_weighted: bool, configs: list) -> list[str]:
+    if getattr(loader, 'optimize_version', '') == 'v9':
+        pairs, _ = _native_explorer_views(loader, use_weighted)
+        preferred = list(loader.scoring_metrics or []) + list(next(iter(pairs.values()), ()))
+        preferred += _available_metrics_superset(loader)
+        return [name for name in dict.fromkeys(preferred) if _resolve_existing_metric(loader, [name])]
     scoring_metrics = list(loader.scoring_metrics or [])
     if not scoring_metrics:
         scoring_metrics = ["adg_w_usd"]
@@ -1190,10 +1268,10 @@ def _build_preview_payload(
     pareto_count = sum(1 for config in configs if bool(getattr(config, "is_pareto", False)))
     x_metric = display_metrics[0] if display_metrics else "adg_w_usd"
     y_metric = display_metrics[1] if len(display_metrics) > 1 else x_metric
-    color_metric = _resolve_existing_metric(
-        visible_loader,
-        _metric_variants("drawdown_worst", use_weighted=use_weighted, use_btc=False),
-    )
+    color_metric = _resolve_existing_metric(visible_loader,
+        ['drawdown_max_fraction_strategy_equity', 'ulcer_index_fraction_strategy_equity']
+        if getattr(visible_loader, 'optimize_version', '') == 'v9'
+        else _metric_variants("drawdown_worst", use_weighted=use_weighted, use_btc=False))
     best_match, _, _ = _compute_best_match(
         visible_loader,
         perf_weight=80,
@@ -1225,6 +1303,8 @@ def _build_preview_payload(
 
 
 def _build_robustness_quadrant(loader: ParetoDataLoader, *, performance_metric: str, show_all: bool, best_match: object | None = None, configs_override: list | None = None) -> dict:
+    if getattr(loader, 'optimize_version', '') == 'v9' and len(loader.scenario_labels or []) < 2:
+        return {'traces': [], 'layout': {'title': 'Scenario robustness requires multiple scenarios'}}
     configs = list(configs_override if configs_override is not None else (loader.configs if show_all else loader.get_pareto_configs()))
     if not configs:
         return {"traces": [], "layout": {"title": "No data available"}}
@@ -1312,13 +1392,14 @@ def _select_playground_radar_configs(loader: ParetoDataLoader, *, best_match: ob
     return [best_match] + comparison_configs
 
 
-def _build_playground_radar(loader: ParetoDataLoader, *, best_match: object | None, quick_view: str) -> dict:
+def _build_playground_radar(loader: ParetoDataLoader, *, best_match: object | None, quick_view: str, configs_override: list | None = None, labels_override: list[str] | None = None) -> dict:
     if best_match is None:
         return {"traces": [], "layout": {"title": "No Best Match config available"}}
 
-    all_configs = _select_playground_radar_configs(loader, best_match=best_match)
+    all_configs = (list(configs_override) if configs_override is not None
+                   else _select_playground_radar_configs(loader, best_match=best_match))
     comparison_configs = all_configs[1:]
-    if quick_view == "Risk Profile":
+    if quick_view == "Risk Profile" and getattr(loader, "optimize_version", "") != "v9":
         labels = [f"Best Match (#{best_match.config_index})"] + [f"Config #{config.config_index}" for config in comparison_configs]
         return _build_risk_profile_radar(
             loader,
@@ -1347,6 +1428,11 @@ def _build_playground_radar(loader: ParetoDataLoader, *, best_match: object | No
             if metric in available_metrics:
                 metrics.append(metric)
                 break
+    if getattr(loader, 'optimize_version', '') == 'v9':
+        metrics = [name for name in _available_metrics_superset(loader)
+                   if all(_metric_numeric_value(config, name) is not None for config in all_configs)][:6]
+        if not metrics:
+            return {"traces": [], "layout": {"title": "No shared metrics available"}}
     metric_ranges = {}
     for metric in metrics:
         values = []
@@ -1393,6 +1479,8 @@ def _build_playground_radar(loader: ParetoDataLoader, *, best_match: object | No
             y_vals.append(_safe_number(y_value, digits=9))
         line_color, fill_color, symbol = palette[min(idx, len(palette) - 1)]
         name = f"Best Match (#{config.config_index})" if idx == 0 else f"Config #{config.config_index}"
+        if labels_override is not None and idx < len(labels_override):
+            name = labels_override[idx]
 
         traces.append({
             "type": "scatter",
@@ -1935,6 +2023,10 @@ def _available_scenario_metrics(loader: ParetoDataLoader) -> list[str]:
 
 
 def _available_metrics_superset(loader: ParetoDataLoader) -> list[str]:
+    if getattr(loader, 'optimize_version', '') == 'v9':
+        names = dict.fromkeys(name for config in (loader.configs or [])
+                              for name in config.suite_metrics)
+        return [name for name in names if _resolve_existing_metric(loader, [name])]
     for config in (loader.configs or []):
         suite_metrics = getattr(config, "suite_metrics", None)
         if isinstance(suite_metrics, dict) and suite_metrics:
@@ -1944,6 +2036,10 @@ def _available_metrics_superset(loader: ParetoDataLoader) -> list[str]:
 
 def _filter_metrics_for_currency_weight(available_metrics: list[str], *, use_weighted: bool, use_btc: bool) -> list[str]:
     available_set = set(available_metrics)
+    cagr = 'cagr_fraction_strategy_equity'
+    if cagr in available_set and cagr + '_ew' in available_set:
+        ignored = cagr if use_weighted else cagr + '_ew'
+        return [metric for metric in available_metrics if metric != ignored]
     filtered_metrics: list[str] = []
     for metric in available_metrics:
         is_usd = metric.endswith("_usd") or metric.endswith("_w_usd")
@@ -2279,6 +2375,10 @@ def _metric_lower_is_better_for_loader(loader: ParetoDataLoader, metric: str | N
         return True
     if goal == "max":
         return False
+    if getattr(loader, 'optimize_version', '') == 'v9' and str(metric or '').startswith(
+        ('ulcer_', 'pain_', 'volatility_', 'gross_exposure_', 'position_exposure_', 'hsl_')
+    ):
+        return True
     return _metric_lower_is_better(str(metric or ""))
 
 
@@ -2330,6 +2430,15 @@ def _select_correlation_configs(loader: ParetoDataLoader, *, strategy: str, num_
             ("position_held_hours_mean", False, False, "Fast Trade", ".1f"),
             ("volume_pct_per_day_avg", True, False, "Top Volume", ".2f"),
         ]
+        if getattr(loader, 'optimize_version', '') == 'v9':
+            metric_defs = [
+                ('cagr_fraction_strategy_equity_ew', True, False, 'Top CAGR EW', '.4f'),
+                ('cagr_fraction_strategy_equity', True, False, 'Top CAGR', '.4f'),
+                ('drawdown_max_fraction_strategy_equity', False, False, 'Best Drawdown', '.4f'),
+                ('ulcer_index_fraction_strategy_equity', False, False, 'Best Ulcer', '.4f'),
+                ('sharpe_ratio_strategy_equity', True, False, 'Top Sharpe', '.3f'),
+                ('peak_recovery_max_days_strategy_equity', False, False, 'Fast Recovery', '.2f'),
+            ]
         candidates: list[tuple[object, str]] = []
         for base_name, maximize, need_currency, label_prefix, fmt in metric_defs:
             metric_name = _find_metric_variant(available_metrics, base_name, use_weighted=use_weighted, currency_suffix=currency_suffix, need_currency=need_currency)
@@ -2414,6 +2523,13 @@ def _select_correlation_configs(loader: ParetoDataLoader, *, strategy: str, num_
         for config in pareto_configs:
             risk_profile = loader.compute_risk_profile_score(config)
             avg_risk = sum(risk_profile.values()) / len(risk_profile) if risk_profile else 0
+            if getattr(loader, 'optimize_version', '') == 'v9':
+                metric = _resolve_existing_metric(loader, [
+                    'drawdown_max_fraction_strategy_equity', 'ulcer_index_fraction_strategy_equity',
+                    'peak_recovery_max_days_strategy_equity'])
+                avg_risk = _metric_numeric_value(config, metric)
+                if avg_risk is None:
+                    continue
             configs_with_risk.append((config, avg_risk))
         configs_with_risk.sort(key=lambda item: item[1])
         if len(configs_with_risk) <= num_configs:
@@ -2441,6 +2557,9 @@ def _build_risk_profile_radar(loader: ParetoDataLoader, *, config_indices: list[
             configs.append(matching[0])
     if not configs:
         return {"traces": [], "layout": {"title": "Invalid config indices"}}
+    if getattr(loader, 'optimize_version', '') == 'v9':
+        return _build_playground_radar(loader, best_match=configs[0], quick_view='Top Comparison',
+                                       configs_override=configs, labels_override=labels)
 
     risk_dimensions = ["Drawdown", "Choppiness", "Jerkiness", "Tail Risk", "Loss Magnitude"]
     fill_traces: list[dict] = []
@@ -2559,8 +2678,16 @@ def _serialize_config_detail(
     risk_profile = loader.compute_risk_profile_score(config)
     full_config = loader.get_full_config(config.config_index)
     validation_holdouts = []
-    if str(getattr(loader, "optimize_version", "v7")).lower() == "v8":
-        from api.optimize_v8 import _load_sweep_plan
+    loader_version = str(getattr(loader, "optimize_version", "v7")).lower()
+    native_config_error = ""
+    if loader_version == "v9" and isinstance(full_config, dict):
+        full_config, native_config_error = _native_pb9_result_config(loader, config.config_index, full_config)
+    if loader_version in {"v8", "v9"}:
+        if loader_version == "v9":
+            from api.optimize_v9 import engine as _pb9_optimize_engine
+            _load_sweep_plan = _pb9_optimize_engine._load_sweep_plan
+        else:
+            from api.optimize_v8 import _load_sweep_plan
         from sweep_cycles import sweep_holdout_scenarios
         result_directory = _resolve_result_dir(str(getattr(loader, "results_path", "") or ""))
         plan = _load_sweep_plan(result_directory) if result_directory is not None else None
@@ -2641,6 +2768,10 @@ def _serialize_config_detail(
     if not score_configs:
         score_configs = [cfg for cfg in (loader.configs or [])[:100] if cfg is not None]
     risk_metric = "drawdown_worst_usd"
+    if loader_version == "v9":
+        risk_metric = _resolve_existing_metric(loader, [
+            "drawdown_max_fraction_strategy_equity", "ulcer_index_fraction_strategy_equity",
+            "peak_recovery_max_days_strategy_equity"])
     explorer_score = _compute_explorer_score(
         loader,
         config,
@@ -2657,7 +2788,8 @@ def _serialize_config_detail(
         "config_index": config.config_index,
         "is_pareto": bool(config.is_pareto),
         "style": loader.compute_trading_style(config),
-        "robustness": _safe_number(loader.compute_overall_robustness(config), digits=4),
+        "robustness": (None if loader_version == 'v9' and len(loader.scenario_labels or []) < 2
+                       else _safe_number(loader.compute_overall_robustness(config), digits=4)),
         "explorer_score": _safe_number(explorer_score, digits=6),
         "risk_profile": {key: _safe_number(value, digits=4) for key, value in risk_profile.items()},
         "top_metrics": top_metrics,
@@ -2669,7 +2801,52 @@ def _serialize_config_detail(
         "validation_holdouts": _json_safe(validation_holdouts),
         "override_configs": _json_safe(override_configs),
         "override_error": override_error,
+        "native_config_error": native_config_error,
     }
+
+
+_NATIVE_RESULT_CONFIG_CACHE: dict[tuple, dict] = {}
+_NATIVE_RESULT_CONFIG_CACHE_LIMIT = 64
+
+
+def _native_pb9_result_config(loader: ParetoDataLoader, config_index: int, record: dict) -> tuple[dict, str]:
+    """Convert one PB9 result record with the installed native result reader.
+
+    Result-only fields such as metrics and evaluation contracts are removed by
+    Passivbot itself, so Backtest/Optimize handoffs receive an authored config.
+    """
+    results_path = str(getattr(loader, "results_path", "") or "")
+    try:
+        encoded = json.dumps(record, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        encoded = repr(record)
+    try:
+        from api.optimize_v9 import engine as _pb9_optimize_engine
+
+        # Bind cached conversions to the native source that produced them.
+        runtime = _pb9_optimize_engine.native.runtime()
+        key = (str(runtime.get("commit") or ""), results_path, int(config_index),
+               hashlib.sha256(encoded.encode("utf-8")).hexdigest())
+        # A changed source tree can convert differently at the same commit.
+        cacheable = bool(runtime.get("source_clean"))
+        with _NATIVE_RESULT_CONFIG_LOCK:
+            cached = _NATIVE_RESULT_CONFIG_CACHE.get(key) if cacheable else None
+        if cached is not None:
+            return copy.deepcopy(cached), ""
+        converted = _pb9_optimize_engine.native.result_config(copy.deepcopy(record))
+    except HTTPException as exc:
+        return record, str(exc.detail)
+    except Exception as exc:
+        _log(SERVICE, "PB9 result config conversion failed", level="WARNING",
+             meta={"error_type": type(exc).__name__, "error": str(exc)[:300]})
+        return record, "Native PB9 result conversion failed: " + str(exc)[:300]
+    if not cacheable:
+        return converted, ""
+    with _NATIVE_RESULT_CONFIG_LOCK:
+        while len(_NATIVE_RESULT_CONFIG_CACHE) >= _NATIVE_RESULT_CONFIG_CACHE_LIMIT:
+            _NATIVE_RESULT_CONFIG_CACHE.pop(next(iter(_NATIVE_RESULT_CONFIG_CACHE)))
+        _NATIVE_RESULT_CONFIG_CACHE[key] = copy.deepcopy(converted)
+    return converted, ""
 
 
 def _serialize_load_result_from_loader(
@@ -3009,6 +3186,22 @@ def _build_playground_payload(
         ),
     }
 
+    native = getattr(visible_loader, 'optimize_version', '') == 'v9'
+    native_quick_views = None
+    if native:
+        preset_2d, preset_3d = _native_explorer_views(visible_loader, use_weighted)
+        presets = preset_2d if viz_type == '2D Scatter' else preset_3d
+        native_quick_views = list(presets) + ['Custom...']
+        if viz_type == 'Radar Chart':
+            native_quick_views = ['Top Comparison']
+        if quick_view not in native_quick_views:
+            quick_view = native_quick_views[0]
+        available = _available_metrics_superset(visible_loader)
+        defaults = next(iter(presets.values()), tuple(available[:3]))
+        x_metric = defaults[0] if defaults else None
+        y_metric = defaults[1] if len(defaults) > 1 else x_metric
+        z_metric = defaults[2] if len(defaults) > 2 else y_metric
+
     if quick_view == "Custom...":
         x_metric = _resolve_existing_metric(visible_loader, [custom_x_metric]) or x_metric
         y_metric = _resolve_existing_metric(visible_loader, [custom_y_metric]) or y_metric
@@ -3096,6 +3289,10 @@ def _build_playground_payload(
         },
         "viz_type": viz_type,
         "quick_view": quick_view,
+        "quick_views": native_quick_views,
+        "robustness_available": not native or len(visible_loader.scenario_labels or []) > 1,
+        "weighting_available": not native or all(_resolve_existing_metric(visible_loader, [name])
+            for name in ('cagr_fraction_strategy_equity', 'cagr_fraction_strategy_equity_ew')),
         "available_metrics": _available_metrics_superset(visible_loader),
         "view_range": normalized_range,
         "visualizations": visualizations,
@@ -3362,9 +3559,7 @@ def main_page(
     html = render_page_urls(request, html, "/api/pareto-explorer")
     html = html.replace('"%%RESULT_PATH%%"', script_json(str(result_path or "")))
     result_dir = _resolve_result_dir(result_path)
-    optimize_version = _result_optimize_version(result_dir) if result_dir else (
-        "v8" if str(optimize_version).strip().lower() == "v8" else "v7"
-    )
+    optimize_version = _result_optimize_version(result_dir) if result_dir else _normalize_optimize_version(optimize_version)
     html = html.replace('"%%OPTIMIZE_VERSION%%"', script_json(optimize_version))
     html = html.replace("%%OPTIMIZE_LABEL%%", optimize_version.upper())
     html = html.replace('"%%VERSION%%"', script_json(PBGUI_VERSION))
@@ -3387,9 +3582,7 @@ def get_session(
 ):
     result_dir = _resolve_result_dir(result_path)
     result_meta = _result_meta(result_dir) if result_dir else None
-    optimize_version = str((result_meta or {}).get("optimize_version") or (
-        "v8" if str(optimize_version).strip().lower() == "v8" else "v7"
-    ))
+    optimize_version = str((result_meta or {}).get("optimize_version") or _normalize_optimize_version(optimize_version))
     load_strategy, max_configs = _load_pareto_defaults()
 
     load_payload = None
@@ -3562,6 +3755,10 @@ def build_optimize_preset_preview(body: dict, session: SessionToken = Depends(re
     full_config = loader.get_full_config(config.config_index)
     if not isinstance(full_config, dict):
         raise HTTPException(status_code=422, detail="Full config data not available")
+    if str(getattr(loader, "optimize_version", "v7")).lower() == "v9":
+        full_config, native_error = _native_pb9_result_config(loader, config.config_index, full_config)
+        if native_error:
+            raise HTTPException(status_code=422, detail=native_error)
 
     params = dict((body or {}).get("preset") or {})
     direction = str(params.get("direction") or OPTIMIZE_PRESET_DIRECTIONS[0]).strip()

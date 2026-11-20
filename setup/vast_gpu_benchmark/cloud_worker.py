@@ -178,6 +178,8 @@ def install() -> dict:
                     with archive.extractfile(entry) as source, path.open("xb") as target:
                         shutil.copyfileobj(source, target, 1024 * 1024)
         manifest = json.loads((stage / "input/manifest.json").read_text())
+        if manifest.get('runtime','pb8')!=os.environ.get('PBGUI_WORKER_RUNTIME','pb8'):
+            raise ValueError('Passivbot worker generation mismatch')
         if manifest["pb8_revision"] != Path("/opt/pb8-revision").read_text().strip():
             raise ValueError("PB8 image revision mismatch")
         if file_hash(stage / "input/optimize.json") != manifest["config_sha256"]:
@@ -397,7 +399,11 @@ def calibration_dispatch_limit(config: dict, population: int) -> int:
     backtest = config['backtest']
     days = (date.fromisoformat(backtest['end_date']) - date.fromisoformat(backtest['start_date'])).days + 1
     interval = int(backtest.get('candle_interval_minutes') or 1)
-    approved = config['live']['approved_coins']
+    if str(config.get('config_version','')).startswith('v9.'):
+        universe=config['bot']['global'].get('universe',{})
+        approved={side:(config['bot'].get(side,{}).get('universe',{}).get('approved_coins') or universe.get('approved_coins',[])) for side in ('long','short')}
+    else:
+        approved = config['live']['approved_coins']
     coins = set(approved['long']) | set(approved['short'])
     if days <= 0 or interval <= 0 or not coins or population <= 0:
         raise ValueError('Invalid calibration dispatch workload')
@@ -612,7 +618,10 @@ def run_calibration(config: dict, hardware: dict, environment: dict, plan: dict)
         optimize['iters'] = max(int(optimize.get('iters') or 0), 10_000_000)
         optimize['population_size'] = population
         gpu = optimize.setdefault('gpu', {})
-        gpu.update(population_size=population, batch_size=population, auto_lean_parallelism=False)
+        if str(case_config.get('config_version','')).startswith('v9.'):
+            gpu.update(batch_size=population,tuning_mode='off')
+        else:
+            gpu.update(population_size=population, batch_size=population, auto_lean_parallelism=False)
         if protocol >= 3:
             gpu['max_dispatch_candidate_bars'] = calibration_dispatch_limit(case_config, population)
         config_path = case_root / 'optimize.json'
@@ -627,7 +636,7 @@ def run_calibration(config: dict, hardware: dict, environment: dict, plan: dict)
             combined.flush()
             mirrored_bytes = 0
             process = subprocess.Popen(
-                [sys.executable, '/opt/passivbot/src/optimize.py', str(config_path)],
+                optimizer_command(config_path),
                 cwd=case_root, env=environment, stdout=log, stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
@@ -719,6 +728,40 @@ def require_offline_config(config: dict) -> None:
         raise ValueError('Vast requires backtest.offline=true and complete PBGui-supplied inputs')
 
 
+def optimizer_command(config_path=None):
+    """Use the same argv builder as local PB9, with verified bundle paths only."""
+    config_path = Path(config_path) if config_path is not None else ROOT/'input/optimize.json'
+    command = [sys.executable, '/opt/passivbot/src/optimize.py', str(config_path)]
+    if os.environ.get('PBGUI_WORKER_RUNTIME', 'pb8') != 'pb9':
+        return command
+    sys.path.insert(0, '/opt/pbgui')
+    from optimize_cli import optimizer_argv
+    from pb9_optimize_options import MAX_OPTIONS_BYTES, stage_manifest, validate_options
+    path = safe_path(ROOT/'input', 'launch_options.json')
+    if not path.is_file() or path.stat().st_size > MAX_OPTIONS_BYTES:
+        raise ValueError('Native launch options are missing or oversized')
+    options = json.loads(path.read_text())
+    validate_options(options)
+    mode = options.get('mode', 'fresh')
+    if mode == 'pareto_seed':
+        if options.get('source') not in ('optimize.json', 'starting_configs'):
+            raise ValueError('Native cloud seed must be a packaged artifact')
+        source = safe_path(ROOT/'input', options['source'])
+        if not source.exists():
+            raise ValueError('Native cloud seed is missing')
+        options['source'] = str(source)
+    elif mode != 'fresh':
+        raise ValueError('Unsupported native cloud launch mode')
+    def write_text(destination, text):
+        """Stage an imported report privately; it is not a mutable cache blob."""
+        temporary = destination.with_suffix('.tmp')
+        temporary.write_text(text, encoding='utf-8'); temporary.chmod(0o600)
+        os.replace(temporary, destination)
+    manifest_path = stage_manifest(options, ROOT/'output/preparation.json', write_text)
+    return [sys.executable, *optimizer_argv('/opt/passivbot/src/optimize.py', str(config_path),
+                                          options, runtime='v9', manifest_path=manifest_path)]
+
+
 def run() -> None:
     """Run at most one optimizer; duplicate starts cannot reset its state."""
     with (ROOT / "run.lock").open("a") as lock:
@@ -758,7 +801,7 @@ def run() -> None:
             })
             return
         with (output / "optimizer.log").open("ab") as log:
-            process = subprocess.Popen([sys.executable, "/opt/passivbot/src/optimize.py", str(ROOT / "input/optimize.json")],
+            process = subprocess.Popen(optimizer_command(),
                 cwd=output, env=environment, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
             try:
                 while process.poll() is None:
@@ -841,6 +884,23 @@ def snapshot(final: bool) -> dict:
         if final:
             candidates += list(source_root.glob("optimize_results/*/all_results.bin"))
             candidates += list(source_root.glob("optimize_results/*/checkpoint.pkl"))
+            if os.environ.get('PBGUI_WORKER_RUNTIME', 'pb8') == 'pb9':
+                sys.path.insert(0, '/opt/pbgui')
+                from pb9_optimize_options import OPTIONS_FILENAME, validate_options
+                options_path = safe_path(ROOT/'input', 'launch_options.json')
+                options = validate_options(json.loads(options_path.read_text()))
+                for directory in source_root.glob('optimize_results/*'):
+                    if directory.is_symlink() or not directory.is_dir():
+                        raise ValueError('Invalid native result directory')
+                    destination = directory/OPTIONS_FILENAME
+                    write_record(destination, options)
+                    candidates.append(destination)
+                    for name in ('session.json', 'search.json'):
+                        metadata = directory/name
+                        if metadata.is_symlink():
+                            raise ValueError('Symlink in native result metadata')
+                        if metadata.is_file():
+                            candidates.append(metadata)
         log = source_root / "optimizer.log"
         if log.exists():
             candidates.append(log)

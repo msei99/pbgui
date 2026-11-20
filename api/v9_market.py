@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from api.auth import SessionToken, require_auth
 from api import editor_market_data as markets
 from api.pb9 import _execute, _request_envelope
-from pbgui_purefunc import PBGDIR
+from pb9_market import get_market_identifiers, validate_selection
 
 SERVICE = 'V9Instances'
 router = APIRouter()
@@ -20,21 +20,24 @@ def _operation(operation, cancel_event, payload):
             'status': {'exchanges', 'coins'},
             'filter': {'exchange', 'market_cap', 'vol_mcap', 'only_cpt', 'notices_ignore', 'tags'}}
     body = _request_envelope(payload, keys[operation])
+    exchanges = body['exchanges'] if operation == 'status' else [body['exchange']]
+    identifiers = body['coins'] if operation == 'status' else []
+    try:
+        validate_selection(exchanges, identifiers)
+    except (TypeError, ValueError):
+        raise HTTPException(422, 'Invalid exchange or market selection') from None
+    if operation == 'tags':
+        return {'tags': markets.tags(body['exchange'])}
+    from api.pb9 import _read_paths
+    catalog = get_market_identifiers(_read_paths(), exchanges, identifiers, cancel_event)
     if operation == 'status':
-        return markets.exact_market_catalog(PBGDIR, body['exchanges'], body['coins'])
+        return catalog
     exchange = body['exchange']
-    # Validate before any CoinData lookup or path construction.
-    catalog = markets.exact_market_catalog(PBGDIR, [exchange])
     if operation == 'symbols':
         return catalog
-    if operation == 'tags':
-        return {'tags': markets.tags(exchange)}
     approved, ignored = markets.filter_symbols(exchange, body['market_cap'], body['vol_mcap'],
                                                body['only_cpt'], body['notices_ignore'], body['tags'])
-    approved, ignored = set(approved), set(ignored)
-    return {'approved': [r['config_id'] for r in catalog['catalog'] if r['coin'] in approved],
-            'ignored': [r['config_id'] for r in catalog['catalog'] if r['coin'] in ignored],
-            'unresolved': sorted((approved | ignored) - {r['coin'] for r in catalog['catalog']})}
+    return markets.project_filtered_catalog(catalog, approved, ignored)
 
 
 async def _get(request, operation, body):
@@ -44,7 +47,7 @@ async def _get(request, operation, body):
 
 @router.get('/symbols')
 async def symbols(request: Request, exchange: str = Query(...), session: SessionToken = Depends(require_auth)):
-    """Return exact venue-qualified linear swap identifiers from local mappings."""
+    """Use native coin names and exact identifiers only where collisions require them."""
     return await _get(request, 'symbols', {'exchange': exchange})
 
 

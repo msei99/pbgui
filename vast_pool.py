@@ -46,7 +46,9 @@ def rental_needed(queue: CloudQueue, authorization_id: str) -> bool:
     active = [r for r in rows if r.get('rental_state') not in ('none', 'deletion_verified')]
     if len(active) >= pool_limit(state):
         return False
-    waiting = worker_compatible_jobs(queue.store, queue.waiting())
+    from vast_worker_profiles import worker_profile
+    profile=worker_profile(authorization.get('runtime','pb8')).require_published()
+    waiting = worker_compatible_jobs(queue.store,queue.waiting(),**({'image':profile.image,'revision':profile.revision} if profile.runtime=='pb9' else {}))
     if not waiting:
         return False
     idle_slots = []
@@ -103,7 +105,11 @@ def select_offer(queue: CloudQueue, settings: dict, *, job_authorization: dict |
         rows = [row for row in queue.waiting(authorization_id=scope['id']) if row['id'] == scope['job_id']]
     else:
         rows = queue.waiting()
-    waiting = worker_compatible_jobs(queue.store, rows)
+    from vast_worker_profiles import worker_profile
+    runtime=(queue.store.read(job_authorization['job_id']).get('runtime','pb8') if job_authorization
+        else (queue.read().get('pool_authorization') or {}).get('runtime','pb8'))
+    profile=worker_profile(runtime).require_published()
+    waiting=worker_compatible_jobs(queue.store,rows,**({'image':profile.image,'revision':profile.revision} if profile.runtime=='pb9' else {}))
     if not waiting:
         raise VastError('No prepared jobs match the current worker image; prepare compatible input first', 409)
     preferences['min_cpu'] = max(preferences['min_cpu'], max(
@@ -147,12 +153,15 @@ def pool_step(queue: CloudQueue) -> dict | None:
         offer = select_offer(queue, settings)
         # start rechecks authorization, queue state and available slots under .queue-lock.
         result = queue.start(offer, settings['hours'], settings['budget'], settings['idle_seconds'],
-                             pool_authorization_id=identifier)
+                             pool_authorization_id=identifier,
+                             **({'runtime':'pb9'} if authorization.get('runtime')=='pb9' else {}))
         queue.update(pool_error=None)
     return result
 
-def authorize_pool(queue: CloudQueue, settings: dict, *, resume: bool = True) -> dict:
+def authorize_pool(queue: CloudQueue, settings: dict, *, resume: bool = True, runtime: str = "pb8") -> dict:
     """Record explicit start consent without changing existing rental limits."""
+    from vast_worker_profiles import worker_profile
+    worker_profile(runtime).require_published()
     if settings.get('auto_rent') is not True:
         raise VastError('Enable Auto rent & start before authorizing automatic GPU rentals', 409)
     if queue.read().get('calibration_watch'):
@@ -162,7 +171,7 @@ def authorize_pool(queue: CloudQueue, settings: dict, *, resume: bool = True) ->
     credentials = VastCredentialStore(queue.root).metadata()
     if not credentials['configured']:
         raise VastError('Save a Vast API key first', 409)
-    authorization = {'id': uuid.uuid4().hex, 'settings': dict(settings), 'accepted_at': time.time(),
+    authorization = {'id': uuid.uuid4().hex, 'settings': dict(settings), **({'runtime':'pb9'} if runtime=='pb9' else {}), 'accepted_at': time.time(),
                      'credential_generation': credentials['generation']}
     pool_limit({'pool_authorization': authorization})
     ensure_private_directory(queue.root)

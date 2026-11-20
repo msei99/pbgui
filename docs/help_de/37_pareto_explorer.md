@@ -1,16 +1,36 @@
-# Pareto Explorer (PBv7 / PBv8)
+# Pareto Explorer (PBv7 / PBv8 / PBv9)
+
+Chartansicht, Achsen, Gewichte und die ausgewählte Config bleiben beim Browser-Reload erhalten.
 
 Benutzerdefinierte Z-Achsen-Metriken bleiben in 2D-Ansichten erhalten und werden beim Wechsel zurück zu 3D wieder verwendet.
 
-Der Pareto Explorer hilft dir, PBv7- und PBv8-Optimierungsergebnisse zu analysieren, Trade-offs zu vergleichen, Configs zu selektieren und Folge-Optimize-Presets zu erstellen. Er ist fuer Multi-Objective-Ergebnisse gedacht, bei denen keine einzelne Metrik die ganze Antwort liefert.
+Der Pareto Explorer hilft dir, PBv7-, PBv8- und PBv9-Optimierungsergebnisse zu analysieren, Trade-offs zu vergleichen, Configs zu selektieren und Folge-Optimize-Presets zu erstellen. Er ist fuer Multi-Objective-Ergebnisse gedacht, bei denen keine einzelne Metrik die ganze Antwort liefert.
 
 ## Wo du ihn öffnest
 
-- PBGui: **PBv7/PBv8 -> Optimize -> Results** oder ueber den passenden Navigationseintrag **Pareto Explorer**.
+- PBGui: **PBv7/PBv8/PBv9 -> Optimize -> Results** oder ueber den passenden Navigationseintrag **Pareto Explorer**.
+
+Bei PBv9-Ergebnissen verwenden Backtest-, Validierungs- und Preset-Uebergaben den Ergebnisleser der installierten PB9-Version; reine Ergebnisfelder werden nicht als Config-Parameter weitergegeben. Gemeinsame `global`- und `portfolio`-Parameter erscheinen als punktierte Pfade wie `global.risk.max_positions`. PB9-Presets verwenden native PB9-Metriken (zum Beispiel CAGR, Sortino und maximale Drawdown-Anteile) und lassen die Limits des Laufs unveraendert. Der Strategy Explorer ist fuer PB9 noch nicht verfuegbar.
 - Öffne ein Ergebnis mit **Pareto Explorer** aus der Optimize-Ergebnisliste oder der Ergebnis-Sidebar.
 - Die Seite kann im schnellen Pareto-only-Modus starten und spaeter ueber die Sidebar den kompletten `all_results.bin`-Stream scannen.
 
 ## Grundidee
+
+PB9-Charts verwenden die nativen Metriknamen und Einheiten samt gespeichertem
+Mittel-, Minimum- oder Maximumwert. Komprimierte Gesamtergebnisse nutzen den
+gemeinsamen PB8-Leser für inkrementelle Daten. Quick Views werden
+angeboten, wenn ihre Metriken im geladenen Ergebnis vorhanden sind.
+**Use CAGR EW** schaltet zwischen den beiden CAGR-Varianten um, wenn beide
+vorliegen. Risikometriken bleiben zusammen mit gewichteter CAGR verfügbar.
+Der BTC-Schalter gilt für PB7/PB8.
+
+**Risk Metrics** zeigt bei PB9 die berichteten Metrikwerte. Fehlende Risiko- und
+Aktivitätsdaten bleiben als nicht verfügbar erkennbar. Die Aktivitätsanzeige
+nutzt vorhandenen Bruttoumsatz pro Tag und zeitgewichtete Haltedauer in Stunden.
+Robustheit zwischen Szenarien fließt erst bei mehreren Szenarien ins Ranking ein.
+
+Bedeutung, Einheiten und Empfehlungen für Ziele/Limits aller 27 nativen Metriken
+stehen im Guide-Thema **PBv9 Optimize** unter **Metrikreferenz**.
 
 Jeder Score, jedes Chart und jeder Pareto-Stern ist relativ zur aktuell geladenen und sichtbaren Config-Menge.
 

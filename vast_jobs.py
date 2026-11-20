@@ -63,6 +63,9 @@ SUPPORTED_RENTAL_IMAGE_REVISIONS = {
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:ea52a9ea51f1945b5c3c5133246fd125ee7793faa288754b21e095b95e138743": ORIGINAL_REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:0d827eb097a9d26c9088421097b4a9f0eacf660f08613871c48946ddf71a0a88": ORIGINAL_REVISION,
 }
+from vast_worker_profiles import PB9 as _PB9_WORKER_PROFILE
+if _PB9_WORKER_PROFILE.published:
+    SUPPORTED_RENTAL_IMAGE_REVISIONS[_PB9_WORKER_PROFILE.image]=_PB9_WORKER_PROFILE.revision
 SUPPORTED_RENTAL_IMAGES = tuple(SUPPORTED_RENTAL_IMAGE_REVISIONS)
 from vast_config_validation import MAX_ITERATIONS, METRICS, validate_cloud_config
 
@@ -156,9 +159,10 @@ class _ProgressReader:
         return value
 
 
-def _write_input_archive(folder: Path, relative_files: list[Path], target: Path, progress) -> None:
+def _write_input_archive(folder: Path, relative_files: list[Path], target: Path, progress, *, extra_files=()) -> None:
     """Write the existing gzip-tar format while reporting actual source consumption."""
     members = [Path('optimize.json'), Path('manifest.json'),
+               *extra_files,
                *(Path('ohlcv') / relative for relative in relative_files)]
     sizes = [safe.stat().st_size for relative in members
              for safe in [folder / relative]]
@@ -482,13 +486,15 @@ class JobStore:
                                error="Input preparation interrupted by process shutdown. Requeue to prepare again.")
 
     def create_preparation(self, name: str, iterations: int, workers: int, use_adg: bool,
-                           *, requeue_from: str | None = None, operation_id: str | None = None) -> dict:
+                           *, requeue_from: str | None = None, operation_id: str | None = None, runtime: str = "pb8") -> dict:
         """Persist a pending input snapshot before its slower file work starts."""
+        from vast_worker_profiles import worker_profile
+        worker_profile(runtime)
         ensure_private_directory(self.root)
         ensure_private_directory(self.root / "jobs")
         identifier = (uuid.uuid5(uuid.NAMESPACE_URL, 'pbgui-vast-input:' + job_id(operation_id)).hex
                       if operation_id is not None else uuid.uuid4().hex)
-        state = {"id": identifier, "config_name": config_name(name), "status": "preparing", "rental_state": "none",
+        state = {"id": identifier, "config_name": config_name(name), "status": "preparing", **({"runtime":"pb9"} if runtime=="pb9" else {}), "rental_state": "none",
                  "iterations": iterations, "workers": workers, "use_adg": use_adg, "auto_cpu_workers": True, "created_at": time.time(), "generation": 0,
                  "preparation_owner": {"pid": os.getpid(), "created_at": psutil.Process().create_time()},
                  "exact_completed": 0, "gpu_candidates": 0, "error": None,
@@ -535,30 +541,44 @@ class JobStore:
                 job_convergence = validate_convergence_config(job_convergence)
             except ValueError as exc:
                 raise VastError('Invalid per-job convergence settings', 422) from exc
-        config = native_job_config(source, iterations, workers, use_adg)
+        from vast_worker_profiles import config_runtime, worker_profile
+        native = config_runtime(source) == 'pb9'
+        if identifier is not None and self.read(job_id(identifier)).get('runtime','pb8')!=('pb9' if native else 'pb8'):
+            raise VastError('Prepared job runtime does not match its source config',422)
+        profile = worker_profile('pb9' if native else 'pb8')
+        warmup_minutes = None
+        native_artifacts = {}
+        if native:
+            from vast_pb9 import prepare as prepare_native, save as save_native
+            config,profile,export_config,warmup_minutes = prepare_native(source,iterations,workers,use_adg)
+            from vast_pb9 import launch_bundle
+            native_artifacts = launch_bundle(source)
+        else:
+            config = native_job_config(source, iterations, workers, use_adg)
+            export_config = config
         try:
-            shards = select_shards(config, market_root, mapping_root)
+            shards = select_shards(export_config, market_root, mapping_root, **({'warmup_minutes':warmup_minutes} if native else {}))
         except (ValueError, OSError) as exc:
             raise VastError("Market data export failed: " + str(exc), 422) from None
         total_bytes = sum(p.stat().st_size for p, _ in shards)
         if total_bytes > 10 * 1024**3:
             raise VastError("This cloud profile supports input bundles up to 10 GB", 422)
         if identifier is None:
-            identifier = self.create_preparation(name, iterations, workers, use_adg, requeue_from=requeue_from)['id']
+            identifier = self.create_preparation(name,iterations,workers,use_adg,requeue_from=requeue_from,**({'runtime':'pb9'} if native else {}))['id']
         else:
             identifier = job_id(identifier)
             if self.read(identifier).get('status') != 'preparing':
                 raise VastError('Cloud job is no longer awaiting input preparation', 409)
         config["backtest"]["ohlcv_source_dir"] = "/work/pbgui/jobs/" + identifier + "/input/ohlcv"
         directory = self.directory(identifier)
-        self.update(identifier, exchanges=sorted({relative.parts[0] for _, relative in shards}), input_progress={
+        self.update(identifier, **({"runtime":"pb9"} if native else {}), exchanges=sorted({relative.parts[0] for _, relative in shards}), input_progress={
             "stage": "copying", "files_completed": 0, "files_total": len(shards),
             "bytes_completed": 0, "bytes_total": total_bytes,
         })
         try:
             freeze_relative_dates(config)
             try:
-                requirements = integrity_requirements(config, scenario_plan(config)[0])
+                requirements = integrity_requirements(export_config, scenario_plan(export_config)[0], **({'warmup_minutes':warmup_minutes} if native else {}))
             except ValueError as exc:
                 raise VastError('OHLCV integrity requirements cannot be checked: ' + str(exc), 422) from exc
             market_manifest = {'files': [{'path': str(Path('ohlcv') / relative)} for _, relative in shards]}
@@ -571,14 +591,22 @@ class JobStore:
             inception = ensure_local_inception(markets)
             checked = validate_export(shards, requirements, markets, inception, market_root / 'checksums.sqlite')
             folder = ensure_private_directory(directory / "input")
-            save_prepared_pb8_config(config, folder / "optimize.json")
+            if native:
+                save_native(config,folder/'optimize.json')
+            else:
+                save_prepared_pb8_config(config, folder / "optimize.json")
             from scenario_windows import build_validation_plan
             sweep = build_sweep_plan(source)
             validation_plan = build_validation_plan(source)
-            manifest = {"schema_version": 1, "pb8_revision": REVISION, "config_sha256": digest(folder / "optimize.json"),
+            manifest = {"schema_version": 1, "pb8_revision": profile.revision, "runtime": profile.runtime, "config_sha256": digest(folder / "optimize.json"),
                         "source_config_sha256": source_sha256, "sweep_plan": sweep, "validation_plan": validation_plan,
                         "ohlcv_requirements": requirements,
                         "metadata_snapshot": {'markets': snapshots, 'inception': inception}, "files": []}
+            for relative, content in native_artifacts.items():
+                destination = folder / relative
+                ensure_private_directory(destination.parent)
+                atomic_write_private_bytes(destination, content)
+                manifest['files'].append({'path': relative, 'bytes': len(content), 'sha256': digest(destination)})
             copied_bytes = 0
             last_progress_update = time.monotonic()
             for index, (original, relative) in enumerate(shards, start=1):
@@ -610,9 +638,10 @@ class JobStore:
                 self.update(identifier, input_progress=value)
 
             _write_input_archive(folder, [relative for _, relative in shards],
-                                 directory / 'input.tar.gz', compression_progress)
+                                 directory / 'input.tar.gz', compression_progress,
+                                 **({'extra_files': [Path(name) for name in native_artifacts]} if native else {}))
             (directory / "input.tar.gz").chmod(0o600)
-            write_json(directory / "intent.json", {"id": identifier, "image": IMAGE, "pb8_revision": REVISION,
+            write_json(directory / "intent.json", {"id": identifier, "image": profile.image, "pb8_revision": profile.revision, "runtime": profile.runtime,
                        "results_root": str(results_root.resolve()), "bundle_sha256": digest(directory / "input.tar.gz"),
                        "bundle_bytes": (directory / "input.tar.gz").stat().st_size,
                        "manifest_sha256": digest(folder / 'manifest.json'), "source_config_sha256": source_sha256,
@@ -634,6 +663,11 @@ class JobStore:
 
         source_id = job_id(source_id)
         source = self.read(source_id)
+        from vast_worker_profiles import worker_profile
+        profile=worker_profile(source.get('runtime','pb8')).require_published()
+        if profile.runtime=='pb9':
+            from vast_pb9 import _adapter
+            load_pb8_config=_adapter().load
         try:
             intent = self.read(source_id, "intent.json")
         except VastError:
@@ -644,7 +678,7 @@ class JobStore:
         manifest_path = source_directory / "input/manifest.json"
         if (source.get("status") not in {"failed", "cancelled"}
                 or (source.get("input_progress") or {}).get("stage") != "complete"
-                or intent.get("image") != IMAGE or intent.get("pb8_revision") != REVISION
+                or intent.get("image") != profile.image or intent.get("pb8_revision") != profile.revision
                 or intent.get("source_config_sha256") != source_sha256
                 or source.get("iterations") != iterations or bool(source.get("use_adg")) != bool(use_adg)
                 or any(not path.is_file() or path.is_symlink() for path in (archive, optimize_path, manifest_path))):
@@ -667,7 +701,7 @@ class JobStore:
         except (OSError, ValueError, TypeError, KeyError, VastError):
             return None
 
-        identifier = self.create_preparation(name, iterations, workers, use_adg, requeue_from=source_id)["id"]
+        identifier = self.create_preparation(name,iterations,workers,use_adg,requeue_from=source_id,**({'runtime':'pb9'} if profile.runtime=='pb9' else {}))["id"]
         target_directory = self.directory(identifier)
         try:
             input_directory = ensure_private_directory(target_directory / "input")
@@ -684,7 +718,7 @@ class JobStore:
             os.link(archive, target_directory / "input.tar.gz")
             (target_directory / "input.tar.gz").chmod(0o600)
             write_json(target_directory / "intent.json", {
-                "id": identifier, "image": IMAGE, "pb8_revision": REVISION,
+                "id": identifier, "image":profile.image,"pb8_revision":profile.revision,**({"runtime":"pb9"} if profile.runtime=="pb9" else {}),
                 "results_root": str(results_root.resolve()), "bundle_sha256": expected_digest,
                 "bundle_bytes": expected_bytes, "source_config_sha256": source_sha256,
                 "manifest_sha256": digest(input_directory / 'manifest.json'),
@@ -709,6 +743,8 @@ class JobStore:
         """Create a disk-efficient immutable calibration copy of one prepared input."""
         source_id = job_id(source_id)
         source = self.read(source_id)
+        from vast_worker_profiles import worker_profile
+        profile=worker_profile(source.get('runtime','pb8')).require_published()
         if (source.get('kind') in {'worker', 'calibration'} or source.get('status') != 'ready'
                 or source.get('lease_id') or source.get('deleted_at')):
             raise VastError('Choose an inactive prepared PB8 queue item for calibration', 409)
@@ -731,8 +767,8 @@ class JobStore:
         source_archive = source_directory / 'input.tar.gz'
         source_intent = self.read(source_id, 'intent.json')
         manifest = self.read(source_id, 'input/manifest.json')
-        if (source_intent.get('image') != IMAGE
-                or source_intent.get('pb8_revision') != REVISION
+        if (source_intent.get('image') != profile.image
+                or source_intent.get('pb8_revision') != profile.revision
                 or any(not path.is_file() or path.is_symlink()
                        for path in (source_archive, source_input / 'optimize.json', source_input / 'manifest.json'))
                 or digest(source_archive) != source_intent.get('bundle_sha256')):
@@ -741,6 +777,7 @@ class JobStore:
         identifier = self.create_preparation(
             calibration_name,
             source['iterations'], source['workers'], bool(source.get('use_adg')),
+            **({'runtime':'pb9'} if profile.runtime=='pb9' else {}),
         )['id']
         target_directory = self.directory(identifier)
         try:
@@ -767,7 +804,7 @@ class JobStore:
             os.link(source_archive, target_directory / 'input.tar.gz')
             (target_directory / 'input.tar.gz').chmod(0o600)
             write_json(target_directory / 'intent.json', {
-                'id': identifier, 'image': IMAGE, 'pb8_revision': REVISION,
+                'id': identifier, 'image':profile.image,'pb8_revision':profile.revision,**({'runtime':'pb9'} if profile.runtime=='pb9' else {}),
                 'results_root': source_intent.get('results_root'),
                 'bundle_sha256': source_intent['bundle_sha256'],
                 'bundle_bytes': source_intent['bundle_bytes'],

@@ -40,6 +40,9 @@ COMPATIBLE_CALIBRATION_IMAGES = frozenset({
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:bee2e513d77e2c22f5b0671392063c51bb04bd547c7334e614fe918ada2d49e2",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:8a85444f341a447564fc23e955b34f8a68b1970afc54026334aefa204c6cbc56",
 })
+from vast_worker_profiles import PB9 as _PB9_CALIBRATION_PROFILE
+if _PB9_CALIBRATION_PROFILE.published:
+    COMPATIBLE_CALIBRATION_IMAGES=COMPATIBLE_CALIBRATION_IMAGES|{_PB9_CALIBRATION_PROFILE.image}
 LEGACY_ANCHOR_POPULATIONS = (1024, 2048, 4096, 8192)
 ANCHOR_POPULATIONS = (4096, 8192)
 POPULATION_STEP = 4096
@@ -65,6 +68,10 @@ PRESET_SCENARIOS = {
 }
 def calibration_worker_available(image: str, protocol: int = PROTOCOL_VERSION) -> bool:
     """Require an immutable image pin for the exact protocol sent to the worker."""
+    from vast_worker_profiles import worker_profile
+    native=worker_profile('pb9')
+    if native.published and image==native.image:
+        return protocol in (PROTOCOL_VERSION,CONFIGURABLE_PROTOCOL_VERSION)
     return (protocol in (PROTOCOL_VERSION, CONFIGURABLE_PROTOCOL_VERSION)
             and bool(CALIBRATION_WORKER_DIGEST)
             and image.endswith('@sha256:' + CALIBRATION_WORKER_DIGEST))
@@ -152,6 +159,10 @@ def calibration_workload_fingerprint(config: dict) -> str:
 
 def canonical_calibration_config(template: dict, *, optimize_metadata: dict | None = None) -> dict:
     """Build PBGui's versioned EMA-anchor workload without user config input."""
+    from vast_worker_profiles import config_runtime
+    if config_runtime(template)=='pb9':
+        from vast_pb9 import calibration_config
+        return calibration_config(template,optimize_metadata)
     from pb8_config import get_pb8_optimize_metadata
     metadata = optimize_metadata if optimize_metadata is not None else get_pb8_optimize_metadata()
     if 'ema_anchor' not in metadata.get('strategies', []):
@@ -195,7 +206,10 @@ def preset_calibration_config(template: dict, preset: str, *, optimize_metadata:
         raise ValueError('Unknown GPU performance-test preset')
     config = canonical_calibration_config(template, optimize_metadata=optimize_metadata)
     coins = list(PRESET_COINS[preset])
-    config['live']['approved_coins'] = {'long': coins, 'short': coins}
+    if str(config.get('config_version','')).startswith('v9.'):
+        config['bot']['global']['universe']['approved_coins']=coins
+    else:
+        config['live']['approved_coins'] = {'long': coins, 'short': coins}
     windows = PRESET_SCENARIOS[preset]
     config['backtest'].update(
         start_date=windows[0][0], end_date=windows[-1][1],
@@ -204,7 +218,7 @@ def preset_calibration_config(template: dict, preset: str, *, optimize_metadata:
                    for index, (start, end) in enumerate(windows, 1)],
         suite_enabled=len(windows) > 1,
     )
-    config['pbgui']['calibration_workload'] = CONFIGURABLE_WORKLOAD_VERSION + '-' + preset
+    config['pbgui']['calibration_workload'] = ('pb9-gpu-calibration-v1' if str(config.get('config_version','')).startswith('v9.') else CONFIGURABLE_WORKLOAD_VERSION) + '-' + preset
     return config
 
 
@@ -526,6 +540,9 @@ def finalize_calibration_result(store, identifier: str) -> dict:
     if not identity.get('runtime_verified'):
         raise ValueError('Runtime GPU identity was not verified')
     own_intent = store.read(identifier, 'intent.json')
+    if state.get('runtime','pb8')=='pb9':
+        from vast_pb9 import _adapter
+        load_pb8_config=_adapter().load
     config = load_pb8_config(store.directory(identifier) / 'input/optimize.json')
     workload_fingerprint = calibration_workload_fingerprint(config)
     evidence = {

@@ -61,7 +61,7 @@ The **Workers** sidebar entry opens a dedicated admin panel inside the Services 
 
 The panel groups workers into:
 
-- **Queue Workers**: shared Market Data queue worker plus separate PB7/PB8 Backtest and Optimize queue controllers. Stopping a PB8 controller pauses automatic scheduling only; detached PB8 jobs continue running.
+- **Queue Workers**: shared Market Data queue worker plus separate PB7/PB8 Backtest and Optimize queue controllers and the **PB9 Optimize Queue** controller. Stopping a PB8 or PB9 controller pauses automatic scheduling only; detached optimizer jobs continue running.
 - **Sync / Watchers**: API key file sync watcher, V7 config sync watcher
 - **Internal Helpers**: archive sync and HLCVS cleanup background tasks
 
@@ -108,6 +108,8 @@ have no global INI watcher.
 Settings saves are locked while pending. Validation errors identify the affected field rather than displaying a generic object.
 
 The navigation Restart action shows progress immediately after confirmation and ignores duplicate clicks. PBGui reconnects automatically and verifies that a new API instance is running before reloading the current page. A lost restart response is checked without automatically submitting another restart.
+
+If protected work such as a PB9 inspection is running, the confirmed restart is queued on the server. The progress view shows what it is waiting for and continues automatically as soon as the work finishes. New PB9 inspections wait until after the restart. Reloading the browser restores the pending restart display at the current URL; another click is unnecessary. Running detached backtests and optimizers continue independently.
 
 Press Escape to close the active Services Monitor Help, Prices, result, CMC key, or CMC authority dialog. A CMC dialog remains open while its mutation is in progress.
 

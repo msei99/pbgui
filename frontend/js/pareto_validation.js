@@ -30,7 +30,7 @@
         delete candidate.pbgui.scenario_template;
         candidate.pbgui.backtest_result_group = {schema_version:1, kind:'optimize_validate', id:groupId, label:name, item:label};
         var sections = {};
-        ['backtest','bot','live','optimize','pbgui','coin_overrides'].forEach(function(key) {
+        ['config_version','backtest','bot','live','logging','monitor','optimize','pbgui','coin_overrides'].forEach(function(key) {
           if (candidate[key] !== undefined) sections[key] = candidate[key];
         });
         return {name:name + '_' + label, config:sections, override_configs:detail.override_configs || {}, preserve_timerange:true, preserve_exchanges:true};

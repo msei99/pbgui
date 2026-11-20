@@ -17,7 +17,8 @@ const assert = browserAssert;
 const calls = [];
 const window = {PBGuiSharedHelp:{open:(...args)=>calls.push(args)}};
 const state = {panel:'settings'};
-const optimizeEditorAdapter = {isV8:true};
+''' + (ROOT / 'frontend/js/optimize_editor_adapter.js').read_text() + '''
+let optimizeEditorAdapter = window.PBGuiOptimizeEditorAdapter.create('v8');
 ''' + page[start:end] + '''
 window._openOptimizeHelp();
 assert.deepEqual(calls.pop(), ['43_pbv8_optimize', {anchor:'optimizer-settings'}]);
@@ -29,7 +30,11 @@ assert.deepEqual(calls.pop(), ['43_pbv8_optimize', {anchor:'scenario-generator'}
 state.panel = 'queue';
 window._openOptimizeHelp();
 assert.deepEqual(calls.pop(), ['43_pbv8_optimize', {anchor:''}]);
-optimizeEditorAdapter.isV8 = false;
+optimizeEditorAdapter = window.PBGuiOptimizeEditorAdapter.create('v9');
+state.panel = 'settings';
+window._openOptimizeHelp();
+assert.deepEqual(calls.pop(), ['55_pbv9_optimize', {anchor:'optimizer-settings'}]);
+optimizeEditorAdapter = window.PBGuiOptimizeEditorAdapter.create('v7');
 state.panel = 'settings';
 window._openOptimizeHelp();
 assert.deepEqual(calls.pop(), ['36_pbv7_optimize', {anchor:'optimizer-settings'}]);

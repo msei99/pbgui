@@ -228,6 +228,7 @@ def test_online_probe_never_writes_through_published_metadata_links(tmp_path,mon
     import pb9_backtest_runtime
     import pb9_ohlcv_probe as probe
     work=tmp_path/'work';work.mkdir();public=tmp_path/'public.json';public.write_text('published')
+    monkeypatch.setattr(pb9_backtest_runtime,'require_cached_market_metadata',lambda *_:None)
     config={'backtest':{'offline':offline},'bot':{'long':{'enabled':True},'short':{'enabled':False}}}
     policy_state=[];calls=[]
     class OfflineDataError(ValueError):
@@ -241,10 +242,11 @@ def test_online_probe_never_writes_through_published_metadata_links(tmp_path,mon
     def prepare(work,*args):
         """Reference the published metadata without duplicating it."""
         (work/'metadata.json').symlink_to(public)
-    async def build(payload,modules):
+    async def build(payload,modules,*,cache_root):
         """An online native write must target a private file, never this link."""
         calls.append(policy_state[-1])
         assert payload['pb8_dir']==str(work)
+        assert cache_root == tmp_path/'repo/caches'
         assert modules['approved_sources'](config)=={'long':['HYPE']}
         assert modules['minimum_coin_age_days'](config)==60
         assert modules['coin_minimum_age_ms'](config,['long'])==60*86400000
@@ -348,3 +350,50 @@ else:
         if outcome=='selection_error':assert 'Select explicit approved coins' in state['error']
         if outcome=='timeout':
             assert state['error_category']=='timeout' and 'timed out' in state['error']
+
+
+@pytest.mark.parametrize('outcome',['accepted','empty','rejected','failure'])
+def test_source_readiness_uses_native_admission_and_restores_manager_range(outcome,tmp_path,monkeypatch):
+    """Daily file presence cannot turn a native source-prefix rejection green."""
+    import asyncio
+    from types import SimpleNamespace
+    from contextlib import contextmanager
+    from pathlib import Path
+    from pb9_ohlcv_probe import check_source_window
+    class OfflineError(ValueError):
+        """Represent the native loader's strict local-source exception."""
+    calls=[]
+    work=tmp_path/'work';repo=tmp_path/'native'
+    work.mkdir();repo.mkdir();monkeypatch.chdir(work)
+    @contextmanager
+    def policy(config):
+        """Source admission stays offline even when metadata lookup allowed remote I/O."""
+        assert config=={'backtest':{'offline':True}}
+        yield
+    class Manager:
+        """Keep this boundary test completely independent of real candle files."""
+        start_ts=1733385540000
+        end_ts=start_ts+3*86400000
+        async def get_ohlcvs(self,coin,**options):
+            """Admit data only through the actual loader-shaped interface."""
+            calls.append((coin,options))
+            assert Path.cwd()==repo
+            assert (self.start_ts,self.end_ts)==(1733385540000,1733443140000)
+            if outcome=='rejected':raise OfflineError('native prefix rejection')
+            if outcome=='failure':raise RuntimeError('unexpected loader failure')
+            return SimpleNamespace(empty=outcome=='empty')
+        def update_timestamp_range(self,start,end):
+            """Restore the owner's original multi-coin planning range."""
+            calls.append((start,end))
+            self.start_ts,self.end_ts=start,end
+    manager=Manager()
+    operation=check_source_window(manager,'HYPE',manager.start_ts,manager.end_ts,
+                       offline_error=OfflineError,repo=repo,offline_policy=policy)
+    if outcome=='failure':
+        with pytest.raises(RuntimeError,match='unexpected loader failure'):asyncio.run(operation)
+    else:
+        report=asyncio.run(operation)
+        assert report=={} if outcome=='accepted' else report['status']=='missing_local'
+    assert calls[1][1]=={'source_dir_only':True}
+    assert calls[-1]==(manager.start_ts,manager.end_ts)
+    assert Path.cwd()==work

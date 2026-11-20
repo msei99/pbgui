@@ -549,7 +549,7 @@ def test_missing_package_check_capability_marks_persistent_monitor_stale(monkeyp
 
 
 def test_blocked_restart_releases_master_update_reservation(monkeypatch) -> None:
-    """Restart reserves against new updates and releases that reservation when another blocker wins."""
+    """Shutdown cancels a waiting restart and releases its update reservation."""
     class Lease:
         released = False
 
@@ -557,13 +557,27 @@ def test_blocked_restart_releases_master_update_reservation(monkeypatch) -> None
             self.released = True
 
     lease = Lease()
-    monkeypatch.setattr(PBApiServer, "acquire_master_update_lock", lambda _path: lease)
-    monkeypatch.setattr(PBApiServer, "_restart_block_state", lambda: asyncio.sleep(0, result=(True, "busy")))
+    monkeypatch.setattr(PBApiServer, "_acquire_api_restart_leases", lambda: (lease,))
+    monkeypatch.setattr(PBApiServer, "_api_restart_lease", None)
+    entered = None
 
-    with pytest.raises(HTTPException) as error:
-        asyncio.run(PBApiServer.server_restart(session=object()))
+    async def blocked():
+        entered.set()
+        return True, "busy"
 
-    assert error.value.status_code == 409
+    monkeypatch.setattr(PBApiServer, "_restart_block_state", blocked)
+
+    async def scenario():
+        nonlocal entered
+        entered = asyncio.Event()
+        task = asyncio.create_task(PBApiServer._perform_server_restart())
+        await entered.wait()
+        assert not task.done()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+    asyncio.run(scenario())
     assert lease.released is True
 
 
@@ -606,7 +620,7 @@ def test_root_restart_spawn_ack_failure_returns_error_before_success(monkeypatch
     monkeypatch.setattr(PBApiServer, "_api_restart_lease", None)
 
     with pytest.raises(HTTPException) as error:
-        asyncio.run(PBApiServer.server_restart(session=object()))
+        asyncio.run(PBApiServer._perform_server_restart())
 
     assert error.value.status_code == 500
     assert "ack failed" in str(error.value.detail)

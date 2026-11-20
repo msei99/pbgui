@@ -4455,5 +4455,52 @@
         "inventory_offset_exposure_coefficient": 0.1
       }
     }
+  },
+  "exchange_options": {
+    "live": [
+      "binance",
+      "bitget",
+      "bitunix",
+      "bybit",
+      "gateio",
+      "hyperliquid",
+      "kucoin",
+      "lighter",
+      "okx",
+      "weex"
+    ],
+    "backtest": [
+      "binance",
+      "bitget",
+      "bybit",
+      "gateio",
+      "hyperliquid",
+      "kucoin",
+      "lighter",
+      "okx",
+      "weex"
+    ],
+    "optimize": [
+      "binance",
+      "bitget",
+      "bybit",
+      "gateio",
+      "hyperliquid",
+      "kucoin",
+      "lighter",
+      "okx",
+      "weex"
+    ],
+    "suite": [
+      "binance",
+      "bitget",
+      "bybit",
+      "gateio",
+      "hyperliquid",
+      "kucoin",
+      "lighter",
+      "okx",
+      "weex"
+    ]
   }
 }

@@ -165,6 +165,10 @@ def _run_preparation(store: JobStore, identifier: str, name: str, config: dict, 
             return
         root = Path(__file__).resolve().parents[1]
         from api.optimize_v8 import _results_root
+        from vast_worker_profiles import config_runtime
+        if config_runtime(config)=='pb9':
+            from api.optimize_v9 import engine
+            _results_root=engine._results_root
         store.prepare(name, config, source_sha256, root / "data/ohlcv", root / "data/coindata", _results_root(),
                       iterations, workers, use_adg, identifier=identifier)
     except Exception as exc:
@@ -208,6 +212,9 @@ def _run_calibration_preparation(store: JobStore, identifier: str, config: dict,
     try:
         root = Path(__file__).resolve().parents[1]
         from api.optimize_v8 import _results_root
+        if store.read(identifier).get('runtime','pb8')=='pb9':
+            from api.optimize_v9 import engine
+            _results_root=engine._results_root
         calibration_name = store.read(identifier).get('config_name') or 'PBGui GPU calibration v1'
         store.prepare(calibration_name, config, source_sha256,
                       root / 'data/ohlcv', root / 'data/coindata', _results_root(),
@@ -611,10 +618,19 @@ def gpu_recommendation(body: GpuRecommendationRequest, response: Response,
 @router.post('/calibration/status')
 def calibration_status(body: CalibrationOfferRequest, response: Response,
                        session: SessionToken = Depends(require_auth)) -> dict:
+    """Bind the public PB8 calibration endpoint to its runtime."""
+    return _calibration_status(body,response,session,runtime='pb8')
+
+
+def _calibration_status(body: CalibrationOfferRequest, response: Response,
+                       session=None, *, runtime='pb8') -> dict:
     """Describe preliminary profile coverage and eligible immutable inputs."""
     from vast_calibration import (CalibrationProfiles, calibration_worker_available,
                                   gpu_variant_identity)
     from vast_jobs import IMAGE
+    if runtime=='pb9':
+        from vast_worker_profiles import worker_profile
+        IMAGE=worker_profile('pb9').image
     from vast_gpu_tuning import rental_card_profile
     from vast_gpu_recommendation import queued_gpu_previews
     response.headers['Cache-Control'] = 'no-store'
@@ -622,15 +638,16 @@ def calibration_status(body: CalibrationOfferRequest, response: Response,
     queue = CloudQueue()
     store = queue.store
     profile = CalibrationProfiles(store.root).preliminary_match(offer)
+    if runtime=='pb9' and profile and profile.get('worker_image')!=IMAGE:profile=None
     from vast_calibration import WORKLOAD_VERSION
     return {
         'identity': gpu_variant_identity(offer), 'match': profile,
         'rental_profile': rental_card_profile(offer, profile_root=store.root),
-        'queued_gpu_previews': queued_gpu_previews(queue, offer),
+        'queued_gpu_previews': queued_gpu_previews(queue,offer,**({'runtime':'pb9'} if runtime=='pb9' else {})),
         'match_is_preliminary': profile is not None,
         'workload': {'version': WORKLOAD_VERSION, 'coins': ['BTC', 'ETH', 'SOL'],
                      'exchange': 'binance', 'start_date': '2024-01-01', 'end_date': '2024-12-31',
-                     'seed': 7, 'objective': 'adg_strategy_eq'},
+                     'seed': 7, 'objective':'cagr_fraction_strategy_equity' if runtime=='pb9' else 'adg_strategy_eq'},
         'calibration_worker': calibration_worker_available(IMAGE),
         'configurable_worker': calibration_worker_available(IMAGE, protocol=4),
     }
@@ -639,12 +656,21 @@ def calibration_status(body: CalibrationOfferRequest, response: Response,
 @router.post('/calibration/start', status_code=202)
 def start_calibration(body: CalibrationStartRequest,
                       session: SessionToken = Depends(require_auth)) -> dict:
+    """Bind the public PB8 calibration endpoint to its runtime."""
+    return _start_calibration(body,session,runtime='pb8')
+
+
+def _start_calibration(body: CalibrationStartRequest,
+                      session=None, *, runtime='pb8') -> dict:
     """Rent the exact selected offer for one isolated adaptive calibration."""
     if not body.accept_rental_and_cleanup:
         raise HTTPException(status_code=422, detail='Confirm the paid calibration rental and cleanup first')
     from vast_calibration import (ANCHOR_POPULATIONS, PROTOCOL_VERSION, WORKLOAD_VERSION,
                                   calibration_worker_available, canonical_calibration_config)
     from vast_jobs import IMAGE
+    if runtime=='pb9':
+        from vast_worker_profiles import worker_profile
+        IMAGE=worker_profile('pb9').image
     if not calibration_worker_available(IMAGE):
         raise HTTPException(status_code=409, detail='The pinned Vast worker does not include the GPU calibration runner')
     if body.hours < .75:
@@ -661,6 +687,8 @@ def start_calibration(body: CalibrationStartRequest,
         if queue_state.get('pool_enabled') and not queue_state.get('paused'):
             queue.update(paused=True)
         from pb8_config import get_pb8_template_config
+        if runtime=='pb9':
+            from vast_pb9 import calibration_template as get_pb8_template_config
         canonical = canonical_calibration_config(get_pb8_template_config())
         canonical_hash = hashlib.sha256(
             json.dumps(canonical, sort_keys=True, separators=(',', ':')).encode()
@@ -675,7 +703,7 @@ def start_calibration(body: CalibrationStartRequest,
             global _PREPARATION_EXECUTOR
             if _PREPARATION_EXECUTOR is None:
                 _PREPARATION_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix='vast-input')
-            calibration = queue.store.create_preparation('PBGui GPU calibration v1', 10_000_000, 4, False)
+            calibration = queue.store.create_preparation('PBGui GPU calibration v1',10_000_000,4,False,**({'runtime':'pb9'} if runtime=='pb9' else {}))
             calibration = queue.store.update(
                 calibration['id'], kind='calibration', calibration_plan=plan,
                 calibration_workload_version=WORKLOAD_VERSION,
@@ -694,12 +722,21 @@ def start_calibration(body: CalibrationStartRequest,
 @router.post('/calibration/start-configurable', status_code=202)
 def start_configurable_calibration(body: ConfigurableCalibrationRequest,
                                    session: SessionToken = Depends(require_auth)) -> dict:
+    """Bind the public PB8 calibration endpoint to its runtime."""
+    return _start_configurable_calibration(body,session,runtime='pb8')
+
+
+def _start_configurable_calibration(body: ConfigurableCalibrationRequest,
+                                   session=None, *, runtime='pb8') -> dict:
     """Start an explicit preset test or reuse an existing frozen queue snapshot."""
     if not body.accept_rental_and_cleanup:
         raise HTTPException(status_code=422, detail='Confirm the paid GPU test and cleanup first')
     from vast_calibration import (CONFIGURABLE_WORKLOAD_VERSION, calibration_worker_available,
                                   configurable_calibration_plan, preset_calibration_config)
     from vast_jobs import IMAGE
+    if runtime=='pb9':
+        from vast_worker_profiles import worker_profile
+        IMAGE=worker_profile('pb9').image
     if not calibration_worker_available(IMAGE, protocol=4):
         raise HTTPException(
             status_code=409,
@@ -729,6 +766,9 @@ def start_configurable_calibration(body: ConfigurableCalibrationRequest,
             if source.get('status') != 'ready' or source.get('kind') == 'calibration':
                 raise VastError('Choose one prepared, inactive optimizer queue item', 409)
             from pb8_config import load_pb8_config
+            if runtime=='pb9':
+                from vast_pb9 import _adapter
+                load_pb8_config=_adapter().load
             source_path = queue.store.directory(body.source_job_id) / 'input/optimize.json'
             if not source_path.is_file() or source_path.is_symlink():
                 raise VastError('Prepared GPU input is no longer reusable', 409)
@@ -752,6 +792,8 @@ def start_configurable_calibration(body: ConfigurableCalibrationRequest,
                 raise
             return {'job': calibration, 'worker': worker}
         from pb8_config import get_pb8_template_config
+        if runtime=='pb9':
+            from vast_pb9 import calibration_template as get_pb8_template_config
         config = preset_calibration_config(get_pb8_template_config(), body.preset)
         config_hash = hashlib.sha256(
             json.dumps(config, sort_keys=True, separators=(',', ':')).encode()
@@ -766,7 +808,7 @@ def start_configurable_calibration(body: ConfigurableCalibrationRequest,
             if _PREPARATION_EXECUTOR is None:
                 _PREPARATION_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix='vast-input')
             calibration = queue.store.create_preparation(
-                'PBGui GPU ' + body.preset + ' performance test', 10_000_000, 4, False,
+                'PBGui GPU ' + body.preset + ' performance test',10_000_000,4,False,**({'runtime':'pb9'} if runtime=='pb9' else {}),
             )
             calibration = queue.store.update(
                 calibration['id'], kind='calibration', calibration_plan=plan,
@@ -787,12 +829,21 @@ def start_configurable_calibration(body: ConfigurableCalibrationRequest,
 @router.post('/calibration/watch', status_code=202)
 def start_calibration_watch(body: CalibrationWatchRequest,
                             session: SessionToken = Depends(require_auth)) -> dict:
+    """Bind the public PB8 calibration endpoint to its runtime."""
+    return _start_calibration_watch(body,session,runtime='pb8')
+
+
+def _start_calibration_watch(body: CalibrationWatchRequest,
+                            session=None, *, runtime='pb8') -> dict:
     """Persist one future rental consent; preparation never rents by itself."""
     if not body.accept_rental_and_cleanup:
         raise HTTPException(status_code=422, detail='Confirm the future paid rental and cleanup first')
     from vast_calibration import (ANCHOR_POPULATIONS, PROTOCOL_VERSION, WORKLOAD_VERSION,
                                   calibration_worker_available, canonical_calibration_config)
     from vast_jobs import IMAGE
+    if runtime=='pb9':
+        from vast_worker_profiles import worker_profile
+        IMAGE=worker_profile('pb9').image
     from vast_pool import launch_pool
     if not calibration_worker_available(IMAGE):
         raise HTTPException(status_code=409, detail='The pinned Vast worker does not include the GPU calibration runner')
@@ -809,6 +860,8 @@ def start_calibration_watch(body: CalibrationWatchRequest,
     if not credentials['configured']:
         raise HTTPException(status_code=409, detail='Save a Vast API key first')
     from pb8_config import get_pb8_template_config
+    if runtime=='pb9':
+        from vast_pb9 import calibration_template as get_pb8_template_config
     canonical = canonical_calibration_config(get_pb8_template_config())
     canonical_hash = hashlib.sha256(
         json.dumps(canonical, sort_keys=True, separators=(',', ':')).encode()
@@ -834,7 +887,7 @@ def start_calibration_watch(body: CalibrationWatchRequest,
                        and row.get('status') not in {'completed', 'failed', 'cancelled'}
                        for row in queue.store.list()):
                     raise VastError('A performance test is already preparing or running', 409)
-                calibration = queue.store.create_preparation('PBGui GPU calibration v1', 10_000_000, 4, False)
+                calibration = queue.store.create_preparation('PBGui GPU calibration v1',10_000_000,4,False,**({'runtime':'pb9'} if runtime=='pb9' else {}))
                 calibration = queue.store.update(
                     calibration['id'], kind='calibration', calibration_plan=plan,
                     calibration_workload_version=WORKLOAD_VERSION,
@@ -1280,11 +1333,19 @@ def prepare_job(body: PrepareJobRequest, session: SessionToken = Depends(require
     return _queue_preparation_job(body)
 
 
-def _queue_preparation_job(body: PrepareJobRequest) -> dict:
+def _queue_preparation_job(body: PrepareJobRequest, *, runtime="pb8") -> dict:
     """Return promptly after durable queue creation; never rent before preparation succeeds."""
     global _PREPARATION_EXECUTOR
     from api.optimize_v8 import _config_file, _config_lock
     from pb8_config import load_pb8_config
+    if runtime == 'pb9':
+        from api.optimize_v9 import engine
+        from vast_worker_profiles import worker_profile
+        try:worker_profile('pb9').require_published()
+        except VastError as exc:raise _error(exc) from None
+        _config_file,_config_lock,load_pb8_config=engine._config_file,engine._config_lock,engine.native.load
+    elif runtime != 'pb8':
+        raise HTTPException(422,'Unsupported optimizer runtime')
     try:
         name = config_name(body.config_name)
         with _config_lock():
@@ -1299,7 +1360,7 @@ def _queue_preparation_job(body: PrepareJobRequest) -> dict:
                 raise VastError("API is shutting down; retry after it has restarted", 409)
             if _PREPARATION_EXECUTOR is None:
                 _PREPARATION_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="vast-input")
-            job = store.create_preparation(name, body.iterations, body.workers, body.use_adg)
+            job = store.create_preparation(name, body.iterations, body.workers, body.use_adg, **({'runtime':'pb9'} if runtime=='pb9' else {}))
             job = store.update(job['id'], estimated_coin_candles=estimate_coin_candles(config))
             future = _PREPARATION_EXECUTOR.submit(
                 _run_preparation, store, job['id'], name, config, source_sha256,
@@ -1316,10 +1377,14 @@ def _queue_preparation_job(body: PrepareJobRequest) -> dict:
         raise HTTPException(status_code=422, detail="Could not queue cloud input preparation. Check the saved config and local market data.") from None
 
 
-def _prepare_job(body: PrepareJobRequest, *, requeue_from: str | None = None) -> dict:
+def _prepare_job(body: PrepareJobRequest, *, requeue_from: str | None = None, runtime: str = "pb8") -> dict:
     """Prepare a snapshot with an internal replacement relationship for queue display."""
     from api.optimize_v8 import _config_file, _config_lock, _results_root
     from pb8_config import load_pb8_config
+    if runtime=='pb9':
+        from api.optimize_v9 import engine
+        _config_file,_config_lock,_results_root,load_pb8_config=(engine._config_file,engine._config_lock,engine._results_root,engine.native.load)
+    elif runtime!='pb8':raise HTTPException(422,'Unsupported optimizer runtime')
     try:
         name = config_name(body.config_name)
         with _config_lock():
@@ -1362,7 +1427,7 @@ def requeue_job(identifier: str, session: SessionToken = Depends(require_auth)) 
             if source.get('deleted_at') or source.get('status') not in {'failed', 'cancelled'} or not can_remove_job(source, queue.worker_for(source.get('lease_id'))):
                 raise VastError('Only inactive failed or cancelled jobs can be requeued', 409)
             replacement = _prepare_job(PrepareJobRequest(config_name=source['config_name'],
-                iterations=source['iterations'], workers=4 if source.get('auto_cpu_workers') else source['workers'], use_adg=bool(source.get('use_adg'))), requeue_from=identifier)
+                iterations=source['iterations'], workers=4 if source.get('auto_cpu_workers') else source['workers'], use_adg=bool(source.get('use_adg'))),requeue_from=identifier,**({'runtime':'pb9'} if source.get('runtime')=='pb9' else {}))
             queue.store.update(identifier, requeued_as=replacement['id'])
             queue.remove_job(identifier)
             _resume_auto_pool_after_requeue(queue)
@@ -1413,6 +1478,11 @@ def start_single_job(identifier: str, body: SingleJobStartRequest, response: Res
 
 @router.post("/queue/start", status_code=202)
 def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_auth)) -> dict:
+    """Bind the public PB8 endpoint to its explicit runtime."""
+    return _start_queue(body,session,runtime='pb8')
+
+
+def _start_queue(body:StartJobRequest,session=None,*,runtime='pb8')->dict:
     """Authorize one shared rental for queued jobs after refreshing the quote."""
     try:
         queue = CloudQueue()
@@ -1429,9 +1499,11 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
                 raise VastError('Save valid GPU requirements and rental limits in Settings', 422) from None
             if saved.auto_rent:
                 from vast_pool import authorize_pool
-                return authorize_pool(queue, saved.model_dump())
+                return authorize_pool(queue,saved.model_dump(),**({'runtime':'pb9'} if runtime=='pb9' else {}))
         current = queue.worker()
         if current and current['rental_state'] not in ('none', 'deletion_verified') and not body.rent_only:
+            if current.get('runtime','pb8')!=runtime:
+                raise VastError('Existing rental belongs to another Passivbot generation.',409)
             control = queue.store.read(current['id'], 'control.json')
             if control.get('cleanup') or control.get('stop') or current['rental_state'] == 'destroy_pending':
                 raise VastError('Previous GPU rental is still being cleaned up. No new job has started; finish rental cleanup before starting again.', 409)
@@ -1459,7 +1531,7 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
             raise VastError('Save GPU requirements in Settings first', 422)
         if body.rent_only != (body.offer_id is not None):
             raise VastError('Immediate rental requires one selected offer', 422)
-        waiting = queue.waiting()
+        waiting = [row for row in queue.waiting() if row.get('runtime','pb8')==runtime]
         if not waiting and not body.rent_only:
             raise VastError("Queue a cloud optimizer config first", 409)
         preferences = body.preferences.model_dump()
@@ -1497,8 +1569,10 @@ def start_queue(body: StartJobRequest, session: SessionToken = Depends(require_a
                                rental_gpu_profile=(body.gpu_profile_override.model_dump()
                                                    if body.gpu_profile_override else None),
                                rental_job_gpu_profiles={key: value.model_dump()
-                                                        for key, value in body.gpu_job_profile_overrides.items()})
-        return queue.start(selected, body.hours, body.budget, body.idle_seconds)
+                                                        for key, value in body.gpu_job_profile_overrides.items()},
+                               **({'runtime':'pb9'} if runtime=='pb9' else {}))
+        return queue.start(selected, body.hours, body.budget, body.idle_seconds,
+                           **({'runtime':'pb9'} if runtime=='pb9' else {}))
     except VastError as exc:
         raise _error(exc) from None
 

@@ -1,0 +1,34 @@
+{
+    "schema_version": 1,
+    "state": "locally_built_offline_verified",
+    "verified_on": "2026-11-16",
+    "runtime": "pb9",
+    "source_revision": "ec20de410e93a6f5cfbcbd798e6e8753d05e3c5e",
+    "config_schema": "v9.0.0",
+    "image_tag": "pbgui-pb9-worker:ec20de4-candidate",
+    "image_id": "sha256:927af25c48e013f05bd54a4de24cfadda08dee320843070bccf4865761aadf3d",
+    "registry_digest": null,
+    "publication": "pending explicit approval",
+    "physical_gpu_test": "pending explicit approval",
+    "build_inputs_sha256": {
+        "Dockerfile": "b750203368e6051b02d46c4dfc260515d0b4c145efe0260948adfde67dcbf76d",
+        "run.py": "0198195bc5240ab764307947899f0ef64b3f0986b5ca0f14fc0002e8e01d339c",
+        "worker_candidate.json": "0ca1b57337a39782a6878fd1dc027033e7c4f0423484ea75b381e18ae7425992"
+    },
+    "offline_container_verification": {
+        "schema": "v9.0.0",
+        "numpy": "1.26.4",
+        "pymoo": "0.6.2",
+        "torch": "2.13.0",
+        "bound_count": 52,
+        "rust_verified": true
+    },
+    "local_cpu_smoke": {
+        "returncode": 0,
+        "exact_evaluations": 4,
+        "synthetic_raw_pbgui_ohlcv": true,
+        "checkpoint_resume_returncode": 0,
+        "convergence_history_restored": true
+    },
+    "scope": "Only local image/import verification and synthetic CPU execution. No registry push, GPU rental, user-data upload or VPS deployment. cloud_worker.py is uploaded by the shared transport and is not embedded by this Docker recipe."
+}

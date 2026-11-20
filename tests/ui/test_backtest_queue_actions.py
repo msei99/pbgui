@@ -2,6 +2,71 @@
 
 from javascript_checks import run_javascript
 from pathlib import Path
+import json
+
+import pytest
+
+
+@pytest.mark.parametrize('version', ['v7', 'v8', 'v9'])
+@pytest.mark.parametrize('prefix', ['', '/mounted'])
+def test_queue_requests_and_navigation_keep_the_selected_runtime(version, prefix):
+    """Queue writes, status and navigation never downgrade PB9 or lose a mount prefix."""
+    source = Path('frontend/js/backtest_queue_actions.js').read_text()
+    script = r'''
+const assert=browserAssert, crypto=browserCrypto.webcrypto;
+const status={textContent:''}, auto={textContent:''};
+const open={textContent:'',addEventListener:(_event,fn)=>open.click=fn};
+const document={readyState:'complete',querySelectorAll:s=>s.includes('status')?[status]:s.includes('autostart')?[auto]:[open]};
+const selected=__VERSION__, prefix=__PREFIX__, expected=prefix+'/api/backtest-'+selected;
+const window={OPTIMIZE_VERSION:selected,API_BASE:prefix+'/api/optimize-'+selected,location:{href:'source'}};
+const calls=[], posts=[];
+async function fetch(url,options) {
+  calls.push(url);
+  assert.ok(url.startsWith(expected+'/'),url);
+  if(options && options.method==='POST') {
+    const body=JSON.parse(options.body);posts.push({url,body});
+    return {ok:true,json:async()=>selected==='v8'
+      ? {batch_id:'fixture',status:'queued',confirmed:0,total:body.items.length}
+      : {filename:body.name}};
+  }
+  return {ok:true,json:async()=>url.endsWith('/settings')?{autostart:false}
+    :url.endsWith('/batches')?{batches:[]}:{items:[{status:'queued'}]}};
+}
+'''.replace('__VERSION__', json.dumps(version)).replace('__PREFIX__', json.dumps(prefix)) + source + r'''
+(async()=>{
+  const client=window.PBGuiBacktestQueue;
+  await client.refresh();
+  assert.equal(open.textContent,'Open Queue (1)');
+  assert.match(auto.textContent,/Autostart OFF/);
+  await client.submit([{name:'candidate',config:{config_version:selected+'.0.0',bot:{}},override_configs:{}}]);
+  assert.equal(posts.length,1);
+  assert.equal(posts[0].url,expected+(selected==='v8'?'/queue/batches':'/queue'));
+  const item=selected==='v8'?posts[0].body.items[0]:posts[0].body;
+  assert.equal(item.config.config_version,selected+'.0.0');
+  assert.ok(item.operation_id);
+  assert.equal(window.location.href,'source');
+  if(selected==='v9')assert.ok(calls.every(url=>!url.includes('/backtest-v7/')&&!url.includes('/backtest-v8/')));
+  open.click();
+  assert.equal(window.location.href,expected+'/main_page?panel=queue');
+})().catch(error=>{console.error(error);finishTest(1);});
+'''
+    run_javascript(['-e', script], check=True, text=True, capture_output=True)
+
+
+def test_unknown_queue_runtime_does_not_fall_back_to_pb7():
+    """An explicit unsupported generation cannot issue legacy requests or writes."""
+    source = Path('frontend/js/backtest_queue_actions.js').read_text()
+    script = r'''
+const assert=browserAssert, crypto=browserCrypto.webcrypto;
+const document={readyState:'complete',querySelectorAll:()=>[]};
+const window={OPTIMIZE_VERSION:'v10'};
+async function fetch(){assert.fail('Unsupported runtime made a request');}
+''' + source + r'''
+(async()=>{
+  await assert.rejects(window.PBGuiBacktestQueue.submit([{name:'candidate',config:{}}]),/Unsupported backtest version/);
+})().catch(error=>{console.error(error);finishTest(1);});
+'''
+    run_javascript(['-e', script], check=True, text=True, capture_output=True)
 
 
 def test_queue_stays_put_retries_and_keeps_validation_group():

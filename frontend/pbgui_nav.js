@@ -740,7 +740,9 @@
     ]},
     { id: 'pbv9', label: 'PBv9', items: [
       { page: 'v9_run', icon: '&#9654;', label: 'Run' },
-      { page: 'v9_backtest', icon: '&#128202;', label: 'Backtest' }
+      { page: 'v9_backtest', icon: '&#128202;', label: 'Backtest' },
+      { page: 'v9_optimize', icon: '&#128269;', label: 'Optimize' },
+      { page: 'v9_pareto_explorer', icon: '&#9733;', label: 'Pareto Explorer' }
     ]}
   ];
 
@@ -1844,12 +1846,14 @@
     'info_balance_calc':  '/api/balance-calc/main_page',
     'v9_run':             '/api/v9/main_page',
     'v9_backtest':        '/api/backtest-v9/main_page',
+    'v9_optimize':        '/api/optimize-v9/main_page',
     'v9_editor':          '/api/pb9/main_page',
     'v8_run':             '/api/v8/main_page',
     'v8_backtest':        '/api/backtest-v8/main_page',
     'v8_optimize':        '/api/optimize-v8/main_page',
     'v8_strategy_explorer': '/api/strategy-explorer-v8/main_page',
-    'v8_pareto_explorer': '/api/pareto-explorer/main_page?optimize_version=v8'
+    'v8_pareto_explorer': '/api/pareto-explorer/main_page?optimize_version=v8',
+    'v9_pareto_explorer': '/api/pareto-explorer/main_page?optimize_version=v9'
   };
 
   /* Every registered page must resolve to an existing EN/DE shared-help topic. */
@@ -1880,12 +1884,14 @@
     'info_balance_calc':           '38_balance_calc',
     'v9_run':                      '53_pbv9_run',
     'v9_backtest':                 '54_pbv9_backtest',
+    'v9_optimize':                 '55_pbv9_optimize',
     'v9_editor':                   '52_pbv9_editor',
     'v8_run':                      '44_pbv8_run',
     'v8_backtest':                 '42_pbv8_backtest',
     'v8_optimize':                 '43_pbv8_optimize',
     'v8_strategy_explorer':        '00_strategy_explorer_help',
-    'v8_pareto_explorer':          '37_pareto_explorer'
+    'v8_pareto_explorer':          '37_pareto_explorer',
+    'v9_pareto_explorer':          '37_pareto_explorer'
   };
 
   function syncHelpOverlayState() {
@@ -2314,17 +2320,6 @@
         if (_restartInFlight || _restartConfirmPending) return;
         var blocked = restartBtn.getAttribute('data-restart-blocked') === '1';
         var blockReason = restartBtn.getAttribute('data-restart-block-reason') || '';
-        if (blocked) {
-          showNavConfirm({
-            title: 'Restart blocked',
-            message: 'PBGui services cannot restart while protected work is still running.',
-            detail: blockReason || 'Wait until the active VPS task finishes or is marked interrupted.',
-            confirmText: 'OK',
-            cancelText: '',
-            hideCancel: true
-          });
-          return;
-        }
         var restartServices = Array.isArray(_restartStatus.restart_services) ? _restartStatus.restart_services : [];
         var restartLabels = visibleRestartServices(_restartStatus, restartServices).map(function (item) {
           return String((item || {}).label || (item || {}).service || '').trim();
@@ -2333,6 +2328,7 @@
           ? 'Local services running outdated code: ' + restartLabels.join(', ') + '. The API server restarts last and the page reconnects automatically.'
           : 'The API server restarts and the page reconnects automatically.';
         restartDetail += vastRestartContext(_restartStatus, restartServices);
+        if (blocked) restartDetail += ' The restart will wait automatically until protected work finishes. ' + blockReason;
         _restartConfirmPending = true;
         showNavConfirm({
           title: 'Restart PBGui services',
@@ -2361,7 +2357,7 @@
             }
             return resp.json().catch(function () { return {}; });
           }).then(function(data) {
-            showRestartOverlay(origin2, data && Array.isArray(data.restart_services) ? data.restart_services : [], (data && data.api_instance_id) || previousInstance, false, targetSerial);
+            showRestartOverlay(origin2, data && Array.isArray(data.restart_services) ? data.restart_services : restartServices, (data && data.api_instance_id) || previousInstance, false, targetSerial);
           }).catch(function(err) {
             if (!err.restartRejected) {
               // A lost response may mean the API is already shutting down. Never resubmit.
@@ -2441,6 +2437,19 @@
           return r.json();
         })
         .then(function (data) {
+          var request = data && data.restart_request;
+          if (request && request.state === 'waiting') {
+            // Protected work has no arbitrary reconnect timeout. The server
+            // owns the request, so browser reloads never submit it again.
+            attempts = 0;
+            if (statusEl) statusEl.textContent = 'Restart queued — waiting: ' + (request.reason || 'Protected work is finishing…');
+            setTimeout(probe, 1000);
+            return;
+          }
+          if (request && request.state === 'failed') {
+            _overlayFail('Restart failed: ' + (request.reason || 'Check service logs.'));
+            return;
+          }
           if (!data || data.needs_restart || data.restart_inspection_error ||
               (!data.api_instance_id || data.api_instance_id === previousInstance)) {
             var newlyDiscovered = data && Array.isArray(data.restart_services)
@@ -2530,12 +2539,17 @@
     updateAuthModeState(state && state.auth ? state.auth : {});
     var btn = document.getElementById('pbgui-restart-btn');
     if (!btn) return;
+    var request = state && state.restart_request;
+    if (!_restartInFlight && request && (request.state === 'waiting' || request.state === 'restarting')) {
+      _restartInFlight = true;
+      showRestartOverlay(_getAppBase(), state.restart_services || [], request.api_instance_id || state.api_instance_id, false, state.current_serial);
+    }
     if (_restartInFlight) {
       btn.style.display = 'flex';
       btn.disabled = true;
       btn.setAttribute('aria-disabled', 'true');
       btn.classList.add('disabled');
-      btn.innerHTML = '<span class="nav-restart-dot"></span>Restarting...';
+      btn.innerHTML = '<span class="nav-restart-dot"></span>' + (request && request.state === 'waiting' ? 'Restart queued…' : 'Restarting...');
       return;
     }
     var visible = !!(state && state.needs_restart);
@@ -2553,11 +2567,11 @@
     btn.setAttribute('data-restart-blocked', blocked ? '1' : '0');
     btn.setAttribute('data-restart-block-reason', reason);
     btn.disabled = false;
-    btn.setAttribute('aria-disabled', blocked ? 'true' : 'false');
-    btn.classList.toggle('disabled', blocked);
+    btn.setAttribute('aria-disabled', 'false');
+    btn.classList.toggle('disabled', false);
     btn.innerHTML = '<span class="nav-restart-dot"></span>Restart' + (serviceLabels.length ? ' (' + serviceLabels.length + ')' : '');
     btn.title = blocked
-      ? ('Restart blocked: ' + (reason || 'Protected PBGui work is still running.'))
+      ? ('Restart automatically after protected work finishes: ' + (reason || 'Protected PBGui work is still running.'))
       : ('Restart outdated PBGui services' + (serviceLabels.length ? ': ' + serviceLabels.join(', ') : ''));
   }
 

@@ -180,13 +180,16 @@ def matching_measured_profiles(config: dict, offer: dict, reference_path: Path |
                   if isinstance(offered_power, (int, float)) and offered_power > 0 else 0)
 
 
-def queued_gpu_previews(queue, offer: dict, *, limit: int = 100) -> dict:
+def queued_gpu_previews(queue, offer: dict, *, limit: int = 100, runtime: str = "pb8") -> dict:
     """Preview the frozen Auto sizing for each ready optimizer on one selected offer."""
     from pb8_config import load_pb8_config
     from vast_gpu_tuning import resolve_gpu_settings
     from logging_helpers import human_log as _log
 
-    pending = queue.waiting()
+    pending=[row for row in queue.waiting() if row.get('runtime','pb8')==runtime]
+    if runtime=='pb9':
+        from vast_pb9 import _adapter
+        load_pb8_config=_adapter().load
     jobs = []
     for row in pending[:limit]:
         item = {'id': row['id'], 'name': row.get('config_name') or row['id'],

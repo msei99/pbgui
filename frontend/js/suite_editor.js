@@ -83,6 +83,19 @@ var _suiteMsState = {};
 var _suiteMsCounterpart = {
   'suite-sc-coins-ms': 'suite-sc-ign-ms',
   'suite-sc-ign-ms': 'suite-sc-coins-ms',
+  'suite-sc-coins-long-ms': 'suite-sc-ign-long-ms',
+  'suite-sc-ign-long-ms': 'suite-sc-coins-long-ms',
+  'suite-sc-coins-short-ms': 'suite-sc-ign-short-ms',
+  'suite-sc-ign-short-ms': 'suite-sc-coins-short-ms',
+};
+// Scenario coin selectors accept a list, a text value (for example a coin
+// file) or a {long, short} object. The editor keeps the authored form; an
+// absent key inherits the base config, while empty values stay explicit.
+var _suiteCoinFieldIds = { coins: 'suite-sc-coins', ignored_coins: 'suite-sc-ign' };
+var _suiteCoinFormTip = '\nInherit: no override, the base config applies.\nList: select coins from the loaded exchange universe. An empty list is saved as an explicit empty override.\nText: a value such as a coin-list file path.\nLong/Short: separate values per side; a side set to "Not set" is omitted.';
+var _suiteCoinFieldTips = {
+  coins: 'Override approved coins for this scenario.' + _suiteCoinFormTip,
+  ignored_coins: 'Override ignored coins for this scenario.' + _suiteCoinFormTip
 };
 var _suiteCoinSourcesPrefix = 'suite-kv-cs';
 var _suiteInlineInputStyle = 'height:24px;font-size:var(--fs-xs);background:var(--bg2);color:var(--text);border:1px solid var(--border);border-radius:4px;padding:0 var(--sp-xs);outline:none;font-family:var(--font)';
@@ -122,6 +135,12 @@ function suiteInit(containerId, opts) {
         });
         scenario.overrides = migrated;
       });
+      // PB9 renamed the PB8 drawdown metric used by these reducers.
+      if (String(opts.version).toLowerCase() === 'v9' && template && template.aggregate
+          && Object.prototype.hasOwnProperty.call(template.aggregate, 'drawdown_worst_strategy_eq')) {
+        template.aggregate.drawdown_max_fraction_strategy_equity = template.aggregate.drawdown_worst_strategy_eq;
+        delete template.aggregate.drawdown_worst_strategy_eq;
+      }
     });
   }
   if (Array.isArray(opts.botParams)) _suiteState.botParams = opts.botParams.slice();
@@ -584,8 +603,7 @@ function _suiteRender(preserveVisual) {
   }
   if (_suiteState.enabled && _suiteState.editIdx >= 0) {
     var current = _suiteState.scenarios[_suiteState.editIdx] || {};
-    _suiteInitCoinMs('suite-sc-coins-ms', current.coins || []);
-    _suiteInitCoinMs('suite-sc-ign-ms', current.ignored_coins || []);
+    _suiteInitCoinValueFields(current);
     _suiteInitCoinSources(current);
     if (typeof cfgWireDateRange === 'function') cfgWireDateRange('suite-sc-start', 'suite-sc-end');
   }
@@ -942,8 +960,10 @@ function _suiteScenarioSummary(sc) {
   var parts = [];
   if (sc.exchanges && sc.exchanges.length > 0) parts.push('ex: ' + sc.exchanges.join(','));
   if (sc.start_date || sc.end_date) parts.push((sc.start_date || '...') + ' \u2192 ' + (sc.end_date || '...'));
-  if (sc.coins && sc.coins.length > 0) parts.push('coins: ' + sc.coins.length);
-  if (sc.ignored_coins && sc.ignored_coins.length > 0) parts.push('ignored: ' + sc.ignored_coins.length);
+  var coinsSummary = _suiteCoinValueSummary(sc.coins);
+  if (coinsSummary) parts.push('coins: ' + coinsSummary);
+  var ignoredSummary = _suiteCoinValueSummary(sc.ignored_coins);
+  if (ignoredSummary) parts.push('ignored: ' + ignoredSummary);
   if (sc.coin_sources && Object.keys(sc.coin_sources).length > 0) parts.push('coin_src: ' + Object.keys(sc.coin_sources).length);
   if (sc.overrides && Object.keys(sc.overrides).length > 0) parts.push('overrides: ' + Object.keys(sc.overrides).length);
   return parts.length > 0
@@ -1027,8 +1047,8 @@ function _suiteRenderScenarioEditor() {
 
   /* Coins */
   h += '\x3Cdiv class="form-row cols-2">';
-  h += _suiteBuildCoinMsField('suite-sc-coins-ms', 'coins', 'Override approved coins for this scenario.\nSelect one or more coins from the currently loaded exchange universe.\nLeave empty to use base config.', 'Type to search...');
-  h += _suiteBuildCoinMsField('suite-sc-ign-ms', 'ignored_coins', 'Override ignored coins for this scenario.\nSelect one or more coins from the currently loaded exchange universe.\nLeave empty to use base config.', 'Type to search...');
+  h += _suiteBuildCoinValueField(sc, 'coins');
+  h += _suiteBuildCoinValueField(sc, 'ignored_coins');
   h += '\x3C/div>';
 
   /* coin_sources */
@@ -1143,6 +1163,180 @@ function _suiteUpdateOverrideVal(ki) {
   _suiteNotifyStructuredSync();
 }
 
+/* ── Scenario coin values: inherit, list, text or {long, short} ─ */
+function _suiteCoinValueForm(value) {
+  if (value == null) return 'inherit';
+  if (typeof value === 'string') return 'text';
+  if (typeof value === 'object' && !Array.isArray(value)) return 'sides';
+  return 'list';
+}
+
+function _suiteCoinSideMode(sides, side) {
+  if (!Object.prototype.hasOwnProperty.call(sides, side)) return 'absent';
+  if (sides[side] === null) return 'null';
+  return typeof sides[side] === 'string' ? 'text' : 'list';
+}
+
+function _suiteCoinValueSummary(value) {
+  if (value == null) return '';
+  if (typeof value === 'string') return value.trim() ? value.trim() : '""';
+  if (Array.isArray(value)) return value.length ? String(value.length) : 'none';
+  if (typeof value !== 'object') return '';
+  var parts = ['long', 'short'].filter(function(side) {
+    return Object.prototype.hasOwnProperty.call(value, side);
+  }).map(function(side) {
+    var item = value[side];
+    if (Array.isArray(item)) return side + ' ' + (item.length ? item.length : 'none');
+    if (item === null) return side + ' null';
+    return side + ' ' + (String(item).trim() || '""');
+  });
+  return parts.length ? parts.join(', ') : '{}';
+}
+
+function _suiteBuildCoinTextField(id, label, value) {
+  return '\x3Cdiv class="form-group">\x3Clabel for="' + id + '">' + esc(label) + '\x3C/label>' +
+    '\x3Cinput type="text" id="' + id + '" value="' + esc(value) + '" spellcheck="false" autocomplete="off" oninput="_suiteNotifyStructuredSync()">\x3C/div>';
+}
+
+function _suiteBuildCoinSideField(base, key, side, sides) {
+  var label = side === 'long' ? 'Long' : 'Short';
+  var mode = _suiteCoinSideMode(sides, side);
+  var choices = [['absent', 'Not set'], ['list', 'List'], ['text', 'Text']];
+  if (mode === 'null') choices.push(['null', 'null']);
+  var h = '\x3Cdiv class="form-group">\x3Clabel for="' + base + '-' + side + '-mode">' + label + '\x3C/label>';
+  h += '\x3Cselect id="' + base + '-' + side + '-mode" aria-label="' + key + ' ' + side + ' form" onchange="_suiteChangeCoinSideMode(\'' + key + '\', \'' + side + '\', this.value)">';
+  choices.forEach(function(choice) {
+    h += '\x3Coption value="' + choice[0] + '"' + (choice[0] === mode ? ' selected' : '') + '>' + choice[1] + '\x3C/option>';
+  });
+  h += '\x3C/select>\x3C/div>';
+  if (mode === 'text') h += _suiteBuildCoinTextField(base + '-' + side + '-text', label + ' text', sides[side]);
+  else if (mode === 'list') h += _suiteBuildCoinMsField(base + '-' + side + '-ms', label + ' list', label + ' selection. An empty list is saved explicitly.', 'Type to search...');
+  return h;
+}
+
+function _suiteBuildCoinValueField(sc, key) {
+  var base = _suiteCoinFieldIds[key];
+  var value = sc[key];
+  var form = _suiteCoinValueForm(value);
+  var h = '\x3Cdiv class="form-group">';
+  h += '\x3Clabel>\x3Cspan data-tip="' + esc(_suiteCoinFieldTips[key]) + '">' + key + '\x3C/span>\x3C/label>';
+  h += '\x3Cselect id="' + base + '-form" aria-label="' + key + ' form" onchange="_suiteChangeCoinForm(\'' + key + '\', this.value)">';
+  [['inherit', 'Inherit (base config)'], ['list', 'List'], ['text', 'Text'], ['sides', 'Long/Short']].forEach(function(choice) {
+    h += '\x3Coption value="' + choice[0] + '"' + (choice[0] === form ? ' selected' : '') + '>' + choice[1] + '\x3C/option>';
+  });
+  h += '\x3C/select>';
+  if (form === 'text') {
+    h += _suiteBuildCoinTextField(base + '-text', key + ' text', value);
+  } else if (form === 'sides') {
+    ['long', 'short'].forEach(function(side) { h += _suiteBuildCoinSideField(base, key, side, value); });
+  } else if (form === 'list') {
+    h += _suiteBuildCoinMsField(base + '-ms', 'List', 'Select coins. An empty list is saved as an explicit empty override; choose Inherit to use the base config.', 'Type to search...');
+  }
+  return h + '\x3C/div>';
+}
+
+function _suiteInitCoinValueFields(sc) {
+  Object.keys(_suiteCoinFieldIds).forEach(function(key) {
+    var base = _suiteCoinFieldIds[key];
+    var value = sc[key];
+    var form = _suiteCoinValueForm(value);
+    if (form === 'list') {
+      _suiteInitCoinMs(base + '-ms', value);
+    } else if (form === 'sides') {
+      ['long', 'short'].forEach(function(side) {
+        if (_suiteCoinSideMode(value, side) === 'list') _suiteInitCoinMs(base + '-' + side + '-ms', value[side]);
+      });
+    }
+  });
+}
+
+function _suiteReadCoinList(id, fallback) {
+  return _suiteMsState[id] ? _suiteGetCoinMsSelected(id) : fallback.slice();
+}
+
+function _suiteReadCoinText(id, fallback) {
+  var node = document.getElementById(id);
+  return node ? node.value.trim() : fallback;
+}
+
+/* Read the rendered value; the authored form (and so empty values) never changes here. */
+function _suiteReadCoinValueField(sc, key) {
+  var base = _suiteCoinFieldIds[key];
+  var original = sc[key];
+  var form = _suiteCoinValueForm(original);
+  if (form === 'inherit') return original === null ? null : undefined;
+  if (form === 'text') return _suiteReadCoinText(base + '-text', original);
+  if (form === 'list') return _suiteReadCoinList(base + '-ms', original);
+  var result = {};
+  ['long', 'short'].forEach(function(side) {
+    var mode = _suiteCoinSideMode(original, side);
+    if (mode === 'null') result[side] = null;
+    else if (mode === 'text') result[side] = _suiteReadCoinText(base + '-' + side + '-text', original[side]);
+    else if (mode === 'list') result[side] = _suiteReadCoinList(base + '-' + side + '-ms', original[side]);
+  });
+  return result;
+}
+
+function _suiteSaveCoinValueField(sc, key) {
+  var value = _suiteReadCoinValueField(sc, key);
+  if (value === undefined) delete sc[key];
+  else sc[key] = value;
+}
+
+function _suiteConvertCoinValue(value, form) {
+  var current = _suiteCoinValueForm(value);
+  if (current === form) return value;
+  if (form === 'inherit') return undefined;
+  if (form === 'text') {
+    if (current === 'sides' && typeof value.long === 'string' && value.long === value.short) return value.long;
+    return '';
+  }
+  if (form === 'sides') {
+    if (Array.isArray(value)) return { long: value.slice(), short: value.slice() };
+    if (typeof value === 'string') return { long: value, short: value };
+    return { long: [], short: [] };
+  }
+  var merged = [];
+  if (current === 'sides') {
+    ['long', 'short'].forEach(function(side) {
+      (Array.isArray(value[side]) ? value[side] : []).forEach(function(item) {
+        if (merged.indexOf(item) < 0) merged.push(item);
+      });
+    });
+  }
+  return merged;
+}
+
+function _suiteEditingScenarioForCoins() {
+  var sc = _suiteState.scenarios[_suiteState.editIdx];
+  if (sc) _suiteSaveEditingScenario();
+  return sc;
+}
+
+function _suiteChangeCoinForm(key, form) {
+  if (['inherit', 'list', 'text', 'sides'].indexOf(form) < 0) return;
+  var sc = _suiteEditingScenarioForCoins();
+  if (!sc) return;
+  var converted = _suiteConvertCoinValue(sc[key], form);
+  if (converted === undefined) delete sc[key];
+  else sc[key] = converted;
+  _suiteRender(true);
+  _suiteNotifyStructuredSync();
+}
+
+function _suiteChangeCoinSideMode(key, side, mode) {
+  if (['long', 'short'].indexOf(side) < 0 || ['absent', 'list', 'text', 'null'].indexOf(mode) < 0) return;
+  var sc = _suiteEditingScenarioForCoins();
+  var sides = sc && sc[key];
+  if (!sides || typeof sides !== 'object' || Array.isArray(sides)) return;
+  if (mode === 'absent') delete sides[side];
+  else if (mode === 'null') sides[side] = null;
+  else if (mode === 'text') sides[side] = Array.isArray(sides[side]) && sides[side].length ? sides[side].join(',') : '';
+  else sides[side] = typeof sides[side] === 'string' && sides[side].trim() ? sides[side].split(',').map(function(item) { return item.trim(); }).filter(Boolean) : [];
+  _suiteRender(true);
+  _suiteNotifyStructuredSync();
+}
+
 /* ── Save editing scenario from form → state ─────────────── */
 function _suiteSaveEditingScenario() {
   var idx = _suiteState.editIdx;
@@ -1168,13 +1362,9 @@ function _suiteSaveEditingScenario() {
   }
   if (exArr.length > 0) sc.exchanges = exArr; else delete sc.exchanges;
 
-  // Coins
-  var coins = _suiteGetCoinMsSelected('suite-sc-coins-ms');
-  if (coins.length > 0) sc.coins = coins; else delete sc.coins;
-
-  // Ignored coins
-  var ign = _suiteGetCoinMsSelected('suite-sc-ign-ms');
-  if (ign.length > 0) sc.ignored_coins = ign; else delete sc.ignored_coins;
+  // Coins and ignored coins keep their authored list/text/side form.
+  _suiteSaveCoinValueField(sc, 'coins');
+  _suiteSaveCoinValueField(sc, 'ignored_coins');
 
   // coin_sources
   var csObj = _suiteCollectCoinSources();

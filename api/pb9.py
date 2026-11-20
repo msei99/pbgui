@@ -34,6 +34,11 @@ _NATIVE_OPERATIONS = frozenset({
     "template", "validate", "config_load", "config_save", "run_new_config", "run_metadata",
     "run_prepare", "run_draft_create", "run_save", "run_forced_mode", "run_copy", "run_restore",
 })
+_NATIVE_OPERATIONS = _NATIVE_OPERATIONS | frozenset('opt9_' + name for name in (
+    'cloud_validate','get_metadata','new_config','prepare_config','get_config','save_config','duplicate_config',
+    'get_settings','add_to_queue','start_queue_item','requeue_fresh','continue_from_pareto',
+    'resume_checkpoint','get_queue_config','repair_queue_config','get_result_config','queue_result_resume',
+    'migrate_preview','migrate_accept'))
 MAX_VALIDATION_BODY_BYTES = MAX_DOCUMENT_BYTES
 MAX_JSON_DEPTH = 64
 _VALIDATION_ERRORS = frozenset({"invalid_request", "invalid_document", "invalid_config",
@@ -141,6 +146,9 @@ def _operation(operation: str, cancel_event: PB9CancelSignal, payload: bytes | N
     """Inspect, load or validate using only settings selected on the server."""
     if cancel_event.is_set():
         raise PB9ConfigError("helper_cancelled")
+    if operation.startswith('opt9_'):
+        from api.optimize_v9 import _operation as optimize_operation
+        return optimize_operation(operation, cancel_event, payload)
     if operation.startswith("bt9_"):
         from api.backtest_v9 import _operation as backtest_operation
         return backtest_operation(operation, cancel_event, payload)
@@ -241,7 +249,7 @@ def _worker(operation: str, future: Future, cancel_event: PB9CancelSignal, paylo
         result = (_operation(operation, cancel_event, payload) if payload is not None
                   else _operation(operation, cancel_event))
     except HTTPException as exc:
-        if operation.startswith(("run_", "market_", "bt9_")):
+        if operation.startswith(("run_", "market_", "bt9_", "opt9_")):
             future.set_exception(exc)
         else:
             _log(SERVICE, "PB9 API operation failed", level="ERROR",
@@ -313,8 +321,8 @@ class PB9RequestOwner:
                 raise _error(503, "pb9_stopping", "PB9 inspection is stopping")
             if self._restart_pending():
                 raise _error(409, "api_restart_pending", "API restart is pending")
-            run_request = operation.startswith(("run_", "market_", "bt9_"))
-            run_count = sum(job.operation.startswith(("run_", "market_", "bt9_")) for job in self._jobs.values())
+            run_request = operation.startswith(("run_", "market_", "bt9_", "opt9_"))
+            run_count = sum(job.operation.startswith(("run_", "market_", "bt9_", "opt9_")) for job in self._jobs.values())
             native_count = sum(job.operation in _NATIVE_OPERATIONS for job in self._jobs.values())
             group_full = (run_count >= MAX_ACTIVE_RUN_REQUESTS if run_request
                           else len(self._jobs) - run_count >= MAX_ACTIVE_REQUESTS)

@@ -352,3 +352,24 @@ def test_apply_deletions_with_multiple_paths(layout):
     assert len(item["paths"]) == 2 and set(item["path_sizes"]) == set(item["paths"])
     registry.apply_deletions(snapshot, {"db_tools_backups": [item]})
     assert roots["pbgui"]["tree"]["size"] == before - item["size"]
+
+
+def test_pb9_installation_cache_and_environment_are_accounted_and_protected(layout):
+    """Configured native PB9 data and its idle environment are never unused leftovers."""
+    pb9=layout.pbgui.parent/'pb9'
+    store=pb9/'caches/ohlcvs'
+    _file(store/'catalog.sqlite')
+    _file(layout.data/'run_v9'/'fixture'/'config.json')
+    environment=layout.pbgui.parent/'venv_pb9'
+    _file(environment/'pyvenv.cfg')
+    _file(environment/'bin/python')
+    layout.pb9=pb9
+    layout.pb9_python=str(environment/'bin/python')
+    assert registry.venv_usage(layout)[os.path.realpath(environment)]=='Configured for PB9'
+    candidates=_listing(layout,'old_venvs')['items']
+    native=next(item for item in candidates if item['id']=='venv_pb9')
+    assert native['blocked']=='Configured for PB9'
+    protected=_listing(layout,'protected_market')['items']
+    assert any(item['label']=='PB9 OHLCV store' and item['blocked'] for item in protected)
+    roots={root['id'] for root in registry.scan(layout)['roots']}
+    assert 'pb9' in roots

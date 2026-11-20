@@ -8,9 +8,9 @@
 <script src="/app/plotly.min.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
-<script src="/app/js/backtest_editor_adapter.js?v=20"></script>
-<script src="/app/js/backtest_v9_editor.js?v=18"></script>
-<script src="/app/js/backtest_v9_migration.js?v=1" defer></script>
+<script src="/app/js/backtest_editor_adapter.js?v=21"></script>
+<script src="/app/js/backtest_v9_editor.js?v=20"></script>
+<script src="/app/js/backtest_v9_migration.js?v=2" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
   <link rel="stylesheet" href="/app/css/sidebar_controls.css?v=2">
@@ -1100,7 +1100,7 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=26"></script>
+<script src="/app/js/editor_shared.js?v=31"></script>
 <script src="/app/js/pb8_hsl_report.js?v=1"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
 <script src="/app/js/optimize_preset_builder.js?v=4"></script>
@@ -1801,6 +1801,10 @@ function selectPanel(id, opts) {
   if (id === 'configs') {
     if (editingConfig !== null) {
       showEditorSidebar();
+    } else if (new URL(window.location.href).searchParams.get('edit_draft') === '1') {
+      restoreBacktestDraftForRefresh().then(function(restored) {
+        if (!restored && currentPanel === 'configs') loadConfigs();
+      }).catch(function() {if (currentPanel === 'configs') loadConfigs();});
     } else if (configs.length === 0) {
       loadConfigs();
     } else {
@@ -2102,6 +2106,7 @@ function editConfig(name) {
     if (generation !== editConfig.loadGeneration || currentPanel !== 'configs') return;
     if (backtestEditorAdapter.metadataDriven) window._nativeConfigRevision = data.revision || null;
     editingConfig = data && data.name ? data.name : name;
+    markBacktestDraftSaved();
     showConfigEditor(editingConfig, (data && data.config) || {}, null, (data && data.param_status) || {});
   }).catch(function(e) { toast('Load failed: ' + e.message, 'err'); });
 }
@@ -2246,6 +2251,12 @@ function showEditorSidebar() {
     btnConvertV8.disabled = !isExisting;
   }
   backtestShell.setEditorMode(true);
+  if (editingConfig !== null) {
+    var editorUrl = new URL(window.location.href);
+    editorUrl.searchParams.set('edit_draft', '1');
+    if (editingConfig !== '__new__') editorUrl.searchParams.set('config', editingConfig);
+    history.replaceState(null, '', editorUrl);
+  }
   if (_ohlcvPreflightController) _ohlcvPreflightController.restore();
 }
 
@@ -2253,6 +2264,97 @@ function hideEditorSidebar() {
   if (_ohlcvPreflightController) _ohlcvPreflightController.close(false);
   backtestShell.setEditorMode(false);
 }
+
+function backtestDraftStorageKey() {
+  return 'pbgui.backtest.unsaved.' + window.location.pathname;
+}
+
+var backtestDraftEdited = false;
+function markBacktestDraftEdited() {backtestDraftEdited = true;}
+function markBacktestDraftSaved() {backtestDraftEdited = false;}
+document.getElementById('configs-editor').addEventListener('input', markBacktestDraftEdited);
+document.getElementById('configs-editor').addEventListener('change', markBacktestDraftEdited);
+
+function captureBacktestDraftForRefresh() {
+  var host = document.getElementById('configs-editor');
+  if (editingConfig === null || !host || host.style.display === 'none') return;
+  var nameInput = document.getElementById('cfg-name');
+  var rawInput = document.getElementById('cfg-raw-json');
+  if (!nameInput || !rawInput || !host.contains(nameInput)) return;
+  var arrival = new URL(window.location.href);
+  var imported = arrival.searchParams.has('opt_draft_id') || arrival.searchParams.has('draft_id');
+  var originalName = editingConfig === '__new__' ? getInitialBacktestDraftName(_cfgEditorCfg,arrival.searchParams) : editingConfig;
+  var renamed = nameInput.value !== originalName;
+  var changedRaw = rawInput && rawInput.value !== _rawEditorLastApplied;
+  if (!backtestDraftEdited && !renamed && !changedRaw && (editingConfig !== '__new__' || imported)) {
+    try {sessionStorage.removeItem(backtestDraftStorageKey());} catch (_) {}
+    return;
+  }
+  try {
+    var raw = document.getElementById('cfg-raw-json');
+    var config = raw && raw.value !== _rawEditorLastApplied ? JSON.parse(raw.value) : collectConfig();
+    var identity = backtestEditorAdapter.metadataDriven ? window.PBGuiBacktestV9.recoveryIdentity() : {};
+    var payload = {version:1, config:config, name:nameInput.value,
+      source_name:editingConfig === '__new__' ? '' : editingConfig,
+      revision:window._nativeConfigRevision || null, param_status:_cfgBotParamStatus || {},
+      migration_report:window._nativeMigrationReport || null,
+      open_sections:Array.from(host.querySelectorAll('.expander.open[id]')).map(function(section){return section.id;}),
+      scroll_top:document.getElementById('main-content').scrollTop};
+    if (backtestEditorAdapter.metadataDriven) {payload.source_name=identity.name;payload.revision=identity.revision;}
+    sessionStorage.setItem(backtestDraftStorageKey(), window.PBGuiEditorShared.stringifyNonSecretDraft(payload));
+    window.PBGuiEditorShared.clearFixedValidationStatus('backtest-draft-recovery');
+  } catch (error) {
+    try {sessionStorage.removeItem(backtestDraftStorageKey());} catch (_) {}
+    window.PBGuiEditorShared.setFixedValidationStatus('backtest-draft-recovery', {
+      summary:'Draft recovery unavailable', message:'Save before refreshing.'});
+  }
+}
+
+var backtestDraftRestorePromise = null;
+async function restoreBacktestDraftForRefresh() {
+  if (backtestDraftRestorePromise) return backtestDraftRestorePromise;
+  if (new URL(window.location.href).searchParams.get('edit_draft') !== '1') return false;
+  var saved;
+  try {
+    saved = JSON.parse(sessionStorage.getItem(backtestDraftStorageKey()) || 'null');
+    if (!saved || saved.version !== 1 || !saved.config || typeof saved.config !== 'object'
+        || Array.isArray(saved.config) || typeof saved.name !== 'string' || typeof saved.source_name !== 'string') return false;
+    window.PBGuiEditorShared.stringifyNonSecretDraft(saved);
+    var requested = new URL(window.location.href).searchParams.get('config');
+    if (requested && requested !== saved.source_name) return false;
+  } catch (_) {return false;}
+  backtestDraftRestorePromise = (async function() {
+    var restoreGeneration = (editConfig.loadGeneration || 0) + 1;
+    editConfig.loadGeneration = restoreGeneration;
+    if (settingsLoadPromise) await settingsLoadPromise.catch(function() {});
+    if (currentPanel !== 'configs' || editConfig.loadGeneration !== restoreGeneration) return false;
+    editingConfig = saved.source_name || '__new__';
+    window._nativeConfigRevision = saved.revision;
+    window._nativeMigrationReport = saved.migration_report;
+    await showConfigEditor(saved.source_name || '', saved.config, null, saved.param_status || {});
+    if (currentPanel !== 'configs' || editConfig.loadGeneration !== restoreGeneration) return false;
+    var name = document.getElementById('cfg-name');
+    if (name) name.value = saved.name;
+    var host = document.getElementById('configs-editor');
+    if (Array.isArray(saved.open_sections)) {
+      host.querySelectorAll('.expander[id]').forEach(function(section) {
+        if (section.classList.contains('open') !== saved.open_sections.includes(section.id)) toggleExpander(section.id);
+      });
+    }
+    configEditRevision += 1;
+    backtestDraftEdited = true;
+    if (typeof saved.scroll_top === 'number' && Number.isFinite(saved.scroll_top)) {
+      document.getElementById('main-content').scrollTop = Math.max(0,saved.scroll_top);
+    }
+    syncManagedBacktestBaseDirField();
+    captureBacktestDraftForRefresh();
+    return true;
+  })();
+  try {return await backtestDraftRestorePromise;} finally {backtestDraftRestorePromise = null;}
+}
+
+window.addEventListener('beforeunload', captureBacktestDraftForRefresh);
+window.addEventListener('pagehide', captureBacktestDraftForRefresh);
 
 function goEditorResults() {
   closeEditor();
@@ -2342,6 +2444,8 @@ function openLogPanel() {
 }
 
 async function newConfig() {
+  var loadGeneration = (editConfig.loadGeneration || 0) + 1;
+  editConfig.loadGeneration = loadGeneration;
   window._nativeMigrationReport = null;
   var tmpl = {};
   var tmplParamStatus = {};
@@ -2352,9 +2456,10 @@ async function newConfig() {
   } catch(e) {
     console.warn('newConfig: failed to fetch template, using empty defaults', e);
   }
-  if (currentPanel !== 'configs') return;
+  if (currentPanel !== 'configs' || editConfig.loadGeneration !== loadGeneration) return;
   if (backtestEditorAdapter.metadataDriven) window._nativeConfigRevision = null;
   editingConfig = '__new__';
+  markBacktestDraftSaved();
   showConfigEditor('', tmpl, null, tmplParamStatus);
 }
 
@@ -2965,6 +3070,7 @@ async function initializeBacktestPageFromUrl(arrivalUrl) {
     return;
   }
   var requestedConfig = url.searchParams.get('config');
+  if (await restoreBacktestDraftForRefresh()) return;
   if (requestedConfig) {
     selectPanel('configs');
     editConfig(requestedConfig);
@@ -5918,9 +6024,16 @@ function saveAndQueue() {
 }
 
 function closeEditor() {
+  editConfig.loadGeneration = (editConfig.loadGeneration || 0) + 1;
   if (backtestEditorAdapter.metadataDriven) window.PBGuiBacktestV9.close();
   window.PBGuiEditorShared.clearFixedValidationStatus();
   editingConfig = null;
+  markBacktestDraftSaved();
+  try {sessionStorage.removeItem(backtestDraftStorageKey());} catch (_) {}
+  var editorUrl = new URL(window.location.href);
+  editorUrl.searchParams.delete('edit_draft');
+  editorUrl.searchParams.delete('config');
+  history.replaceState(null, '', editorUrl);
   _pendingMigrationReport = null;
   _cfgEditorCfg = null;
   resetBacktestEditorUiState();
@@ -11769,7 +11882,7 @@ window.PBGUI_AI_PAGE_ACTIONS = [{
 </script>
 <link rel="stylesheet" href="/app/css/scenario_visual_editor.css?v=2">
 <script src="/app/js/scenario_visual_editor.js?v=24"></script>
-<script src="/app/js/suite_editor.js?v=45"></script>
+<script src="/app/js/suite_editor.js?v=47"></script>
 <script src="/app/js/coin_overrides_editor.js?v=27"></script>
 <script>
 /* ── Coin Override Badge Tooltip ── */

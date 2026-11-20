@@ -43,7 +43,7 @@ def _approved_root(context: PB9FileContext) -> Path:
     """Require an explicit absolute root before any file is opened."""
     if not isinstance(context, PB9FileContext) or not isinstance(context.approved_root, (str, Path)):
         raise PB9ConfigError("invalid_storage_context")
-    if context.validation_target not in {"config", "backtest"}:
+    if context.validation_target not in {"config", "backtest", "optimize"}:
         raise PB9ConfigError("invalid_storage_context")
     if context.other_slots is not None and not isinstance(context.other_slots, dict):
         raise PB9ConfigError("invalid_storage_context")

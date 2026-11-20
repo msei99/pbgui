@@ -1,0 +1,51 @@
+{
+    "schema_version": 1,
+    "state": "locally_built_offline_cpu_verified",
+    "verified_on": "2026-11-20",
+    "runtime": "pb9",
+    "repository": "https://github.com/msei99/passivbot",
+    "source_revision": "1b85ea6cc4bb7b917ada43725044b7559763c46e",
+    "config_schema": "v9.0.0",
+    "image_tag": "pbgui-pb9-worker:1b85ea6-native-launch-candidate",
+    "image_id": "sha256:4c9852dc6f05db445f48e02877e0419c91803b79ba6e0b1be29f85039b0b65c3",
+    "registry_digest": null,
+    "publication": "requires explicit push approval",
+    "physical_gpu_test": "not performed; requires separate rental approval",
+    "installed_runtime": "93ff594bfc9bc3388ed888f48c5d44e99fae1d01 unchanged; exact source mismatch still blocks cloud preparation",
+    "build_inputs_sha256": {
+        "Dockerfile": "21fe013000380a828ab3d3c07e1ab70f42f0bd02160503132c451dd403f0eb56",
+        "cloud_worker.py": "aa12f83cd82af7969e925b505b1709bfee9c065039e279070e7694354690df50",
+        "optimize_cli.py": "a55674c969a02a88cb690b5987630b43f75c3ae931446a8ee2f0c37b51e94a40",
+        "pb9_optimize_options.py": "116e6464961dddd259397a7030f167510fcdf51fee349ccbdfbbc17444d68a57",
+        "run.py": "0198195bc5240ab764307947899f0ef64b3f0986b5ca0f14fc0002e8e01d339c",
+        "worker_candidate.json": "98a730f9da7e9cca642740f579e18eb01ddf9a6aee1b109e5c688062d5fee018"
+    },
+    "verification_script_sha256": "2f8c788208b0b3e8d221e02e239bcb929a71edc157f5f14d7e6c576c6bcd6605",
+    "offline_cpu_smoke": {
+        "fresh_exit": 0,
+        "seeded_exit": 0,
+        "scenario_filter": true,
+        "seed_filter": true,
+        "seed_compression": true,
+        "preparation_verified": true,
+        "changed_report_rejected": true,
+        "worker_entry": true,
+        "rust_verified": true,
+        "shared_argv_verified": true,
+        "source_revision": "1b85ea6cc4bb7b917ada43725044b7559763c46e",
+        "network": "disabled by container"
+    },
+    "focused_checks": {
+        "backend": "170 passed; native options/API/Vast archive/integrity/guide/logging tests",
+        "browser": "56 passed; actual shared Optimize page with isolated APIs",
+        "real_browser": "PBv9 menu, draft controls, Guide overlay, reload restoration and no horizontal overflow",
+        "calibration_and_transfer": "57 passed; same argv for calibration cases, actual native snapshot/import roundtrip",
+        "final_audits": "20 passed; worker candidate, guides and logging"
+    },
+    "fable_review": {
+        "provider_model": "claude-fable-5-1",
+        "result": "No concrete blocker after corrections; bounded review, no tool access"
+    },
+    "scope": "Local public source build and synthetic network-disabled CPU tests only; no registry push, paid GPU, bot checkout update, VPS action or production optimization.",
+    "active_api_serial": "3753; restarted through the existing API-only Services control"
+}

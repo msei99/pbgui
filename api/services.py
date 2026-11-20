@@ -1481,21 +1481,33 @@ async def _get_optimize_worker_item() -> dict[str, Any]:
 def _get_optimize_v8_worker_item() -> dict[str, Any]:
     import api.optimize_v8 as opt8
 
-    items = opt8._load_queue()
+    return _optimize_engine_worker_item(opt8, "optimize-v8-queue", "PB8", "OptimizeV8.log")
+
+
+def _get_optimize_v9_worker_item() -> dict[str, Any]:
+    from api.optimize_v9 import engine as opt9
+
+    # Native PB9 Optimize logs through the shared PBGui log group.
+    return _optimize_engine_worker_item(opt9, "optimize-v9-queue", "PB9", "PBGui.log")
+
+
+def _optimize_engine_worker_item(engine: Any, worker_id: str, generation: str, log_file: str) -> dict[str, Any]:
+    """Describe one shared-engine Optimize controller without owning its detached jobs."""
+    items = engine._load_queue()
     counts = Counter(str(item.get("status") or "unknown").strip().lower() for item in items)
-    settings = opt8.load_ini_section(opt8._QUEUE_SETTINGS_SECTION)
-    task = getattr(opt8._worker, "_task", None)
+    settings = engine.load_ini_section(engine._QUEUE_SETTINGS_SECTION)
+    task = getattr(engine._worker, "_task", None)
     running = _task_active(task)
     health = "running" if running else "failed" if task is not None and task.done() else "stopped"
     return _worker_item(
-        worker_id="optimize-v8-queue",
-        label="PB8 Optimize Queue",
+        worker_id=worker_id,
+        label=f"{generation} Optimize Queue",
         group="queue",
         worker_type="scheduler task",
         running=running,
         summary=f"{counts.get('queued', 0)} queued, {counts.get('running', 0)} active",
-        description="Schedules queued PB8 optimize jobs and launches detached PB8 optimizer subprocesses.",
-        note="Stopping the controller pauses automatic queue processing only. Detached PB8 optimizers continue running.",
+        description=f"Schedules queued {generation} optimize jobs and launches detached {generation} optimizer subprocesses.",
+        note=f"Stopping the controller pauses automatic queue processing only. Detached {generation} optimizers continue running.",
         stats=[
             _worker_stat("Health", health),
             _worker_stat("Queued", counts.get("queued", 0)),
@@ -1504,7 +1516,7 @@ def _get_optimize_v8_worker_item() -> dict[str, Any]:
             _worker_stat("Error", counts.get("error", 0)),
             _worker_stat("Autostart", "On" if str(settings.get("autostart", "False")).lower() == "true" else "Off"),
         ],
-        log_file="OptimizeV8.log",
+        log_file=log_file,
     )
 
 
@@ -1563,6 +1575,7 @@ async def _collect_worker_groups() -> list[dict[str, Any]]:
         asyncio.to_thread(_get_backtest_v8_worker_item),
         _get_optimize_worker_item(),
         asyncio.to_thread(_get_optimize_v8_worker_item),
+        asyncio.to_thread(_get_optimize_v9_worker_item),
     )
     internal_items = await asyncio.gather(
         asyncio.to_thread(_get_archive_sync_worker_item),
@@ -1614,6 +1627,10 @@ async def _start_worker(worker_id: str) -> None:
         import api.optimize_v8 as opt8
         opt8._worker.start()
         return
+    if worker_id == "optimize-v9-queue":
+        from api.optimize_v9 import engine as opt9
+        opt9._worker.start()
+        return
     if worker_id == "archive-sync":
         import api.backtest_v7 as bt7
         bt7._archive_sync_worker.start()
@@ -1649,6 +1666,10 @@ async def _stop_worker(worker_id: str) -> None:
     if worker_id == "optimize-v8-queue":
         import api.optimize_v8 as opt8
         await opt8._worker.stop()
+        return
+    if worker_id == "optimize-v9-queue":
+        from api.optimize_v9 import engine as opt9
+        await opt9._worker.stop()
         return
     if worker_id == "archive-sync":
         import api.backtest_v7 as bt7
@@ -1763,10 +1784,11 @@ async def get_workers_summary(session: SessionToken = Depends(require_auth)) -> 
     """Read live worker ownership for the overview without scanning job configurations."""
     from api import backtest_v7 as bt7, backtest_v8 as bt8
     from api import optimize_v7 as opt7, optimize_v8 as opt8
+    from api.optimize_v9 import engine as opt9
     from task_worker_ownership import get_task_worker_status
 
     controllers = (
-        bt7._worker, bt8._worker, opt7._worker, opt8._worker,
+        bt7._worker, bt8._worker, opt7._worker, opt8._worker, opt9._worker,
         bt7._archive_sync_worker, bt7._hlcvs_cleanup_worker,
     )
     task_worker = await asyncio.to_thread(get_task_worker_status)

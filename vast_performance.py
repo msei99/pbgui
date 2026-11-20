@@ -80,7 +80,12 @@ def workload_metadata(store, row, image, stop=None):
         raise ValueError('Oversized optimizer config')
     if hashlib.sha256(config_path.read_bytes()).hexdigest() != manifest.get('config_sha256'):
         return {'fingerprint': None, 'reason': 'Frozen config checksum mismatch'}
-    config = copy.deepcopy(load_config(config_path))
+    native=row.get('runtime','pb8')=='pb9'
+    if native:
+        from vast_pb9 import _adapter
+        config=copy.deepcopy(_adapter().load(config_path))
+    else:
+        config = copy.deepcopy(load_config(config_path))
     config.pop('pbgui', None)
     config.get('live', {}).pop('user', None)
     bt, opt = config.get('backtest', {}), config.get('optimize', {})
@@ -116,12 +121,30 @@ def workload_metadata(store, row, image, stop=None):
                 'revision': revision, 'image': image,
                 'sweep_plan': manifest.get('sweep_plan'), 'validation_plan': manifest.get('validation_plan')}
     approved = config.get('live', {}).get('approved_coins', {})
+    if native:
+        bot=config.get('bot') or {}
+        shared=(bot.get('global') or {}).get('universe') or {}
+        approved={}
+        for side in ('long','short'):
+            node=bot.get(side) or {};universe=node.get('universe') or {}
+            values=universe.get('approved_coins')
+            ignored=universe.get('ignored_coins')
+            values=shared.get('approved_coins',[]) if values is None else values
+            ignored=shared.get('ignored_coins',[]) if ignored is None else ignored
+            approved[side]=sorted(set(values or [])-set(ignored or [])) if node.get('enabled',True) else []
     coins = sorted(set(approved.get('long', []) + approved.get('short', []))) if isinstance(approved, dict) else []
     bounds = opt.get('bounds', {})
     parameters = sum(isinstance(value, list) and len(value) >= 2 and value[0] != value[1]
                      for value in bounds.values()) if isinstance(bounds, dict) else None
+    if native:
+        def count_bounds(node):
+            """Count native nested search ranges without importing a legacy config model."""
+            if isinstance(node,dict):return sum(count_bounds(value) for value in node.values())
+            return int(isinstance(node,list) and len(node)>=2 and node[0]!=node[1])
+        parameters=count_bounds(bounds)
     fingerprint = digest(identity) if files and revision and image else None
-    return dict(estimated_coin_candles=estimate_coin_candles(config), fingerprint=fingerprint, reason=None if fingerprint else 'Incomplete workload identity',
+    return dict(estimated_coin_candles=None if native else estimate_coin_candles(config),
+                **({'runtime':'pb9'} if native else {}), fingerprint=fingerprint, reason=None if fingerprint else 'Incomplete workload identity',
                 revision=revision, image=image, coins=coins, coin_count=len(coins), exchanges=sorted(exchanges),
                 exported_symbols=len(symbols), resolutions=sorted(resolutions),
                 scenario_count=len(bt.get('scenarios') or []) or 1, scenarios=bt.get('scenarios') or [],
@@ -202,8 +225,8 @@ class PerformanceHistory:
         """Backfill display metadata from surviving snapshots without rewriting history."""
         workload = value.setdefault('workload', {})
         if 'estimated_coin_candles' not in workload:
-            workload['estimated_coin_candles'] = estimate_snapshot(
-                self.root / 'jobs' / job_id(value['id']) / 'input/optimize.json', self.root)
+            workload['estimated_coin_candles'] = (None if workload.get('runtime')=='pb9' else estimate_snapshot(
+                self.root / 'jobs' / job_id(value['id']) / 'input/optimize.json', self.root))
         return value
 
     def get(self, identifier):
@@ -243,9 +266,13 @@ class PerformanceHistory:
                        (identifier, run['fingerprint'], run['captured_at'], encoded(run)))
         return run
 
-    def list_runs(self, limit=100, offset=0, fingerprint=None):
+    def list_runs(self, limit=100, offset=0, fingerprint=None, *, runtime=None):
         """Page retained runs with optional strict workload filtering."""
         clause, args = (' WHERE fingerprint=?', [fingerprint]) if fingerprint else ('', [])
+        if runtime is not None:
+            if runtime not in {'pb8','pb9'}:raise ValueError('Unsupported performance runtime')
+            clause+=(' AND ' if clause else ' WHERE ')+"coalesce(json_extract(payload,'$.workload.runtime'),'pb8')=?"
+            args.append(runtime)
         with self.connection() as db:
             total = db.execute('SELECT count(*) FROM runs' + clause, args).fetchone()[0]
             rows = db.execute('SELECT payload FROM runs' + clause + ' ORDER BY updated DESC,id LIMIT ? OFFSET ?',

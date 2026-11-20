@@ -282,7 +282,7 @@ def _config_harness():
     ])
     return r'''
 const assert=browserAssert;
-const optimizeEditorAdapter={isV8:true};
+const optimizeEditorAdapter={isV8:true,version:'v8'};
 const document={visibilityState:'visible'};
 const state={panel:'configs',configGeneration:0,configs:[],selectedConfigs:new Set(),
  configRequest:null,configCountRequest:null,configsDisposed:false,configsLoadedOnce:false,
@@ -316,7 +316,10 @@ state.configSortDir='desc';assert.deepEqual(sortConfigs(rows).map(x=>x.name),['t
 state.configSearch='two';state.selectedConfigs.add('two');persistConfigNavigation();
 const key=configNavigationKey();state.configSearch='';state.selectedConfigs.clear();restoreConfigNavigation();
 assert.equal(state.configSearch,'two');assert.equal(input.value,'two');assert.ok(state.selectedConfigs.has('two'));
-optimizeEditorAdapter.isV8=false;assert.notEqual(configNavigationKey(),key);
+optimizeEditorAdapter.isV8=false;optimizeEditorAdapter.version='v7';assert.notEqual(configNavigationKey(),key);
+optimizeEditorAdapter.version='v9';assert.notEqual(configNavigationKey(),key);
+state.configSearch='';state.selectedConfigs.clear();restoreConfigNavigation();
+assert.equal(state.configSearch,'');assert.equal(state.selectedConfigs.size,0);
 ''')
 
 

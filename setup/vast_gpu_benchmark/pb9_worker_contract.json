@@ -1,0 +1,42 @@
+{
+    "runtime": "pb9",
+    "schema": "v9.0.0",
+    "commit": "1b85ea6cc4bb7b917ada43725044b7559763c46e",
+    "metrics": [
+        "backtest_completion_fraction",
+        "cagr_fraction_strategy_equity",
+        "cagr_fraction_strategy_equity_ew",
+        "drawdown_max_fraction_strategy_equity",
+        "fills_gap_max_days",
+        "fills_gap_time_weighted_mean_hours",
+        "gross_exposure_max_ratio_strategy_equity",
+        "gross_exposure_rms_ratio_strategy_equity",
+        "gross_turnover_ratio_per_day",
+        "hsl_execution_episode_count",
+        "hsl_panic_episode_loss_max_fraction",
+        "hsl_panic_episode_loss_mean_fraction",
+        "hsl_red_time_fraction",
+        "hsl_triggers_per_year",
+        "loss_profit_ratio",
+        "omega_ratio_strategy_equity",
+        "pain_index_fraction_strategy_equity",
+        "peak_recovery_max_days_strategy_equity",
+        "position_exposure_utilization_rms_ratio_long",
+        "position_exposure_utilization_rms_ratio_short",
+        "position_held_max_days",
+        "position_held_time_weighted_mean_hours",
+        "sharpe_ratio_strategy_equity",
+        "short_net_profit_contribution_fraction",
+        "sortino_ratio_strategy_equity",
+        "ulcer_index_fraction_strategy_equity",
+        "volatility_annual_fraction_strategy_equity"
+    ],
+    "gpu_keys": [
+        "batch_size",
+        "checkpoint_interval_seconds",
+        "max_dispatch_candidate_bars",
+        "screening",
+        "search_cohort_size",
+        "tuning_mode"
+    ]
+}

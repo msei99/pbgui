@@ -171,6 +171,17 @@ def backtest():
         browser.close()
 
 
+def test_native_exchange_options_include_unselected_supported_venues(backtest):
+    """Backtest choices and source routing use capabilities rather than template selections."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    field=page.locator('#ms-cfg-exchanges-input');field.fill('hyperliquid')
+    page.locator('#ms-cfg-exchanges-dd .ms-option[data-val="hyperliquid"]').click()
+    assert 'hyperliquid' in page.evaluate("cfgGetMs('ms-cfg-exchanges')")
+    assert 'okx' in page.locator('#kv-cs-exchange option').all_text_contents()
+    assert not backtest.errors
+
+
 def test_native_handoff_roundtrip_and_queue(backtest):
     """The shared editor keeps native sparse source and queues the current dates/balance."""
     page = backtest.page
@@ -1079,3 +1090,56 @@ def test_archive_reload_restores_search_coin_config_and_selected_row(backtest):
     expect(page.locator('#archive-results-table tbody tr.selected')).to_have_count(0)
     expect(page.locator('#arc-results-filter')).to_have_value('hype')
     assert backtest.errors==backtest.unexpected==[]
+
+
+def test_native_result_opens_shared_native_optimize_draft(backtest):
+    """Use the real result action and draft contract without a legacy optimizer hop."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    submitted=[]
+    page.route('**/api/backtest-v9/results/config?*',lambda route:route.fulfill(json=backtest.config))
+    def draft(route):
+        """Capture exactly the authored native config sent through the existing API."""
+        submitted.append(route.request.post_data_json)
+        route.fulfill(json={'draft_id':'native-optimize-draft'})
+    page.route('**/api/backtest-v9/optimize-draft',draft)
+    page.route('**/api/optimize-v9/main_page?*',lambda route:route.fulfill(body='<html><body>Native Optimize draft</body></html>',content_type='text/html'))
+    page.evaluate("selectPanel('results'); window.getSelectedResults = function(){return ['fixture/combined/native-result'];};")
+    page.locator('button[onclick="optimizeFromResult()"]').click()
+    page.wait_for_url('**/api/optimize-v9/main_page?*')
+    assert parse_qs(urlparse(page.url).query)['opt_draft_id']==['native-optimize-draft']
+    assert submitted==[{'config':backtest.config}]
+    assert backtest.unexpected==[]
+
+
+@pytest.mark.parametrize('is_new',[False,True])
+def test_unsaved_backtest_reload_preserves_name_values_and_sections(backtest,is_new):
+    """Refresh restores the same native editor and its latest unsaved form values."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    if is_new:
+        page.evaluate('closeEditor()')
+        page.get_by_role('button',name='+ New Config',exact=True).click()
+        expect(page.locator('#cfg-name')).to_have_value('')
+    page.locator('#cfg-name').fill('Unsaved native edits')
+    page.locator('#cfg-starting-balance').fill('12345')
+    page.evaluate("if(!document.getElementById('exp-extra-bt').classList.contains('open'))toggleExpander('exp-extra-bt')")
+    page.reload()
+    expect(page.locator('#cfg-name')).to_have_value('Unsaved native edits')
+    expect(page.locator('#cfg-starting-balance')).to_have_value('12345')
+    assert page.locator('#exp-extra-bt').evaluate("el=>el.classList.contains('open')")
+    assert backtest.saved==[] and backtest.queued==[] and backtest.unexpected==[]
+
+
+def test_backtest_recovery_never_stores_credential_bearing_raw_config(backtest):
+    """Custom credential fields are rejected by the same guard used by Optimize."""
+    page=backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    result=page.evaluate("""() => {
+      var raw=document.getElementById('cfg-raw-json');
+      var config=JSON.parse(raw.value);config.api_key='synthetic-secret';
+      raw.value=JSON.stringify(config);configEditRevision++;
+      captureBacktestDraftForRefresh();
+      return sessionStorage.getItem(backtestDraftStorageKey());
+    }""")
+    assert result is None and backtest.saved==[]

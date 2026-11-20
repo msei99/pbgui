@@ -5,7 +5,7 @@
     const el = id => document.getElementById(id);
     const events = new AbortController();
     let rows = [], selected = new Map(), offset = 0, total = 0, fingerprint = null;
-    let active = false, disposed = false, generation = 0, drag = null, comparing = false;
+    let active = false, disposed = false, generation = 0, drag = null, comparing = false, timer = null, loading = false;
     const colors = ['#4da6ff', '#5eead4', '#fbbf24', '#c084fc'];
     const number = value => Number.isFinite(value) ? value.toLocaleString(undefined, {maximumFractionDigits: 1}) : '—';
     const money = value => Number.isFinite(value) ? value.toFixed(4) : '—';
@@ -89,6 +89,8 @@
       updateSelection();
     }
     async function refresh() {
+      if (loading || disposed || !active) return;
+      loading = true;
       const current = ++generation;
       status('Loading performance history…');
       try {
@@ -96,8 +98,9 @@
         if (disposed || !active || current !== generation) return;
         rows = data.runs || []; total = data.total || 0;
         for (const row of rows) if (selected.has(row.id)) selected.set(row.id, row);
-        renderRows(); status('History is sampled approximately every 60 seconds. Select runs or refresh for new measurements.');
+        renderRows(); status('History updates automatically approximately every 60 seconds.');
       } catch (error) { if (!disposed && active && current === generation) status(error.message); }
+      finally { loading = false; }
     }
     function drawChart(hostId, runs, key, title) {
       const host = el(hostId); host.replaceChildren(); text('h3', title, host);
@@ -184,7 +187,7 @@
             'Scenarios: ' + number(w.scenario_count) + ' · timeframe: ' + (w.start_date || '—') + ' → ' + (w.end_date || '—'),
             'Dataset: ' + number(w.exported_candles) + ' exported candles · ' + number(w.exported_symbols) + ' symbol/exchange datasets · ' + (w.resolutions || []).join(', '),
             'Parameters: ' + number(w.parameter_count) + ' · population: ' + number(w.population_size) + ' · seed: ' + (w.seed ?? '—'),
-            'PB8: ' + (w.revision || '—') + ' · outcome: ' + (run.status || '—') + ' / ' + (run.stop_reason || '—')
+            (w.runtime === 'pb9' ? 'PB9: ' : 'PB8: ') + (w.revision || '—') + ' · outcome: ' + (run.status || '—') + ' / ' + (run.stop_reason || '—')
           ].forEach(value => text('p', value, card, 'muted'));
         }
         drawChart('performance-proxy-chart', data.runs, 'proxy_total', 'Proxy evaluations / minute');
@@ -198,7 +201,6 @@
       generation++; el('performance-browser').hidden = false; el('performance-comparison').hidden = true;
       el('performance-back').hidden = true;
     }
-    on('performance-refresh', 'click', () => { browse(); refresh(); });
     on('performance-filter', 'input', renderRows);
     on('performance-prev', 'click', () => { offset = Math.max(0, offset-100); refresh(); });
     on('performance-next', 'click', () => { offset += 100; refresh(); });
@@ -214,9 +216,15 @@
     });
     document.addEventListener('pointerup', () => { drag = null; }, {signal:events.signal});
     return {
-      show() { active = true; browse(); refresh(); },
-      hide() { active = false; generation++; drag = null; },
-      dispose() { disposed = true; active = false; generation++; events.abort(); selected.clear(); }
+      show() {
+        active = true;
+        if (!timer) timer = setInterval(() => {
+          if (active && !document.hidden && el('performance-comparison').hidden) refresh();
+        }, 60000);
+        if (el('performance-comparison').hidden) refresh();
+      },
+      hide() { active = false; generation++; drag = null; clearInterval(timer); timer = null; },
+      dispose() { disposed = true; active = false; generation++; clearInterval(timer); timer = null; events.abort(); selected.clear(); }
     };
   }
   global.PBGuiVastPerformance = {create};

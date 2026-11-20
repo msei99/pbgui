@@ -1236,3 +1236,36 @@ def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch, tmp
         "cluster_shutdown", "db_tools_shutdown", "bt7_shutdown", "opt7_shutdown",
     ):
         assert name in calls
+
+
+def test_pb9_optimize_controller_is_visible_and_controllable(monkeypatch) -> None:
+    """Services Monitor lists the native PB9 Optimize scheduler beside PB8."""
+    from api import optimize_v9
+
+    calls = []
+
+    class Worker:
+        """Minimal PB9 controller double with no detached optimizer ownership."""
+
+        _task = None
+
+        def start(self):
+            calls.append("start")
+
+        async def stop(self):
+            calls.append("stop")
+
+    engine = optimize_v9.engine
+    monkeypatch.setattr(engine, "_load_queue", lambda: [{"status": "queued"}, {"status": "running"}])
+    monkeypatch.setattr(engine, "load_ini_section", lambda _section: {"autostart": "False"})
+    monkeypatch.setattr(engine, "_worker", Worker())
+
+    item = services._get_optimize_v9_worker_item()
+    assert item["id"] == "optimize-v9-queue"
+    assert item["label"] == "PB9 Optimize Queue"
+    assert item["summary"] == "1 queued, 1 active"
+    assert "Detached PB9 optimizers continue running" in item["note"]
+
+    asyncio.run(services._start_worker("optimize-v9-queue"))
+    asyncio.run(services._stop_worker("optimize-v9-queue"))
+    assert calls == ["start", "stop"]

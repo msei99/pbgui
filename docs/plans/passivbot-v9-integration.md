@@ -798,8 +798,9 @@ Commit `07bfc915` teilt Backup-/Publikationshelfer und ergänzt den isolierten
 Metadaten-/Live-Validierungsaufruf. Fokussierte Evidenz: 159 Bridge-Tests,
 316 PB8-API-/Backup-/Cluster-Tests sowie 15 abschließende Bridge-Tests.
 
-Die separat freigegebene offizielle lokale v9-Installation liegt unter
-`data/passivbot_v9`, ihre Umgebung unter `data/venv_pb9`. Rust wurde gebaut;
+Die separat freigegebene offizielle lokale v9-Installation liegt neben PBGui
+unter `/home/mani/software/pb9`, ihre Umgebung unter
+`/home/mani/software/venv_pb9`. Rust wurde gebaut;
 440 native Felder, zwei Strategien und eine native Live-Strukturvalidierung
 wurden erfolgreich gelesen/geprüft. Keine Trading-Prozesse oder Remote-Aktionen.
 Die Integration verwendet native `config.json` plus private `pbgui.json`;

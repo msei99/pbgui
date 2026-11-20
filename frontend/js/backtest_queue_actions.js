@@ -4,8 +4,18 @@
   const completed = new Map(), operations = new Map();
   let refreshGeneration = 0, pendingBatches = 0, pendingJobs = 0, activeActions = 0;
   let queueTail = Promise.resolve(), progressMessage = '';
-  const version = () => window.OPTIMIZE_VERSION === 'v8' ? 'v8' : 'v7';
-  const base = () => '/api/backtest-' + version();
+  const version = () => {
+    const selected = window.BACKTEST_VERSION || window.OPTIMIZE_VERSION || 'v7';
+    if (!['v7', 'v8', 'v9'].includes(selected)) throw new Error('Unsupported backtest version');
+    return selected;
+  };
+  const base = () => {
+    const adapter = window.optimizeEditorAdapter;
+    if (adapter && typeof adapter.backtestApiBase === 'function') return adapter.backtestApiBase();
+    const api = String(window.API_BASE || '');
+    const boundary = api.indexOf('/api/');
+    return (boundary < 0 ? '' : api.slice(0, boundary)) + '/api/backtest-' + version();
+  };
   const nodes = selector => document.querySelectorAll(selector);
   function message(text) {
     progressMessage = text;

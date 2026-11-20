@@ -129,7 +129,7 @@ class TestV7OptimizeBackendLogic:
         });
         """
         _run_node_assertions(
-            ["optimizeObjectiveCount", "getEffectiveOptimizePymooAlgorithm"],
+            ["optimizeObjectiveCount", "optimizeBackendUsesPymooSettings", "getEffectiveOptimizePymooAlgorithm"],
             bootstrap=bootstrap,
             assertions=assertions,
         )

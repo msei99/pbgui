@@ -40,8 +40,8 @@ def test_pb8_backtest_handoffs_use_shared_balance_calculator() -> None:
     for action in ("goBalanceCalc", "goCalcBalance", "goBalanceCalculatorFromResult", "calcBalanceFromResult"):
         assert f"'{action}'" not in adapter
     assert "openBalanceCalculatorWithConfig(cfg" in page
-    assert "/app/js/editor_shared.js?v=26" in page
-    assert "/app/js/backtest_editor_adapter.js?v=20" in page
+    assert "/app/js/editor_shared.js?v=31" in page
+    assert "/app/js/backtest_editor_adapter.js?v=21" in page
 
 
 def test_pb8_run_sidebar_uses_shared_balance_calculator() -> None:
@@ -56,7 +56,7 @@ def test_pb8_run_sidebar_uses_shared_balance_calculator() -> None:
     assert 'onclick="goBalanceCalc()"' in page
     assert 'onclick="calculateBalance()"' in page
     assert "supportsBalanceCalculator: true" in adapter
-    assert "/app/js/editor_shared.js?v=26" in page
+    assert "/app/js/editor_shared.js?v=31" in page
     assert "/app/js/run_editor_adapter.js?v=17" in page
 
 
