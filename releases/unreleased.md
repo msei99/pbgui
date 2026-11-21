@@ -2,6 +2,13 @@
 
 ## Development
 
+- Fix normal PB9 installation/update preflight on both masters and VPS hosts:
+  pass the selected generation's official branch explicitly to the shared guard
+  and validate its matching fetched ref (`v9` for PB9, `master` for PB8). New and
+  existing PB9 checkouts no longer fetch PB8's master and fail the v9 guard.
+  Regression tests execute the rendered playbook guard commands against isolated
+  repositories with distinct master/v9 commits; no remote host is modified.
+
 - Rebuild, verify and publish the native PB9 Vast worker for official v9 source
   `bf7329b03`, matching the updated local runtime. Pin its immutable public
   manifest, native config contract and calibration allowlist together; retain

@@ -2,12 +2,16 @@
 from contextlib import nullcontext
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 from types import SimpleNamespace
 import zipfile
 
 import pytest
 import yaml
+from jinja2 import Environment, StrictUndefined
 
 import pb8_wheels as wheels
 import pb8_live_stop
@@ -18,6 +22,65 @@ from test_master_installer_maintenance import _existing_master, _init_checkout
 from vps_manager_service import _pb8_remote_action_status
 import vps_manager_service as service_mod
 import pb7_guard
+
+
+@pytest.mark.parametrize('scope', ['master', 'vps'])
+@pytest.mark.parametrize('existing', [False, True], ids=['new', 'existing'])
+@pytest.mark.parametrize('product', ['pb8', 'pb9'])
+def test_official_guard_fetches_generation_branch(tmp_path, monkeypatch, scope, existing, product):
+    """Execute rendered installer argv against local master/v9 refs, without any host action."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1', GIT_TERMINAL_PROMPT='0')
+    monkeypatch.setenv('GIT_CONFIG_GLOBAL', os.devnull)
+    monkeypatch.setenv('GIT_CONFIG_NOSYSTEM', '1')
+
+    def git(*args):
+        """Use only temporary fixture repositories and hermetic author configuration."""
+        return subprocess.run(['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid',
+                               *map(str, args)], env=env, check=True, capture_output=True, text=True).stdout.strip()
+
+    upstream = tmp_path/'upstream'
+    git('init', '-q', '--initial-branch=master', upstream)
+    (upstream/'src/config').mkdir(parents=True)
+    commits = {}
+    for branch, version, schema in [('master', '8.2.0.dev0', 'v8.6.0'), ('v9', '9.0.0.dev0', 'v9.0.0')]:
+        if branch != 'master':
+            git('-C', upstream, 'checkout', '-q', '-b', branch)
+        (upstream/'src/passivbot_version.py').write_text(f'__version__ = "{version}"\n')
+        (upstream/'src/config/schema.py').write_text(f'CONFIG_SCHEMA_VERSION = "{schema}"\n')
+        git('-C', upstream, 'add', 'src')
+        git('-C', upstream, 'commit', '-qm', branch)
+        commits[branch] = git('-C', upstream, 'rev-parse', 'HEAD')
+    git('-C', upstream, 'checkout', '-q', 'master')
+    checkout = tmp_path/product
+    git('clone', *([] if existing else ['--no-checkout']), upstream, checkout)
+    before = (git('-C', checkout, 'rev-parse', 'HEAD'), git('-C', checkout, 'status', '--porcelain'))
+
+    project = Path(__file__).resolve().parents[1]
+    play = yaml.safe_load((project/f'{scope}-update-pb8.yml').read_text())[0]
+    render = Environment(undefined=StrictUndefined)
+    context = {'pb8dir': str(checkout), 'pbgdir': str(project),
+               'pb8_guard_script': str(project/'pb7_guard.py'), 'pbgui_python': sys.executable}
+    if product == 'pb9':
+        wrapper = yaml.safe_load((project/f'{scope}-update-pb9.yml').read_text())[0]
+        context.update(wrapper['vars'])
+    for key in ('passivbot_product', 'passivbot_major', 'passivbot_default_branch'):
+        context[key] = render.from_string(play['vars'][key]).render(context)
+    suffix = 'for an existing checkout' if existing else 'for a new checkout'
+    task = next(task for task in play['tasks']
+                if task.get('name', '').startswith('Fetch and verify latest official Passivbot')
+                and task['name'].endswith(suffix))
+    argv = [render.from_string(str(value)).render(context) for value in task['command']['argv']]
+    assert argv[argv.index('--fetch-url')+1] == 'https://github.com/enarjord/passivbot.git'
+    argv[argv.index('--fetch-url')+1] = str(upstream)
+    assert '--checkout' not in argv and '--stop-processes' not in argv
+    result = subprocess.run(argv, env=env, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    branch = 'v9' if product == 'pb9' else 'master'
+    ref = f'refs/remotes/pbgui-pb7-pin/{branch}'
+    assert argv[argv.index('--ref')+1] == ref
+    assert git('-C', checkout, 'rev-parse', ref) == commits[branch]
+    assert (git('-C', checkout, 'rev-parse', 'HEAD'), git('-C', checkout, 'status', '--porcelain')) == before
 
 
 @pytest.mark.parametrize('schema,accepted', [('v9.0.0',True),('v8.6.0',False),('v10.0.0',False)])

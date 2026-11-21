@@ -339,6 +339,13 @@ Quellstaende.
 
 ### PB9 installieren und aktualisieren
 
+Fetch und Guard prüfen für PB9 ausdrücklich `v9` (für PB8 `master`), sowohl bei
+neuen als auch bestehenden Checkouts. Meldet ein älterer Installer „expected
+Passivbot v9, found v8“, aktualisiere zuerst den steuernden PBGui-Checkout auf
+den korrigierten Entwicklungsstand und wiederhole dann **Install PB9**. Das
+bereits geklonte PB9-Verzeichnis darf bestehen bleiben; der erneute Versuch
+prüft es vor dem Wechsel des Quellstands.
+
 Nutze **Master (local) → Install PB9 / Update PB9** oder die entsprechende
 Aktion beim ausgewählten Host. Auch der eigenständige Master Installer bietet
 einen ausdrücklichen PB9-Modus. Eine frische Master-Installation installiert

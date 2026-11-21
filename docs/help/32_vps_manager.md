@@ -334,6 +334,12 @@ build tools for new source revisions.
 
 ### PB9 installation and updates
 
+The preflight fetch and guard both select `v9` for PB9 (`master` for PB8), for
+new and existing checkouts. If an older installer failed with “expected
+Passivbot v9, found v8”, update the controlling PBGui checkout to the corrected
+development revision before retrying **Install PB9**. The existing cloned PB9
+directory can remain in place; the retry checks it before switching source.
+
 Use **Master (local) → Install PB9 / Update PB9** or select a host and its
 **Install PB9 / Update PB9** action. The standalone Master Installer offers the
 same explicit PB9 mode. Fresh master installation still installs PB7/PB8;

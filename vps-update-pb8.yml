@@ -214,9 +214,11 @@
           - --repo
           - "{{ pb8dir }}"
           - --ref
-          - refs/remotes/pbgui-pb7-pin/master
+          - "refs/remotes/pbgui-pb7-pin/{{ passivbot_default_branch }}"
           - --expected-major
           - "{{ passivbot_major }}"
+          - --fetch-branch
+          - "{{ passivbot_default_branch }}"
           - --fetch-url
           - https://github.com/enarjord/passivbot.git
       changed_when: false
@@ -232,9 +234,11 @@
           - --repo
           - "{{ pb8dir }}"
           - --ref
-          - refs/remotes/pbgui-pb7-pin/master
+          - "refs/remotes/pbgui-pb7-pin/{{ passivbot_default_branch }}"
           - --expected-major
           - "{{ passivbot_major }}"
+          - --fetch-branch
+          - "{{ passivbot_default_branch }}"
           - --fetch-url
           - https://github.com/enarjord/passivbot.git
       changed_when: false
