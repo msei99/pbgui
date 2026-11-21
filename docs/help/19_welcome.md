@@ -8,7 +8,7 @@ Use the Welcome page to:
 
 - log in with the current PBGui password
 - change the password
-- configure the local PBv7 and PBv8 paths and interpreters
+- configure the local PBv7, PBv8 and optional PBv9 paths and interpreters
 - choose whether this machine acts as **Master** or **Slave**
 - confirm that the API server can read the current runtime setup
 
@@ -19,6 +19,7 @@ The default **Overview** section summarizes the current local state:
 - **Session**: whether you are authenticated or still a guest
 - **PB7**: whether the configured PBv7 runtime looks usable
 - **PB8**: whether source, V8 config schema, Python, CLI, and the compiled Rust extension are ready
+- **PB9**: independent, automatically updated detection of the optional V9 source, schema, Python, CLI, Rust artifact and source commit. **Detected** describes static evidence; native compatibility is checked again before execution. **Incomplete** means an installer/update has not completed successfully.
 - **Identity**: the current host role and configured bot name
 - **Runtime Status**: detailed readiness checks from the backend
 - **Login security**: active login blocks and retained brute-force lockout history
@@ -53,6 +54,14 @@ Important fields:
 - **Role**: choose **Master** when this host manages remote VPS systems, otherwise **Slave**
 
 Use the **Browse** buttons to pick directories and the Python interpreter from the server filesystem.
+
+The separate **Passivbot V9 Setup** panel uses the existing PB9 runtime settings
+writer. **Save PB9 Paths** validates both paths and separation from PB7/PB8/PBGui
+before saving them atomically. Empty both paths to remove the optional slot.
+Changes apply to the next PB9 operation without restarting PBRun. Status updates
+preserve unsaved entries in both setup panels. Reload restores the selected
+Overview, Setup or Password section, but does not persist unsaved field values.
+Welcome always describes the host serving this page, not the selected VPS host.
 
 If experimental PB9 paths have already been configured separately, changed PB7/PB8
 source paths must not overlap the reserved PB9 source tree, and their interpreters

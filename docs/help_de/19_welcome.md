@@ -8,7 +8,7 @@ Nutze die Welcome-Seite, um:
 
 - dich mit dem aktuellen PBGui-Passwort anzumelden
 - das Passwort zu ändern
-- die lokalen PBv7- und PBv8-Pfade und Interpreter zu konfigurieren
+- die lokalen PBv7-, PBv8- und optionalen PBv9-Pfade und Interpreter zu konfigurieren
 - festzulegen, ob diese Maschine als **Master** oder **Slave** arbeitet
 - zu prüfen, ob der API-Server die aktuelle Runtime-Konfiguration korrekt lesen kann
 
@@ -19,6 +19,7 @@ Der Standardbereich **Overview** fasst den aktuellen lokalen Zustand zusammen:
 - **Session**: ob du eingeloggt bist oder noch als Gast arbeitest
 - **PB7**: ob die konfigurierte PBv7-Runtime verwendbar aussieht
 - **PB8**: ob Source, V8-Config-Schema, Python, CLI und die kompilierte Rust-Erweiterung bereit sind
+- **PB9**: eigenständige, automatisch aktualisierte Erkennung der optionalen V9-Quelle, des Schemas, von Python, CLI, Rust-Artefakt und Quell-Commit. **Detected** bezeichnet statische Befunde; vor der Ausführung wird die native Kompatibilität erneut geprüft. **Incomplete** bedeutet, dass Installation oder Update nicht erfolgreich abgeschlossen wurde.
 - **Identity**: aktuelle Host-Rolle und konfigurierter Bot-Name
 - **Runtime Status**: detaillierte Readiness-Pruefungen aus dem Backend
 - **Login security**: aktive Login-Sperren und behaltene Brute-Force-Lockout-Historie
@@ -53,6 +54,15 @@ Wichtige Felder:
 - **Role**: **Master** waehlen, wenn dieser Host Remote-VPS verwaltet, sonst **Slave**
 
 Mit den **Browse**-Buttons kannst du Verzeichnisse und den Python-Interpreter direkt aus dem Server-Dateisystem auswaehlen.
+
+Der separate Bereich **Passivbot V9 Setup** nutzt die vorhandene PB9-Verwaltung
+der Runtime-Pfade. **Save PB9 Paths** prüft beide Pfade und ihre Trennung von
+PB7/PB8/PBGui vor dem atomaren Speichern. Leere beide Pfade, um den optionalen
+Slot zu entfernen. Änderungen gelten für die nächste PB9-Operation ohne
+PBRun-Neustart. Statusaktualisierungen erhalten ungespeicherte Eingaben in beiden
+Setup-Bereichen. Ein Browser-Neuladen stellt Overview, Setup oder Password wieder
+her, speichert aber keine ungespeicherten Feldwerte. Welcome beschreibt immer den
+Host, der diese Seite bereitstellt, nicht den ausgewählten VPS-Host.
 
 Wenn experimentelle PB9-Pfade bereits separat konfiguriert wurden, duerfen
 geaenderte PB7/PB8-Quellpfade den reservierten PB9-Quellbaum nicht ueberlappen.

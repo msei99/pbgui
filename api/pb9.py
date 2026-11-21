@@ -219,6 +219,8 @@ def _operation(operation: str, cancel_event: PB9CancelSignal, payload: bytes | N
             raise
     if operation == "runtime":
         result = inspect_pb9_runtime(paths["pb9dir"], paths["pb9venv"], other_slots, cancel_event=cancel_event)
+        marker = Path(PBGDIR) / "data/locks/pb9-runtime-invalid"
+        result["installation_incomplete"] = marker.exists() or marker.is_symlink()
         if cancel_event.is_set():
             raise PB9ConfigError("helper_cancelled")
         return result

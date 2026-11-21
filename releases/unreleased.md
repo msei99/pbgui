@@ -2,6 +2,13 @@
 
 ## Development
 
+- Complete Welcome's optional PB9 runtime display and setup panel using the existing
+  authenticated PB9 inspection and atomic path writer. Show source/schema, Python,
+  CLI/Rust, commit and incomplete-update state; update automatically without
+  overwriting setup drafts, and retain the selected section across browser reloads.
+  Read-only installation checks on magicnuc1 verified the development checkout,
+  official PB9 source, installed wheel receipt, matching native Rust and CLI.
+
 - Fix normal PB9 installation/update preflight on both masters and VPS hosts:
   pass the selected generation's official branch explicitly to the shared guard
   and validate its matching fetched ref (`v9` for PB9, `master` for PB8). New and

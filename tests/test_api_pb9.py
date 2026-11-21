@@ -55,6 +55,7 @@ def endpoint(tmp_path, monkeypatch):
         return {"config": config, "pbgui": config.pop("pbgui", None), "source": {"repo_dir": source}}
 
     monkeypatch.setattr(pb9, "validate_pb9_document", validate)
+    monkeypatch.setattr(pb9, "PBGDIR", tmp_path)
     monkeypatch.setattr(pb9, "load_ini_snapshot", snapshot)
     monkeypatch.setattr(pb9, "inspect_pb9_runtime", inspect)
     monkeypatch.setattr(pb9, "load_pb9_template", template)
@@ -88,6 +89,23 @@ def test_routes_require_shared_auth_and_never_accept_query_tokens(endpoint, meth
         assert response.headers["cache-control"] == "no-store"
     assert not endpoint.calls
     assert not endpoint.snapshots
+
+
+@pytest.mark.parametrize("marker_kind", ["absent", "file", "broken_symlink"])
+def test_runtime_reports_incomplete_installation(endpoint, tmp_path, marker_kind):
+    """Welcome must expose an incomplete update even when artifact detection passes."""
+    marker = tmp_path / "data/locks/pb9-runtime-invalid"
+    if marker_kind != "absent":
+        marker.parent.mkdir(parents=True)
+        if marker_kind == "file":
+            marker.touch()
+        else:
+            marker.symlink_to(tmp_path / "missing")
+    result = endpoint.client.get("/api/pb9/runtime", headers={"Authorization": "Bearer fixture-auth"})
+    assert result.status_code == 200
+    assert result.json()["installation_incomplete"] is (marker_kind != "absent")
+    assert result.json()["detected"] is True
+    assert "ready" not in result.json()
 
 
 def test_each_request_uses_one_current_allowlisted_snapshot(endpoint):

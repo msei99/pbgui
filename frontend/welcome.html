@@ -782,6 +782,7 @@
                         <span class="sb-count" id="sb-auth-state">Guest</span>
                         <span class="sb-count" id="sb-ready-state">PB7 blocked</span>
                         <span class="sb-count" id="sb-pb8-state">PB8 blocked</span>
+                        <span class="sb-count" id="sb-pb9-state">PB9 checking</span>
                     </div>
                 </div>
                 <div id="sidebar-toolbar">
@@ -856,6 +857,11 @@
                                 <p class="summary-copy" id="summary-pb8-copy">Runtime health is still loading.</p>
                             </div>
                             <div class="summary-card">
+                                <span class="summary-label">PB9</span>
+                                <strong id="summary-pb9">Checking…</strong>
+                                <p class="summary-copy" id="summary-pb9-copy">Runtime health is still loading.</p>
+                            </div>
+                            <div class="summary-card">
                                 <span class="summary-label">Identity</span>
                                 <strong id="summary-identity">Unnamed host</strong>
                                 <p class="summary-copy" id="summary-role">Role not loaded yet.</p>
@@ -865,7 +871,7 @@
                 </div>
                 <div class="section-heading">
                     <span class="section-kicker">Runtime</span>
-                    <p class="section-copy">PB7 and PB8 are checked independently. PB8 readiness includes source, config schema, Python, CLI, and the compiled Rust extension.</p>
+                    <p class="section-copy">PB7, PB8 and optional PB9 are checked independently.</p>
                 </div>
                 <div class="panel">
                     <h2 class="panel-title">Runtime Status</h2>
@@ -925,6 +931,28 @@
                     </div>
                     <div class="actions">
                         <button id="save-setup-btn" class="btn btn-primary" disabled>Save Setup</button>
+                    </div>
+                </div>
+                <div class="panel">
+                    <h2 class="panel-title">Passivbot V9 Setup</h2>
+                    <div class="field-grid">
+                        <div class="field full">
+                            <label for="pb9dir">Passivbot V9 path</label>
+                            <div class="field-browse">
+                                <input id="pb9dir" type="text" placeholder="/path/to/pb9">
+                                <button id="browse-pb9dir-btn" class="btn btn-secondary browse-btn" type="button">Browse</button>
+                            </div>
+                        </div>
+                        <div class="field full">
+                            <label for="pb9venv">Passivbot V9 python interpreter</label>
+                            <div class="field-browse">
+                                <input id="pb9venv" type="text" placeholder="/path/to/venv_pb9/bin/python">
+                                <button id="browse-pb9venv-btn" class="btn btn-secondary browse-btn" type="button">Browse</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="actions">
+                        <button id="save-pb9-setup-btn" class="btn btn-primary" disabled>Save PB9 Paths</button>
                     </div>
                 </div>
             </section>
@@ -1000,8 +1028,15 @@
             systemSummaryRequest: 0,
             systemSummaryTimer: null,
             bootstrapLoading: false,
+            pb9Runtime: null,
+            pb9RuntimeError: "",
+            pb9RuntimeRequest: 0,
+            pb9RuntimeTimer: null,
+            pb9PathsSaving: false,
+            pb9PathsDirty: false,
+            pageActive: true,
             passwordOpen: false,
-            activeSection: "overview",
+            activeSection: ["overview", "setup", "password"].includes(window.location.hash.slice(1)) ? window.location.hash.slice(1) : "overview",
             fileBrowser: {
                 open: false,
                 target: "",
@@ -1089,12 +1124,15 @@
             });
             target.hidden = false;
             setActiveSection(name);
+            var url = new URL(window.location.href);
+            url.hash = name;
+            window.history.replaceState(null, "", url.toString());
             document.getElementById("main-content").scrollTop = 0;
         }
 
         function fileBrowserTitle() {
             var target = state.fileBrowser.target || "";
-            var version = target.indexOf("pb8") === 0 ? "V8" : "V7";
+            var version = target.indexOf("pb9") === 0 ? "V9" : (target.indexOf("pb8") === 0 ? "V8" : "V7");
             return target.endsWith("venv")
                 ? "Select Passivbot " + version + " Python Interpreter"
                 : "Select Passivbot " + version + " Path";
@@ -1294,6 +1332,23 @@
                     issues.appendChild(item);
                 });
             }
+            var pb9 = state.pb9Runtime;
+            if (state.pb9RuntimeError) {
+                var failure = document.createElement("div");
+                failure.className = "issue error";
+                failure.textContent = "PB9: " + state.pb9RuntimeError;
+                issues.appendChild(failure);
+            }
+            if (pb9) {
+                var messages = (pb9.errors || []).concat(pb9.warnings || []);
+                if (pb9.installation_incomplete) messages.push("Installation or update is incomplete; run Update PB9.");
+                messages.forEach(function (message) {
+                    var item = document.createElement("div");
+                    item.className = "issue warning";
+                    item.textContent = "PB9: " + message;
+                    issues.appendChild(item);
+                });
+            }
             ((state.systemSummary && state.systemSummary.warnings) || []).forEach(function (warning) {
                 var item = document.createElement("div");
                 item.className = "issue " + (warning.level === "critical" ? "error" : "warning");
@@ -1366,6 +1421,17 @@
                 { label: "PB8 CLI / Rust", state: pb8Optional ? "optional" : (pb8.cli_ready && pb8.rust_ready ? "ready" : "missing"), detail: "CLI: " + (pb8.cli_file || "missing") + " | Rust: " + (pb8.rust_file || "missing") },
                 { label: "Identity", state: setup.master ? "master" : "slave", detail: setup.pbname || "Unnamed host" }
             ];
+            var pb9 = state.pb9Runtime || {};
+            var pb9State = pb9StatusText();
+            var optional = state.pb9Runtime && !pb9.configured;
+            var evidence = function (valid) { return optional ? "optional" : (state.pb9Runtime ? (valid ? "detected" : "missing") : pb9State); };
+            rows.splice(rows.length - 1, 0,
+                {label: "PB9 source", state: evidence(pb9.source_detected), detail: (pb9.pb9dir || "No PB9 path configured") + (pb9.package_version ? " (v" + String(pb9.package_version).replace(/^v/, "") + ")" : "")},
+                {label: "PB9 config", state: evidence(pb9.source_detected), detail: pb9.config_schema || "No PB9 config schema"},
+                {label: "PB9 python", state: evidence(pb9.python_version_supported && pb9.interpreter_executable), detail: pb9.pb9venv || "No PB9 interpreter configured"},
+                {label: "PB9 CLI / Rust", state: evidence(pb9.cli_executable && pb9.rust_exists), detail: "CLI: " + (pb9.cli_file || "missing") + " | Rust: " + (pb9.rust_file || "missing")},
+                {label: "PB9 revision", state: pb9.installation_incomplete ? "incomplete" : evidence(pb9.commit_available), detail: pb9.commit || "No verified PB9 commit"}
+            );
             var list = document.getElementById("status-list");
             list.innerHTML = "";
             rows.forEach(function (row) {
@@ -1418,6 +1484,14 @@
 
             document.getElementById("summary-identity").textContent = setup.pbname || "Unnamed host";
             document.getElementById("summary-role").textContent = (setup.master ? "Master" : "Slave") + " role";
+            var pb9 = state.pb9Runtime;
+            document.getElementById("summary-pb9").textContent = "PB9 " + pb9StatusText();
+            document.getElementById("summary-pb9-copy").textContent = state.pb9RuntimeError || (pb9
+                ? (pb9.installation_incomplete ? "Installation or update is incomplete."
+                    : (!pb9.configured ? "PB9 is not configured on this host."
+                        : (pb9.detected ? "Source, schema, Python, CLI and Rust artifacts detected."
+                            : "Check the PB9 runtime paths and diagnostics.")))
+                : (auth.authenticated ? "Checking PB9 runtime…" : "Log in to inspect PB9."));
         }
 
         function resetPasswordFieldVisibility(inputId) {
@@ -1442,6 +1516,10 @@
             document.getElementById("browse-pb7venv-btn").disabled = !auth.authenticated;
             document.getElementById("browse-pb8dir-btn").disabled = !auth.authenticated;
             document.getElementById("browse-pb8venv-btn").disabled = !auth.authenticated;
+            document.getElementById("save-pb9-setup-btn").disabled = !auth.authenticated || state.pb9PathsSaving;
+            document.getElementById("browse-pb9dir-btn").disabled = !auth.authenticated || state.pb9PathsSaving;
+            document.getElementById("browse-pb9venv-btn").disabled = !auth.authenticated || state.pb9PathsSaving;
+            document.getElementById("sb-pb9-state").textContent = "PB9 " + pb9StatusText();
             document.getElementById("sidebar-password-btn").disabled = !auth.authenticated;
             document.getElementById("sb-auth-state").textContent = auth.authenticated ? "Authenticated" : "Guest";
             document.getElementById("sb-ready-state").textContent = setup.ready ? "PB7 ready" : (setup.import_ready ? "Import only" : "PB7 blocked");
@@ -1483,6 +1561,7 @@
             var setup = data.setup || {};
             var pb8 = setup.pb8 || {};
             var auth = data.auth || {};
+            if (!auth.authenticated) stopPb9Runtime();
             document.getElementById("pb7dir").value = setup.pb7dir || "";
             document.getElementById("pb7venv").value = setup.pb7venv || "";
             document.getElementById("pb8dir").value = pb8.pb8dir || "";
@@ -1495,11 +1574,87 @@
             renderStatus(auth, setup);
             if (auth.authenticated) {
                 if (!state.systemSummaryTimer && !state.systemSummary) loadSystemSummary();
+                if (!state.pb9RuntimeTimer && !state.pb9Runtime) loadPb9Runtime();
             } else {
                 stopSystemSummary();
             }
             syncUrl();
-            updateActiveSectionFromScroll();
+            focusSection(state.activeSection);
+        }
+
+        function pb9StatusText() {
+            if (state.pb9RuntimeError) return "unavailable";
+            var status = state.pb9Runtime;
+            if (!status) return state.bootstrap && (state.bootstrap.auth || {}).authenticated ? "checking" : "login required";
+            if (status.installation_incomplete) return "incomplete";
+            if (!status.configured) return "optional";
+            return status.detected ? "detected" : (status.source_detected ? "partial" : "blocked");
+        }
+
+        function renderPb9Runtime() {
+            if (!state.bootstrap) return;
+            var auth = state.bootstrap.auth || {};
+            var setup = state.bootstrap.setup || {};
+            if (state.pb9Runtime && !state.pb9PathsDirty && !state.pb9PathsSaving) {
+                document.getElementById("pb9dir").value = state.pb9Runtime.pb9dir || "";
+                document.getElementById("pb9venv").value = state.pb9Runtime.pb9venv || "";
+            }
+            renderSummary(auth, setup);
+            renderAuth(auth, setup);
+            renderStatus(auth, setup);
+        }
+
+        function stopPb9Runtime() {
+            clearTimeout(state.pb9RuntimeTimer);
+            state.pb9RuntimeTimer = null;
+            state.pb9RuntimeRequest += 1;
+            state.pb9Runtime = null;
+            state.pb9RuntimeError = "";
+        }
+
+        async function loadPb9Runtime() {
+            clearTimeout(state.pb9RuntimeTimer);
+            state.pb9RuntimeTimer = null;
+            if (!state.pageActive || !state.bootstrap || !(state.bootstrap.auth || {}).authenticated || state.pb9PathsSaving) return;
+            var requestId = ++state.pb9RuntimeRequest;
+            try {
+                var status = await fetchJson(API_ORIGIN + "/api/pb9/runtime");
+                if (requestId !== state.pb9RuntimeRequest) return;
+                state.pb9Runtime = status;
+                state.pb9RuntimeError = "";
+            } catch (error) {
+                if (requestId !== state.pb9RuntimeRequest) return;
+                state.pb9Runtime = null;
+                state.pb9RuntimeError = error.message;
+            }
+            if (requestId !== state.pb9RuntimeRequest) return;
+            renderPb9Runtime();
+            if (!document.hidden) state.pb9RuntimeTimer = setTimeout(loadPb9Runtime, 10000);
+        }
+
+        async function savePb9Paths() {
+            if (document.getElementById("save-pb9-setup-btn").disabled) return;
+            var paths = {pb9dir: document.getElementById("pb9dir").value, pb9venv: document.getElementById("pb9venv").value};
+            state.pb9PathsDirty = true;
+            state.pb9PathsSaving = true;
+            clearTimeout(state.pb9RuntimeTimer);
+            state.pb9RuntimeRequest += 1;
+            renderPb9Runtime();
+            try {
+                var saved = await fetchJson(API_ORIGIN + "/api/pb9/runtime/paths", {
+                    method: "POST", headers: authHeaders(true), body: JSON.stringify(paths)
+                });
+                state.pb9Runtime = Object.assign({}, saved, {installation_incomplete: Boolean(state.pb9Runtime && state.pb9Runtime.installation_incomplete)});
+                // A later edit belongs to the user, even if this save succeeded.
+                state.pb9PathsDirty = Object.keys(paths).some(function (key) { return document.getElementById(key).value !== paths[key]; });
+                setBanner("PB9 paths saved. Changes apply to the next PB9 operation.", "success");
+            } catch (error) {
+                setBanner(error.message, "error");
+            } finally {
+                state.pb9PathsSaving = false;
+                renderPb9Runtime();
+                loadPb9Runtime();
+            }
         }
 
         function storagePageUrl(view) {
@@ -1606,8 +1761,26 @@
             if (document.hidden) {
                 clearTimeout(state.systemSummaryTimer);
                 state.systemSummaryTimer = null;
+                clearTimeout(state.pb9RuntimeTimer);
+                state.pb9RuntimeTimer = null;
+                state.pb9RuntimeRequest += 1;
             } else if (state.bootstrap && (state.bootstrap.auth || {}).authenticated) {
                 loadSystemSummary();
+                loadPb9Runtime();
+            }
+        });
+
+        window.addEventListener("pagehide", function () {
+            state.pageActive = false;
+            stopSystemSummary();
+            stopPb9Runtime();
+        });
+
+        window.addEventListener("pageshow", function (event) {
+            state.pageActive = true;
+            if (event.persisted && state.bootstrap && (state.bootstrap.auth || {}).authenticated) {
+                loadSystemSummary();
+                loadPb9Runtime();
             }
         });
 
@@ -1728,6 +1901,14 @@
         });
 
         document.getElementById("save-setup-btn").addEventListener("click", saveSetup);
+        document.getElementById("save-pb9-setup-btn").addEventListener("click", savePb9Paths);
+        ["pb9dir", "pb9venv"].forEach(function (key) {
+            document.getElementById(key).addEventListener("input", function () { state.pb9PathsDirty = true; });
+            document.getElementById("browse-" + key + "-btn").addEventListener("click", function () {
+                state.pb9PathsDirty = true;
+                openFileBrowser(key, key.endsWith("venv") ? "python" : "directory");
+            });
+        });
         document.getElementById("sidebar-password-btn").addEventListener("click", openPasswordSection);
         document.getElementById("change-password-btn").addEventListener("click", changePassword);
         document.getElementById("disable-auth-btn").addEventListener("click", disableAuthentication);
