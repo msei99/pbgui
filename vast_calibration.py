@@ -19,6 +19,7 @@ NATIVE_PROTOCOL_VERSION = 5
 # Public immutable image with its native format/protocol verified offline.
 # Physical calibration verification is recorded separately in the build receipt.
 NATIVE_CALIBRATION_IMAGES = frozenset({
+    'ghcr.io/msei99/pbgui-pb9-worker@sha256:7ee6a7bf0f6bb0c235e87ab2988efd1d2f0529f4348f1d9c20a13d8384395bcb',
     'ghcr.io/msei99/pbgui-pb9-worker@sha256:59dfb6f06a33886c9da007a013831c859507f90cfce6ba668cb118b171c9f5c9',
     'ghcr.io/msei99/pbgui-pb9-worker@sha256:9a8a4bbb6c5dfb8f927e1652dd52894da83f4bff03b74d0422814d0b3941d99b',
     'ghcr.io/msei99/pbgui-pb9-worker@sha256:8093291ccefb61db45da7bdc7812186d2267ca91d2492f8d813fa4499b6d291f',

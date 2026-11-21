@@ -362,7 +362,7 @@ the profile does not replace the dispatch work cap.
 Native cloud bundles include the same launch options and managed seed artifacts.
 Host paths are replaced by verified bundle paths. Only the selected scenarios'
 training inputs are exported. Local checkpoints use local Resume; cloud Requeue
-starts a new job. The native worker is pinned to public source `1b5805ed`; the local
+starts a new job. The native worker is pinned to public source `bf7329b03`; the local
 PB9 source must match that worker before preparation. The existing local
 installation is not updated implicitly. An imported preparation report may reject
 cloud inputs when their dataset identity differs; the worker never bypasses
@@ -376,6 +376,6 @@ configuration reuse. Search mode is not changed automatically: Max can improve
 CPU preparation throughput but changes the search schedule. PB8 GPU proxy rates
 are not directly comparable to complete PB9 GPU evaluations.
 
-The current worker pins PR #2305 source `1b5805ed` and includes the Hyperliquid
+The current worker pins official v9 source `bf7329b03` (including merged PR #2305) and includes the Hyperliquid
 numeric market-ID age fix. The published image passed offline age and native
 CLI/cohort probes; this revision has no new physical GPU performance measurement.

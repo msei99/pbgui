@@ -21,9 +21,9 @@ real master or VPS. No host is updated merely by publishing this branch.
 - Config schema checks before checkout, slot-separation checks, failed-update
   launch guards, optional PB9 telemetry and default-path uninstall handling.
 - PB9 Vast native CLI/cohort calibration and the worker pinned to public
-  Passivbot PR #2305 source `1b5805ed52c9fdf8eab6d21ed938e2c73edda85b`.
+  official Passivbot v9 source `bf7329b039595e65acdf5c14475078912aeede96` (including merged PR #2305).
   Immutable image:
-  `ghcr.io/msei99/pbgui-pb9-worker@sha256:9a8a4bbb6c5dfb8f927e1652dd52894da83f4bff03b74d0422814d0b3941d99b`.
+  `ghcr.io/msei99/pbgui-pb9-worker@sha256:7ee6a7bf0f6bb0c235e87ab2988efd1d2f0529f4348f1d9c20a13d8384395bcb`.
 - Shared Optimize config-list loading improvements.
 
 ## Checks completed, with their limits
@@ -49,6 +49,14 @@ revision-specific limitations.
 
 ## Not tested end to end / still incomplete
 
+- Follow-up: PR #2305 is merged in official v9 source `bf7329b03`. That revision
+  has passed 380 focused native tests (2 skipped), isolated wheel/source
+  verification, two bounded offline PBGui-source backtests and local PBGui
+  config/metadata and editor checks. This does not qualify remote installation
+  or physical GPU execution. The matching Vast worker above is now rebuilt,
+  published and pinned to `bf7329b03`; its source/native/CLI/cohort and
+  offline Hyperliquid probes passed. No physical GPU run was performed
+  with this revision.
 - A full additional PB9 install and update on a real remote master or VPS,
   including failure recovery and continued operation of existing PB7/PB8 bots.
 - A physical GPU run with the latest pinned worker revision.

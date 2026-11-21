@@ -2,6 +2,20 @@
 
 ## Development
 
+- Rebuild, verify and publish the native PB9 Vast worker for official v9 source
+  `bf7329b03`, matching the updated local runtime. Pin its immutable public
+  manifest, native config contract and calibration allowlist together; retain
+  all earlier rental image identities. Offline image checks cover Rust/source,
+  CLI/cohort protocol 5, numeric Hyperliquid asset ages and inconsistent-ID
+  rejection. No GPU was rented and no new GPU throughput is claimed.
+
+- Verify that Hyperliquid numeric market-ID fix PR #2305 was merged into the
+  official v9 branch and validate source `bf7329b03` with a matching rebuilt
+  Python/Rust wheel. Confirm offline asset-age recovery, PBGui native config
+  compatibility and bounded Bybit/Hyperliquid replays using the existing PBGui
+  candle source. The matching Vast worker is published and pinned separately to the same
+  official source revision.
+
 - Publish the current PB9 work on `dev-pb9-integration` as an explicitly
   unfinished, not fully tested development snapshot. Document completed focused
   checks and the still untested real remote install/update and latest-worker GPU

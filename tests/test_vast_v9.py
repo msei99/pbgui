@@ -79,12 +79,19 @@ def test_unknown_worker_profile_never_uses_pb8(value):
 def test_native_published_profile_is_bound_to_reviewed_digest_and_source():
     """Native rentals use the exact verified native image, independently of PB8."""
     profile = worker_profile('pb9').require_published()
-    assert profile.image == 'ghcr.io/msei99/pbgui-pb9-worker@sha256:9a8a4bbb6c5dfb8f927e1652dd52894da83f4bff03b74d0422814d0b3941d99b'
-    assert profile.revision == '1b5805ed52c9fdf8eab6d21ed938e2c73edda85b'
+    assert profile.image == 'ghcr.io/msei99/pbgui-pb9-worker@sha256:7ee6a7bf0f6bb0c235e87ab2988efd1d2f0529f4348f1d9c20a13d8384395bcb'
+    assert profile.revision == 'bf7329b039595e65acdf5c14475078912aeede96'
     assert profile.image != worker_profile('pb8').image
     from vast_image_layers import IMAGE_LAYERS
-    assert len(IMAGE_LAYERS[profile.image]) == 53
+    assert len(IMAGE_LAYERS[profile.image]) == 62
     assert all(size > 0 for size in IMAGE_LAYERS[profile.image].values())
+
+
+def test_previous_pb9_rental_identity_survives_worker_update():
+    """An updated current worker cannot orphan already persisted PR-2305 rentals."""
+    from vast_jobs import SUPPORTED_RENTAL_IMAGE_REVISIONS
+    previous = 'ghcr.io/msei99/pbgui-pb9-worker@sha256:9a8a4bbb6c5dfb8f927e1652dd52894da83f4bff03b74d0422814d0b3941d99b'
+    assert SUPPORTED_RENTAL_IMAGE_REVISIONS[previous] == '1b5805ed52c9fdf8eab6d21ed938e2c73edda85b'
 
 
 def test_native_calibration_rejects_before_credentials_or_provider(tmp_path, monkeypatch):
