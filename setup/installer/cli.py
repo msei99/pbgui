@@ -8,6 +8,8 @@ import tempfile
 
 from .core import (
     LocalMasterConfig,
+    LocalMasterMaintenanceConfig,
+    run_local_master_maintenance,
     TOTP_QR_BEGIN,
     TOTP_QR_END,
     RemoteMasterConfig,
@@ -222,7 +224,15 @@ def run_cli() -> int:
     print("PBGui Master Installer")
     print("1) Remote Master VPS")
     print("2) Local Master Install")
+    print("3) Install/Update PB8 on existing local master")
+    print("4) Install/Update PB9 on existing local master")
+    print("5) Update existing local master and configured bots")
     mode = _ask("Select mode", "1")
+    if mode in {"3", "4", "5"}:
+        action = {"3": "local-pb8", "4": "local-pb9", "5": "local-update-all"}[mode]
+        config = LocalMasterMaintenanceConfig(install_dir=_ask("Install parent directory", default_local_install_dir()), action=action)
+        run_local_master_maintenance(config, print)
+        return 0
     if mode == "2":
         return _run_local_cli()
     if mode != "1":

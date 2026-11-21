@@ -2395,7 +2395,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
     <div id="sidebar-inner">
       <button class="sb-section active" data-panel="configs" onclick="selectPanel('configs')">
         <span class="sb-icon">📋</span> Configs
-        <span id="nav-config-count" class="sb-count" style="margin-left:auto">0</span>
+        <span id="nav-config-count" class="sb-count" style="margin-left:auto">…</span>
       </button>
       <button class="sb-section" data-panel="queue" onclick="selectPanel('queue')">
         <span class="sb-icon">⏳</span> Queue
@@ -2482,7 +2482,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
     <div id="panel-configs" class="view-panel active">
       <div id="configs-toolbar" class="panel-toolbar">
         <input id="config-search" class="panel-input" style="max-width:240px" type="text" placeholder="Search name...">
-        <span id="config-count-chip" class="sb-count">0 configs</span>
+        <span id="config-count-chip" class="sb-count">Loading configs…</span>
         <span id="config-selection-summary" class="muted-line">No configs selected.</span>
         <span style="flex:1"></span>
         <button class="act-btn" onclick="selectAllConfigs()" title="Select all visible rows">Select All</button>
@@ -2502,7 +2502,7 @@ input.cloud-invalid, select.cloud-invalid { border-color:#ef4444 !important; out
               <th>Actions</th>
             </tr>
           </thead>
-          <tbody id="configs-tbody"></tbody>
+          <tbody id="configs-tbody" aria-busy="true"><tr><td colspan="8">Loading optimize configs…</td></tr></tbody>
         </table>
       </div>
       <div id="configs-editor" style="display:none"></div>
@@ -12290,11 +12290,13 @@ function selectPanel(panel) {
 function updateMetaCounts() {
   var filteredConfigs = filterConfigs();
   var filteredResults = filterResults();
-  el('nav-config-count').textContent = String(state.configs.length);
+  el('nav-config-count').textContent = state.configsLoadedOnce === false ? '…' : String(state.configs.length);
   el('nav-queue-count').textContent = String(state.queue.length + (state.cloudQueueCount || 0));
   el('nav-result-count').textContent = String(state.results.length);
   el('nav-pareto-count').textContent = String(state.paretos.length);
-  el('config-count-chip').textContent = filteredConfigs.length + ' configs';
+  el('config-count-chip').textContent = state.configsLoadedOnce === false
+    ? (state.configPollError ? 'Config load failed' : 'Loading configs…')
+    : filteredConfigs.length + ' configs';
   el('result-count-chip').textContent = state.resultsLoading
     ? (filteredResults.length ? filteredResults.length + ' result sets · Refreshing...' : 'Loading result sets...')
     : filteredResults.length + ' result sets';
@@ -12506,6 +12508,7 @@ function renderConfigs() {
   renderConfigsTableHead();
   var configs = filterConfigs();
   var tbody = el('configs-tbody');
+  tbody.setAttribute('aria-busy', state.configsLoadedOnce === false && !state.configPollError ? 'true' : 'false');
   var scroll = el('configs-list-wrap');
   var scrollTop = scroll ? scroll.scrollTop : 0;
   var scrollLeft = scroll ? scroll.scrollLeft : 0;
@@ -12516,7 +12519,10 @@ function renderConfigs() {
   });
   if (!configs.length) {
     tbody.innerHTML = '';
-    renderEmpty('configs-tbody', optimizeEditorAdapter.isV8 ? 9 : 8, 'No optimize configs found.', 'Create Config', 'empty-create-config');
+    var awaitingConfigs = state.configsLoadedOnce === false;
+    renderEmpty('configs-tbody', optimizeEditorAdapter.isV8 ? 9 : 8,
+      awaitingConfigs ? (state.configPollError ? 'Could not load optimize configs.' : 'Loading optimize configs…') : 'No optimize configs found.',
+      awaitingConfigs ? '' : 'Create Config', 'empty-create-config');
     updateConfigSelectionUi(configs);
     updateMetaCounts();
     return;
@@ -14905,7 +14911,9 @@ function loadConfigs(force, resumeCounts) {
       loadConfigCounts(generation);
     } catch (error) {
       if (generation !== state.configGeneration || state.configsDisposed) return;
-      if (error.name === 'AbortError') throw new Error('Optimize config request timed out.');
+      if (error.name === 'AbortError') error = new Error('Optimize config request timed out.');
+      state.configPollError = error.message;
+      if (!state.configsLoadedOnce) renderConfigs();
       throw error;
     } finally {
       window.clearTimeout(request.timer);
@@ -16280,6 +16288,13 @@ async function init() {
         && !restoreEditor && !migrationDraftPromise) {
       await window.PBGuiLoopOptimizer?.whenInitialViewReady();
     }
+    // Deliver the visible, scan-free list before native metadata, queue/result
+    // inspection and WebSocket snapshots compete for browser/server resources.
+    var initialConfigList = null;
+    if (optimizeEditorAdapter.isV8 && state.panel === 'configs' && !restoreEditor && !migrationDraftPromise) {
+      initialConfigList = loadConfigs().catch(function(error) { handleError(error); });
+      await initialConfigList;
+    }
     connectWS();
     var metadataPromise = migrationDraftPromise
       ? migrationDraftPromise.then(function(draft) {
@@ -16291,7 +16306,7 @@ async function init() {
         })
       : loadOptimizeMetadata();
     var settingsAndMetadata = Promise.all([loadSettings(), metadataPromise]);
-    var backgroundData = Promise.all([loadConfigs(), loadQueue(), loadResults()]);
+    var backgroundData = Promise.all([initialConfigList || loadConfigs(), loadQueue(), loadResults()]);
     await settingsAndMetadata;
     if (migrationDraftPromise) {
       await handleMigrationDraft(migrationDraftPromise);
@@ -16767,6 +16782,6 @@ window.PBGUI_NAV_CONFIG = {
 <script src="/app/js/backtest_v9_migration.js?v=2" defer></script>
 <script src="/app/js/vast_performance.js?v=4"></script>
 <script src="/app/js/optimizer_log_layout.js?v=7"></script>
-<script src="/app/js/vast.js?v=187"></script>
+<script src="/app/js/vast.js?v=192"></script>
 </body>
 </html>

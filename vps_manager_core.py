@@ -1315,7 +1315,7 @@ class VPSManager:
             self.privat_data_dir.mkdir(parents=True, exist_ok=True)
             self.remove_update_log()
             self.update_log = ""
-            if self.command in {"master-update-pb8", "master-update-pbgui-pb8"}:
+            if self.command in {"master-update-pb8", "master-update-pbgui-pb8", "master-update-pb9"}:
                 install_dir = Path(PBGDIR).expanduser().resolve(strict=False).parent
                 if recover_orphaned_pb8_update_writer(install_dir):
                     self._append_task_log(

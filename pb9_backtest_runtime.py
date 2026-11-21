@@ -11,6 +11,13 @@ from passivbot_runtime import classify_passivbot_source
 SERVICE = "BacktestV9"
 
 
+def require_runtime_available(pbgui_dir: Path) -> None:
+    """Refuse launches while the installer has not validated the PB9 runtime."""
+    marker = Path(pbgui_dir) / 'data/locks/pb9-runtime-invalid'
+    if marker.exists() or marker.is_symlink():
+        raise RuntimeError('PB9 installation or update is incomplete; run Update PB9')
+
+
 def source_identity(repo: Path) -> dict:
     """Require a clean source tree so a commit identifies all code used by a job."""
     identity = classify_passivbot_source(str(repo))

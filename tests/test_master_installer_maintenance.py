@@ -468,6 +468,6 @@ def test_web_installer_exposes_existing_master_maintenance_actions() -> None:
     source = Path("setup/installer/web.py").read_text(encoding="utf-8")
 
     assert '<option value="local-pb8"' in source
-    assert '<option value="local-update-all">Update PBGui, PB7 and PB8</option>' in source
+    assert '<option value="local-update-all">Update PBGui and installed bots</option>' in source
     assert "Fresh/Reinstall is disruptive" in source
     assert "/api/local-master-status" in source

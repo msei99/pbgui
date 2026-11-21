@@ -22,6 +22,7 @@ PRINT_ALLOWLIST = {
     "support_debug_crypto.py": "The operator-only decryption CLI prints a fixed completion message, never report contents or key material.",
     "setup/vast_gpu_benchmark/verify_fresh_population.py": "Offline worker-verification CLI emits its non-secret validation result as JSON.",
     "setup/vast_gpu_benchmark/verify_native_launch.py": "Offline native CPU smoke CLI emits only synthetic verification results as JSON.",
+    "setup/vast_gpu_benchmark/verify_native_calibration.py": "Offline image probe reports only its fixed non-secret validation result; it does not run CUDA or a provider.",
     "setup/vast_gpu_benchmark/resolve_local_inception.py": "Isolated resolver returns machine-readable candle metadata to its parent on stdout.",
     "setup/vast_gpu_benchmark/sync_input.py": "Remote input-sync helper returns a JSON manifest on stdout to its caller.",
     "setup/vast_gpu_benchmark/cloud_worker.py": "Remote worker stdout is the machine-readable SSH control protocol.",

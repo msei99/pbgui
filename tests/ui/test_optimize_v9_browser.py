@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
-def native_page(tmp_path):
+def native_page(tmp_path, request):
     """Serve only public assets and fixture metadata, never production configs/jobs."""
     metadata = json.loads((ROOT/'tests/fixtures/pb9_optimize_metadata.json').read_text())
     from pb9_parameter_help import populate_pb9_field_help
@@ -33,6 +33,7 @@ def native_page(tmp_path):
         'OPTIMIZE_NAV_CURRENT':'v9_optimize','NAV_HASH':'test'}.items():
         template=template.replace('%%'+key+'%%',value)
     errors, calls, saved = [], [], []
+    controls = getattr(request, 'param', {})
     def serve(route):
         """Fulfil every request without outbound network or runtime-data access."""
         path=urlsplit(route.request.url).path
@@ -45,7 +46,13 @@ def native_page(tmp_path):
             route.fulfill(status=200 if asset.is_file() else 404,body=asset.read_bytes() if asset.is_file() else b'',
                 content_type=mimetypes.guess_type(asset.name)[0] or 'application/octet-stream')
         elif path.endswith('/metadata'):
-            route.fulfill(json=metadata)
+            if controls.get('hold_metadata'):
+                controls['metadata_route'] = route
+                controls['metadata'] = metadata
+            else:
+                route.fulfill(json=metadata)
+        elif path == '/api/optimize-v9/configs' and controls.get('hold_configs'):
+            controls['configs_route'] = route
         elif path=='/api/optimize-v9/settings':
             route.fulfill(json={'exchange_options':metadata['exchange_options']['optimize'],
                 'cpu':1,'cpu_max':4,'host_cpu_count':4,'autostart':False,'cpu_override':True,
@@ -80,10 +87,65 @@ def native_page(tmp_path):
             page.route('**/*',serve)
             page.route_web_socket('**/*',lambda socket:socket.on_message(lambda message:None))
             page.goto('http://native.test/api/optimize-v9/main_page')
-            page.wait_for_function('!state.initialLoadPending')
+            if controls.get('hold_configs'):
+                page.wait_for_function("document.getElementById('configs-tbody').getAttribute('aria-busy')==='true'")
+            else:
+                page.wait_for_function('!state.initialLoadPending')
             yield page,config,errors,calls,saved
         finally:
             browser.close()
+
+
+@pytest.mark.parametrize('native_page', [{'hold_configs': True, 'hold_metadata': True}], indirect=True)
+def test_native_config_rows_render_within_one_second_before_native_work(native_page, request):
+    """Render authoritative rows first while native metadata remains unresolved."""
+    page, _, errors, calls, _ = native_page
+    controls = request.node.callspec.params['native_page']
+    page.wait_for_function("document.getElementById('config-count-chip').textContent==='Loading configs…'")
+    assert '0 configs' not in page.locator('#configs-toolbar').inner_text()
+    assert 'No optimize configs found.' not in page.locator('#configs-tbody').inner_text()
+    assert '/api/optimize-v9/metadata' not in calls
+    assert '/api/optimize-v9/queue' not in calls
+    page.evaluate("""() => {
+        window.configListStarted = performance.now();
+        new MutationObserver((_, observer) => {
+            if (document.querySelector('#configs-tbody tr[data-name]')) {
+                window.configListRendered = performance.now(); observer.disconnect();
+            }
+        }).observe(document.getElementById('configs-tbody'), {childList:true});
+    }""")
+    controls['configs_route'].fulfill(json={'configs': [{
+        'name': 'fixture-hype', 'exchange': ['bybit', 'hyperliquid'],
+        'strategy': 'trailing_martingale', 'start_date': '2025-01-16',
+        'end_date': 'now', 'modified': '2026-01-01T12:00:00',
+        'backtest_count': None, 'backtest_count_status': 'pending',
+    }]})
+    page.wait_for_function('window.configListRendered !== undefined')
+    assert page.evaluate('window.configListRendered-window.configListStarted') < 1000
+    assert page.locator('#configs-tbody tr[data-name="fixture-hype"]').is_visible()
+    assert page.locator('#config-count-chip').text_content() == '1 configs'
+    assert page.locator('#configs-tbody').get_attribute('aria-busy') == 'false'
+    assert page.evaluate('state.initialLoadPending')  # Native metadata has not completed.
+    assert calls.count('/api/optimize-v9/configs') == 1
+    controls['metadata_route'].fulfill(json=controls['metadata'])
+    page.wait_for_function('!state.initialLoadPending')
+    assert not errors
+
+
+@pytest.mark.parametrize('native_page', [{'hold_configs': True}], indirect=True)
+@pytest.mark.parametrize('failed', [False, True])
+def test_native_initial_config_loading_distinguishes_empty_and_failed(native_page, request, failed):
+    """An unanswered or failed request never claims that saved configs are absent."""
+    page, _, errors, _, _ = native_page
+    controls = request.node.callspec.params['native_page']
+    assert page.locator('#config-count-chip').text_content() == 'Loading configs…'
+    controls['configs_route'].fulfill(status=503 if failed else 200,
+        json={'detail': 'Fixture unavailable'} if failed else {'configs': []})
+    page.wait_for_function('!state.initialLoadPending')
+    assert page.locator('#config-count-chip').text_content() == ('Config load failed' if failed else '0 configs')
+    assert ('Could not load optimize configs.' if failed else 'No optimize configs found.') in page.locator('#configs-tbody').inner_text()
+    assert page.locator('#configs-tbody').get_attribute('aria-busy') == 'false'
+    assert not errors
 
 
 def test_native_editor_roundtrip_and_latest_edits(native_page):

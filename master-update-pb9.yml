@@ -1,0 +1,5 @@
+---
+# PB9 uses the same verified installer and live-process ownership as PB8.
+- import_playbook: master-update-pb8.yml
+  vars:
+    runtime_product: pb9

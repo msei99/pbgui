@@ -1,5 +1,16 @@
 # GUI for Passivbot
 
+> **PB9 DEVELOPMENT BRANCH — UNFINISHED / NOT FULLY TESTED**
+>
+> `dev-pb9-integration` is an experimental development snapshot, not a stable
+> release. PB9 integration is incomplete. Full installation/update on real remote
+> masters and VPS hosts, and GPU execution with the latest worker revision, have
+> **not been tested end to end**. Focused automated and isolated local tests do
+> not establish production readiness. Use only for controlled testing.
+> See [PB9 development status](docs/plans/pb9-development-status.md) for scope,
+> completed checks and open work. Switching to this branch does not install PB9
+> automatically.
+
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)
 
 ## Contact/Support on Telegram: https://t.me/+kwyeyrmjQ-lkYTJk

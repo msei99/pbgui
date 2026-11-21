@@ -187,7 +187,7 @@ def _new_job(payload: dict) -> str:
             elif mode == "local":
                 cfg = LocalMasterConfig.from_mapping(payload)
                 result = run_local_master_install(cfg, log, artifact_dir)
-            elif mode in {"local-pb8", "local-update-all"}:
+            elif mode in {"local-pb8", "local-pb9", "local-update-all"}:
                 cfg = LocalMasterMaintenanceConfig.from_mapping(payload)
                 result = run_local_master_maintenance(cfg, log, artifact_dir)
             else:
@@ -299,7 +299,8 @@ def _html() -> str:
       <label class="full">Install mode
         <select name="install_mode" id="install-mode">
           <option value="local-pb8" %%MAINTENANCE_SELECTED%%>Install/Update PB8</option>
-          <option value="local-update-all">Update PBGui, PB7 and PB8</option>
+          <option value="local-pb9">Install/Update PB9</option>
+          <option value="local-update-all">Update PBGui and installed bots</option>
           <option value="local" %%FRESH_SELECTED%%>Fresh/Reinstall Local Master</option>
           <option value="remote">Remote Master VPS</option>
           <option value="local-uninstall">Local Master Uninstall</option>
@@ -388,7 +389,7 @@ def _html() -> str:
         <span>It stops PBRun and PB7 processes and replaces PBGui configuration and authentication. Use a maintenance action above for an existing master.</span>
       </div>
       <div class="danger-panel full uninstall-only" id="uninstall-warning">
-        <strong>Local uninstall removes PBGui/PB7/PB8 checkouts, virtualenvs, and PBGui systemd user services under the selected parent directory.</strong>
+        <strong>Local uninstall removes PBGui/PB7/PB8/PB9 checkouts, virtualenvs, and PBGui systemd user services under the selected parent directory.</strong>
         <span>After clicking Uninstall Local Master, a safety dialog will ask for one final confirmation.</span>
       </div>
       <div class="full"><button id="start-btn" type="submit">Install Local Master</button></div>
@@ -408,7 +409,7 @@ def _html() -> str:
   <div class="modal">
     <h3 id="uninstall-modal-title">Confirm Local Uninstall</h3>
     <p id="uninstall-modal-message"></p>
-    <p>This removes the local PBGui/PB7/PB8 checkouts, virtualenvs, and PBGui systemd user services for the selected install parent.</p>
+    <p>This removes the local PBGui/PB7/PB8/PB9 checkouts, virtualenvs, and PBGui systemd user services for the selected install parent.</p>
     <div class="modal-actions">
       <button type="button" class="secondary" id="uninstall-cancel-btn">Cancel</button>
       <button type="button" class="danger-button" id="uninstall-confirm-btn">Uninstall Local Master</button>
@@ -514,14 +515,14 @@ function syncInstallPreview() {
     + '<div><strong>' + action + 'Venvs:</strong> ' + escapeHtml(joinPath(parent, 'venv_pbgui')) + ', ' + escapeHtml(joinPath(parent, 'venv_pb7')) + ', ' + escapeHtml(joinPath(parent, 'venv_pb8')) + '</div>'
     + (installMode.value === 'local-uninstall' ? '<div><strong>Will remove systemd user units:</strong> pbgui-api, pbgui-pbcluster, pbgui-pbrun, pbgui-pbdata, pbgui-pbcoindata, obsolete pbgui-pbremote if present</div>' : '');
 }
-function isMaintenanceMode() { return installMode.value === 'local-pb8' || installMode.value === 'local-update-all'; }
+function isMaintenanceMode() { return ['local-pb8','local-pb9','local-update-all'].includes(installMode.value); }
 function renderLocalMasterStatus() {
   if (!localMasterStatusEl) return;
   const installed = !!localMasterStatus.installed;
   const pb8Installed = !!localMasterStatus.pb8_installed;
-  const errors = installMode.value === 'local-update-all' ? (localMasterStatus.update_all_errors || []) : (localMasterStatus.maintenance_errors || []);
+  const errors = installMode.value === 'local-update-all' ? (localMasterStatus.update_all_errors || []) : (installMode.value === 'local-pb9' ? (localMasterStatus.pb9_maintenance_errors || []) : (localMasterStatus.maintenance_errors || []));
   localMasterStatusEl.innerHTML = installed
-    ? '<div><strong>Existing local master detected.</strong></div><div>PBGui: ' + escapeHtml(localMasterStatus.pbgui_dir || '') + '</div><div>PB8: ' + (pb8Installed ? 'installed' : 'not installed') + '</div>'
+    ? '<div><strong>Existing local master detected.</strong></div><div>PBGui: ' + escapeHtml(localMasterStatus.pbgui_dir || '') + '</div><div>PB8: ' + (pb8Installed ? 'installed' : 'not installed') + '</div><div>PB9: ' + (localMasterStatus.pb9_installed ? 'installed' : 'not installed') + '</div>'
       + (errors.length ? '<div style="color:var(--danger)">' + errors.map(escapeHtml).join('<br>') + '</div>' : '<div style="color:var(--ok)">Maintenance preflight passed.</div>')
     : '<div style="color:var(--danger)">No existing local PBGui master was detected under this install parent.</div>';
   const pb8Option = installMode.querySelector('option[value="local-pb8"]');
@@ -529,6 +530,12 @@ function renderLocalMasterStatus() {
   if (installMode.value === 'local-pb8') {
     modeTitle.textContent = pb8Installed ? 'Update PB8' : 'Install PB8';
     startBtn.textContent = pb8Installed ? 'Update PB8' : 'Install PB8';
+  }
+  const pb9Option = installMode.querySelector('option[value="local-pb9"]');
+  if (pb9Option) pb9Option.textContent = localMasterStatus.pb9_installed ? 'Update PB9' : 'Install PB9';
+  if (installMode.value === 'local-pb9') {
+    modeTitle.textContent = localMasterStatus.pb9_installed ? 'Update PB9' : 'Install PB9';
+    startBtn.textContent = modeTitle.textContent;
   }
   if (isMaintenanceMode() && !currentJobId) startBtn.disabled = !installed || errors.length > 0;
 }
@@ -612,8 +619,8 @@ function syncInstallMode() {
     localSudoWrap.style.display = showSudo ? '' : 'none';
     localSudoWrap.querySelectorAll('input,select,button,textarea').forEach(ctrl => { ctrl.disabled = !showSudo; });
   }
-  modeTitle.textContent = isUninstall ? 'Local Master Uninstall' : (isRemote ? 'Remote Master VPS' : (installMode.value === 'local-pb8' ? (localMasterStatus.pb8_installed ? 'Update PB8' : 'Install PB8') : (installMode.value === 'local-update-all' ? 'Update Local Master' : 'Fresh/Reinstall Local Master')));
-  startBtn.textContent = isUninstall ? 'Uninstall Local Master' : (isRemote ? 'Install Remote Master' : (installMode.value === 'local-pb8' ? (localMasterStatus.pb8_installed ? 'Update PB8' : 'Install PB8') : (installMode.value === 'local-update-all' ? 'Update PBGui, PB7 and PB8' : 'Fresh/Reinstall Local Master')));
+  modeTitle.textContent = isUninstall ? 'Local Master Uninstall' : (isRemote ? 'Remote Master VPS' : (['local-pb8','local-pb9'].includes(installMode.value) ? ((localMasterStatus[installMode.value.slice(6) + '_installed'] ? 'Update ' : 'Install ') + installMode.value.slice(6).toUpperCase()) : (installMode.value === 'local-update-all' ? 'Update Local Master' : 'Fresh/Reinstall Local Master')));
+  startBtn.textContent = isUninstall ? 'Uninstall Local Master' : (isRemote ? 'Install Remote Master' : (['local-pb8','local-pb9'].includes(installMode.value) ? ((localMasterStatus[installMode.value.slice(6) + '_installed'] ? 'Update ' : 'Install ') + installMode.value.slice(6).toUpperCase()) : (installMode.value === 'local-update-all' ? 'Update PBGui and installed bots' : 'Fresh/Reinstall Local Master')));
   if (!masterNameTouched && !isUninstall) masterName.value = defaultMasterName();
   if (!bindHostTouched && !isUninstall) pbguiBindHost.value = defaultBindHost();
   syncMode();
@@ -742,10 +749,10 @@ const progressPhases = [
   { pct: 22, label: 'Preparing repositories', re: /Cloning PBGui|Updating existing checkout|git clone|Using current PBGui checkout/ },
   { pct: 38, label: 'Creating virtualenvs', re: /Creating Python virtualenvs|python3\.12 -m venv/ },
   { pct: 52, label: 'Installing Python dependencies', re: /pip install -r|requirements\.txt/ },
-  { pct: 68, label: 'Preparing verified wheels', re: /Preparing verified PB[78] wheels|Transferred verified PB7 and PB8 wheel bundles|Verifying uploaded source-bound PB7 and PB8 wheels/ },
+  { pct: 68, label: 'Preparing verified wheels', re: /Preparing verified PB[789] wheels|Transferred verified PB7 and PB8 wheel bundles|Verifying uploaded source-bound PB7 and PB8 wheels/ },
   { pct: 76, label: 'Installing Passivbot wheels', re: /Installing verified PB7 and PB8 wheels|passivbot --help|CONFIG_SCHEMA_VERSION/ },
   { pct: 82, label: 'Writing configuration', re: /Writing PBGui configuration|secrets\.toml|pbgui\.ini/ },
-  { pct: 82, label: 'Removing local install', re: /Uninstalling local PBGui master|Removed PBGui|Removed PB7|Removed PB8|Removed PBGui venv|Removed PB7 venv|Removed PB8 venv/ },
+  { pct: 82, label: 'Removing local install', re: /Uninstalling local PBGui master|Removed PBGui|Removed PB7|Removed PB8|Removed PBGui venv|Removed PB7 venv|Removed PB8 venv|Removed PB9|Removed PB9 venv/ },
   { pct: 87, label: 'Configuring remote access', re: /Setting up OpenVPN|Configuring firewall|TOTP|OpenVPN/ },
   { pct: 93, label: 'Installing systemd services', re: /Installing PBGui systemd user services|setup_systemd|Enabled pbgui-/ },
   { pct: 97, label: 'Checking PBGui API', re: /Checking PBGui API service|PBGui API is listening/ },
@@ -760,7 +767,7 @@ function setProgress(pct, label, state) {
 function updateProgress(job) {
   const status = job.status || 'running';
   const mode = (job.result || {}).mode || currentJobMode;
-  const maintenance = mode === 'local-pb8' || mode === 'local-update-all';
+  const maintenance = ['local-pb8','local-pb9','local-update-all'].includes(mode);
   if (status === 'done') { setProgress(100, mode === 'local-uninstall' ? 'Uninstall complete' : (maintenance ? 'Update complete' : 'Installation complete'), 'done'); return; }
   if (status === 'error') { setProgress(100, mode === 'local-uninstall' ? 'Uninstall failed' : (maintenance ? 'Update failed' : 'Installation failed'), 'error'); return; }
   const text = (job.logs || []).join('\n');
@@ -778,7 +785,7 @@ function renderResult(job) {
   currentJobId = job.id || currentJobId;
   const r = job.result || {};
   const isUninstall = r.mode === 'local-uninstall' || currentJobMode === 'local-uninstall';
-  const isMaintenance = ['local-pb8', 'local-update-all'].includes(r.mode || currentJobMode);
+  const isMaintenance = ['local-pb8', 'local-pb9', 'local-update-all'].includes(r.mode || currentJobMode);
   if (job.status !== 'done' && job.status !== 'error' && !r.totp_qr_text) return;
   const vpnUrl = escapeHtml(r.vpn_url || '');
   const vpnHref = escapeHtml(r.vpn_url || '#');
@@ -789,7 +796,7 @@ function renderResult(job) {
   resultEl.innerHTML = (job.status === 'done' && r.mode === 'local-uninstall'
     ? '<strong style="color:var(--ok)">Local uninstall complete.</strong><div style="color:var(--muted)">Removed install parent targets under: ' + escapeHtml(r.install_dir || '') + '</div>'
     : job.status === 'done' && isMaintenance
-    ? '<strong style="color:var(--ok)">Local master update complete.</strong><div style="color:var(--muted)">PBGui: ' + escapeHtml(r.pbgui_dir || '') + '<br>PB7: ' + escapeHtml(r.pb7_dir || '') + '<br>PB8: ' + escapeHtml(r.pb8_dir || '') + '</div>'
+    ? '<strong style="color:var(--ok)">Local master update complete.</strong><div style="color:var(--muted)">PBGui: ' + escapeHtml(r.pbgui_dir || '') + '<br>PB7: ' + escapeHtml(r.pb7_dir || '') + '<br>PB8: ' + escapeHtml(r.pb8_dir || '') + '<br>PB9: ' + escapeHtml(r.pb9_dir || '') + '</div>'
     : job.status === 'done' && r.mode === 'local'
     ? '<strong style="color:var(--ok)">Local installation complete.</strong><div>Open PBGui: <a href="' + localHref + '" target="_blank">' + localUrl + '</a></div><div style="color:var(--muted)">PBGui: ' + escapeHtml(r.pbgui_dir || '') + '<br>PB7: ' + escapeHtml(r.pb7_dir || '') + '<br>PB8: ' + escapeHtml(r.pb8_dir || '') + '<br>Python: ' + escapeHtml(r.pbgui_python || '') + '</div>'
     : job.status === 'done'
@@ -931,7 +938,7 @@ function startJob(confirmedUninstall, confirmedHostKey) {
     return;
   }
   currentJobMode = installMode.value;
-  const maintenance = currentJobMode === 'local-pb8' || currentJobMode === 'local-update-all';
+  const maintenance = ['local-pb8','local-pb9','local-update-all'].includes(currentJobMode);
   const startText = currentJobMode === 'local-uninstall' ? 'Starting uninstall...' : (maintenance ? 'Starting update...' : 'Starting installation...');
   stopPolling();
   startProgressTimer();

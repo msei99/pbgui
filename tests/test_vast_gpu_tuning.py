@@ -359,8 +359,9 @@ def test_rental_card_preview_uses_preliminary_measured_profile(monkeypatch, tmp_
 
     class Profiles:
         """Return one version-compatible same-variant calibration profile."""
-        def __init__(self, root):
+        def __init__(self, root, *, runtime='pb8'):
             assert root == tmp_path
+            assert runtime == 'pb8'
 
         def preliminary_match(self, offer):
             """Select the advertised variant before runtime measurement."""

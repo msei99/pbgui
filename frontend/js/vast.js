@@ -45,12 +45,25 @@
     setCalibrationOptionsOpen(el('calibration-options').hidden);
   });
   el('calibration-close').addEventListener('click', () => setCalibrationOptionsOpen(false));
-  const calibrationDefaults = {
+  const calibrationDefaults = nativeRuntime ? {
+    small:{start:128, step:128, maximum:256, gain:10, timeout:600},
+    medium:{start:256, step:128, maximum:1024, gain:5, timeout:1200},
+    large:{start:512, step:256, maximum:2048, gain:5, timeout:1800},
+  } : {
     small:{start:4096, step:4096, maximum:131072, gain:10, timeout:390},
     medium:{start:5632, step:512, maximum:12288, gain:5, timeout:3600},
     large:{start:5632, step:512, maximum:12288, gain:5, timeout:5400},
   };
   const calibrationFields = ['population', 'step', 'maximum', 'gain', 'timeout'];
+  if (nativeRuntime) {
+    for (const key of ['population','step','maximum']) {
+      el('calibration-' + key).min = '16';
+      el('calibration-' + key).step = '16';
+      el('calibration-' + key).value = String(calibrationDefaults.small[key === 'population' ? 'start' : key]);
+    }
+    el('calibration-timeout').value = String(calibrationDefaults.small.timeout);
+    for (const prefix of ['offer','active']) el(prefix + '-gpu-population').min = '16';
+  }
   function calibrationSelection() {
     const preset = el('calibration-preset').value;
     const values = Object.fromEntries(calibrationFields.map(key =>
@@ -450,7 +463,9 @@
     const verified = profile.runtime_verified ? ' · runtime verified' : ' · preliminary Vast offer';
     const floor = profile.work_limit_is_floor
       ? ' · work limit is a base value; Auto may raise it for a larger job' : '';
-    return source + reference + card + match + verified + floor;
+    const preparation = Number(profile.profile_cpu_workers) > 0
+      ? ' · measured with ' + Number(profile.profile_cpu_workers) + ' CPU preparation workers' : '';
+    return source + reference + card + match + verified + floor + preparation;
   }
 
   function setRentalGpuFields(prefix, values) {
@@ -463,11 +478,12 @@
     const population_size = Number(el(prefix + '-gpu-population').value);
     const batch_size = Number(el(prefix + '-gpu-batch').value);
     const max_dispatch_candidate_bars = Number(el(prefix + '-gpu-work-limit').value);
-    if (!Number.isSafeInteger(population_size) || population_size < 1024 || population_size > 131072
+    const minimum = typeof nativeRuntime !== 'undefined' && nativeRuntime ? 16 : 1024;
+    if (!Number.isSafeInteger(population_size) || population_size < minimum || population_size > 131072
         || !Number.isSafeInteger(batch_size) || batch_size < 1 || batch_size > population_size
         || !Number.isSafeInteger(max_dispatch_candidate_bars)
         || max_dispatch_candidate_bars < 1 || max_dispatch_candidate_bars > 1e12) {
-      throw new Error('Enter a population of 1,024–131,072, a batch up to that population, and a positive work limit up to 1 trillion.');
+      throw new Error('Enter a population of ' + minimum.toLocaleString() + '–131,072, a batch up to that population, and a positive work limit up to 1 trillion.');
     }
     return {population_size, batch_size, max_dispatch_candidate_bars};
   }
@@ -486,11 +502,12 @@
     const population_size = Number(values?.population_size);
     const batch_size = Number(values?.batch_size);
     const max_dispatch_candidate_bars = Number(values?.max_dispatch_candidate_bars);
-    if (!Number.isSafeInteger(population_size) || population_size < 1024 || population_size > 131072
+    const minimum = typeof nativeRuntime !== 'undefined' && nativeRuntime ? 16 : 1024;
+    if (!Number.isSafeInteger(population_size) || population_size < minimum || population_size > 131072
         || !Number.isSafeInteger(batch_size) || batch_size < 1 || batch_size > population_size
         || !Number.isSafeInteger(max_dispatch_candidate_bars)
         || max_dispatch_candidate_bars < 1 || max_dispatch_candidate_bars > 1e12) {
-      throw new Error('Enter a population of 1,024–131,072, a batch up to that population, and a positive work limit up to 1 trillion.');
+      throw new Error('Enter a population of ' + minimum.toLocaleString() + '–131,072, a batch up to that population, and a positive work limit up to 1 trillion.');
     }
     return {population_size, batch_size, max_dispatch_candidate_bars};
   }
@@ -576,7 +593,7 @@
           const label = document.createElement('label'); label.textContent = labelText;
           const isWorkLimit = key === 'max_dispatch_candidate_bars';
           const input = document.createElement('input'); input.type = 'number';
-          input.min = isWorkLimit ? '0.000001' : key === 'population_size' ? '1024' : '1';
+          input.min = isWorkLimit ? '0.000001' : key === 'population_size' ? (nativeRuntime ? '16' : '1024') : '1';
           input.max = isWorkLimit ? '1000' : '131072';
           input.step = isWorkLimit ? '0.000001' : '1';
           input.value = isWorkLimit ? (Number(values?.[key]) / 1e9 || '') : (values?.[key] ?? '');
@@ -784,7 +801,7 @@
         && !job.calibration_source_id
         && (selection.legacy
           ? !job.calibration_preset
-          : job.calibration_preset === selection.preset && Number(job.calibration_profile_candidate?.protocol) === 4)
+          : job.calibration_preset === selection.preset && [4, 5].includes(Number(job.calibration_profile_candidate?.protocol)))
         && (!pendingOnly || !job.calibration_profile_accepted_at));
     candidates.sort((left, right) => {
       const powerOf = ({job}) => Number(job.calibration_profile_candidate.hardware_identity?.gpu_power_limit_watts);
@@ -800,6 +817,7 @@
     container.replaceChildren();
     if (!completedCalibration(job)) { container.hidden = true; return; }
     const candidate = job.calibration_profile_candidate;
+    const nativeCohorts = Number(candidate.protocol) === 5;
     const identity = candidate.hardware_identity || {};
     const head = document.createElement('div'); head.className = 'calibration-result-head';
     const title = document.createElement('span'); title.className = 'calibration-result-title';
@@ -812,9 +830,11 @@
     container.appendChild(head);
     const meta = document.createElement('div'); meta.className = 'calibration-result-meta';
     const metaParts = [];
-    if (Number(candidate.protocol) === 4) metaParts.push(job.calibration_source_id
+    if ([4, 5].includes(Number(candidate.protocol))) metaParts.push(job.calibration_source_id
       ? 'Exact frozen queue input · source ' + job.calibration_source_id
       : 'EMA-anchor ' + (job.calibration_preset || 'custom') + ' reference');
+    if (nativeCohorts) metaParts.push('PB9 completed cohorts · cold cohort excluded · dispatch work cap not measured');
+    if (nativeCohorts && Number(candidate.cpu_workers) > 0) metaParts.push('CPU preparation workers ' + Number(candidate.cpu_workers));
     if (Number(candidate.protocol) === 3) metaParts.push('EMA-anchor calibration');
     else if (Number(candidate.protocol) === 2) metaParts.push('Legacy trailing-martingale calibration; rate may cover only one logged generation');
     if (Number.isFinite(Number(identity.vram_mib))) metaParts.push(fmt(Number(identity.vram_mib) / 1024, 2) + ' GB runtime VRAM');
@@ -826,14 +846,15 @@
     const stopReason = job.calibration_result?.stop_reason || candidate.stop_reason;
     const stopLabels = {scaling_plateau:'Scaling plateau reached',performance_regression:'Next step was slower',
       vram_limit:'VRAM safety limit reached',rental_deadline:'Rental deadline reached; faster populations may exist',
-      maximum_safety_limit:'131k safety limit reached'};
+      maximum_safety_limit:nativeCohorts ? 'Configured maximum population reached' : '131k safety limit reached'};
     if (stopLabels[stopReason]) metaParts.push(stopLabels[stopReason]);
     metaParts.push(job.calibration_profile_accepted_at ? 'Local profile active' : 'Ready to use as a local profile');
     meta.textContent = metaParts.join(' · '); container.appendChild(meta);
     const wrap = document.createElement('div'); wrap.className = 'table-wrap';
     const table = document.createElement('table'); table.setAttribute('aria-label', 'GPU performance test results');
     const thead = document.createElement('thead'), header = document.createElement('tr');
-    ['Population', 'Candidates / s', 'Rate window', 'Completed GPU proxy', 'Effective dispatch', 'Measured', 'Evidence', 'Result'].forEach(label => {
+    ['Population', 'Candidates / s', 'Rate window', nativeCohorts ? 'GPU rows' : 'Completed GPU proxy',
+      nativeCohorts ? 'Requested batch' : 'Effective dispatch', 'Measured', 'Evidence', 'Result'].forEach(label => {
       const cell = document.createElement('th'); cell.textContent = label; header.appendChild(cell);
     });
     thead.appendChild(header); table.appendChild(thead);
@@ -850,15 +871,15 @@
             + (lastDispatch > 0 ? ' · last ' + lastDispatch.toLocaleString() : '')
           : '—';
         const rateWindow = Number(row.rate_window_seconds);
-        const generations = Number(row.generation_count);
+        const generations = Number(nativeCohorts ? row.completed_cohorts : row.generation_count);
         const values = [
           Number(row.population_size).toLocaleString(),
           Number.isFinite(Number(row.rate_per_second)) ? fmt(Number(row.rate_per_second), 1) : '—',
-          rateWindow > 0 ? formatElapsedSeconds(rateWindow) + (generations > 0 ? ' · ' + generations + ' gen' : '') : '—',
-          Number(row.proxy_seconds) > 0 ? formatElapsedSeconds(Number(row.proxy_seconds)) : '—',
-          dispatch,
+          rateWindow > 0 ? formatElapsedSeconds(rateWindow) + (generations > 0 ? ' · ' + generations + (nativeCohorts ? ' cohorts' : ' gen') : '') : '—',
+          nativeCohorts ? Number(row.gpu_rows).toLocaleString() : Number(row.proxy_seconds) > 0 ? formatElapsedSeconds(Number(row.proxy_seconds)) : '—',
+          nativeCohorts ? Number(row.requested_batch_size).toLocaleString() : dispatch,
           Number.isFinite(Number(row.wall_seconds)) ? formatElapsedSeconds(Number(row.wall_seconds)) : '—',
-          row.source === 'heartbeat' ? '5-minute heartbeat' : row.source === 'generation_profile'
+          nativeCohorts ? 'Native completed cohorts; host overhead included' : row.source === 'heartbeat' ? '5-minute heartbeat' : row.source === 'generation_profile'
             ? (row.all_dispatches_full ? 'One batch per scenario · ' + Number(row.scenario_count || 1)
               + ' scenarios' : 'PB8 GPU profile')
             : row.source === 'completed_generation' ? 'Sparse legacy log' : String(row.source || '—'),
@@ -3003,7 +3024,7 @@
       message('Rental settings or supervision are unavailable.', true); return;
     }
     const selection = calibrationSelection();
-    const search = selection.legacy
+    const search = selection.legacy && !nativeRuntime
       ? {start:5632, step:512, maximum:12288, gain:5, timeout:3600}
       : selection;
     const offer = selectedOffer;
@@ -3015,7 +3036,9 @@
         + savedPreferences.hours + ' hours and a $' + fmt(savedPreferences.budget,2)
         + ' budget target? Test populations ' + search.start.toLocaleString() + ' to '
         + search.maximum.toLocaleString() + ' in ' + search.step.toLocaleString()
-        + ' steps, requiring ' + search.gain + '% gain and one complete generation per case. '
+        + ' steps, requiring ' + search.gain + (nativeRuntime
+          ? '% gain and five minutes of completed cohorts per case after first-use warmup. '
+          : '% gain and one complete generation per case. ')
         + 'Each case has a ' + search.timeout + '-second timeout. The rental is deleted when finished.',
       confirmText:'Rent and tune this job'
     });
@@ -3219,7 +3242,8 @@
     if (!window.PBGuiDialogs?.confirm) { message('Calibration confirmation unavailable. Reload this page.', true); return; }
     const offer = selectedOffer;
     const workload = selection.legacy
-      ? 'fixed Small EMA-anchor reference (3 coins, Binance, 2024)'
+      ? (nativeRuntime ? 'fixed native Small EMA-anchor reference (2 coins, 3 days, Binance)'
+        : 'fixed Small EMA-anchor reference (3 coins, Binance, 2024)')
       : selection.preset + ' EMA-anchor reference with population ' + selection.start.toLocaleString()
         + ' to ' + selection.maximum.toLocaleString() + ' in steps of ' + selection.step.toLocaleString()
         + ', at least ' + selection.gain + '% gain and up to ' + selection.timeout + ' seconds per case';

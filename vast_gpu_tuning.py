@@ -195,10 +195,20 @@ def rental_card_profile(offer: dict, state: dict | None = None,
     identity = gpu_variant_identity(offer, runtime_identity)
     match = None
     try:
-        profiles = CalibrationProfiles(profile_root or Path(__file__).resolve().parent / 'data/vast')
+        runtime = state.get('runtime', 'pb8')
+        profiles = CalibrationProfiles(profile_root or Path(__file__).resolve().parent / 'data/vast', runtime=runtime)
         match = (profiles.match(identity) if identity['runtime_verified']
                  else profiles.preliminary_match(offer))
-        if not (match and match.get('protocol') in SUPPORTED_PROFILE_PROTOCOLS
+        if runtime == 'pb9':
+            from vast_calibration import NATIVE_CALIBRATION_IMAGES, NATIVE_PROTOCOL_VERSION
+            from vast_worker_profiles import worker_profile
+            native = worker_profile('pb9')
+            if not (match and match.get('protocol') == NATIVE_PROTOCOL_VERSION
+                    and match.get('worker_image') == native.image
+                    and native.image in NATIVE_CALIBRATION_IMAGES
+                    and match.get('pb8_revision') == native.revision):
+                match = None
+        elif not (match and match.get('protocol') in SUPPORTED_PROFILE_PROTOCOLS
                 and IMAGE in COMPATIBLE_CALIBRATION_IMAGES
                 and match.get('worker_image') in COMPATIBLE_CALIBRATION_IMAGES
                 and match.get('pb8_revision') == REVISION):
@@ -207,25 +217,26 @@ def rental_card_profile(offer: dict, state: dict | None = None,
         match = None
     bandwidth = _positive_number(offer.get('gpu_mem_bw_gbps'))
     tflops = _positive_number(offer.get('tflops'))
-    population = int(match['population_size']) if match else _cuda_population(vram_gb, bandwidth, tflops)
+    population = int(match['population_size']) if match else (128 if runtime == 'pb9' else _cuda_population(vram_gb, bandwidth, tflops))
     measured_limit = match.get('max_dispatch_candidate_bars') if match else None
     has_measured_limit = type(measured_limit) is int and measured_limit > 0
     return {
         'population_size': population,
         'batch_size': population,
         'max_dispatch_candidate_bars': (measured_limit if has_measured_limit
-                                        else _dispatch_limit(vram_gb, None)),
+                                        else 500_000_000 if runtime == 'pb9' else _dispatch_limit(vram_gb, None)),
         'source': match.get('source') if match else 'hardware_fallback',
         'match_type': match.get('match_type') if match else None,
         'profile_power_limit_watts': ((match.get('hardware_identity') or {}).get('gpu_power_limit_watts')
                                       if match else None),
+        'profile_cpu_workers': match.get('cpu_workers') if match else None,
         'card_power_limit_watts': power or _positive_number(offer.get('gpu_max_power_watts')),
         'runtime_verified': bool(identity['runtime_verified'] and power is not None),
         'work_limit_is_floor': not has_measured_limit,
     }
 
 
-def _validated_rental_gpu_profile(value: dict | None) -> dict | None:
+def _validated_rental_gpu_profile(value: dict | None, *, runtime: str = 'pb8') -> dict | None:
     """Reject malformed persisted rental overrides before preparing execution input."""
     if value is None:
         return None
@@ -236,7 +247,8 @@ def _validated_rental_gpu_profile(value: dict | None) -> dict | None:
     population = value['population_size']
     batch = value['batch_size']
     limit = value['max_dispatch_candidate_bars']
-    if (type(population) is not int or not 1024 <= population <= 131072
+    if (runtime not in ('pb8', 'pb9') or type(population) is not int
+            or not (16 if runtime == 'pb9' else 1024) <= population <= 131072
             or type(batch) is not int or not 1 <= batch <= population
             or type(limit) is not int or not 1 <= limit <= 1_000_000_000_000):
         raise ValueError('Invalid rental GPU profile')

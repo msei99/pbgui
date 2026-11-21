@@ -16,7 +16,7 @@ SERVICE = "PBWheelStatus"
 
 def wheel_installed(pbgdir: Path, product: str, repo: Path, python: Path) -> bool:
     """Accept only a receipt tied to this checkout and installed Rust extension."""
-    if product not in {"pb7", "pb8"} or not repo.is_dir() or not python.is_file():
+    if product not in {"pb7", "pb8", "pb9"} or not repo.is_dir() or not python.is_file():
         return False
     receipt = pbgdir / "data/state" / f"{product}-wheel.json"
     try:
@@ -32,8 +32,8 @@ def wheel_installed(pbgdir: Path, product: str, repo: Path, python: Path) -> boo
             text=True, stderr=subprocess.DEVNULL, timeout=10).strip()
         if commit != data["commit"]:
             return False
-        site = python.parent.parent / "lib/python3.12/site-packages/passivbot_rust"
-        binaries = list(site.glob("passivbot_rust*.so"))
+        site = python.parent.parent / "lib/python3.12/site-packages"
+        binaries = list((site/'passivbot_rust').glob("passivbot_rust*.so")) + list(site.glob("passivbot_rust*.so"))
         if len(binaries) != 1 or binaries[0].is_symlink():
             return False
         with binaries[0].open("rb") as handle:
@@ -42,25 +42,25 @@ def wheel_installed(pbgdir: Path, product: str, repo: Path, python: Path) -> boo
         return False
 
 
-def pb8_live_current(pbgdir: Path, repo: Path, python: Path, expected_commit: str) -> bool:
+def pb8_live_current(pbgdir: Path, repo: Path, python: Path, expected_commit: str, product: str = 'pb8') -> bool:
     """Skip a live reinstall only when the selected checkout and runtime are intact."""
-    if not re.fullmatch(r"[0-9a-f]{40}", expected_commit) or not wheel_installed(pbgdir, "pb8", repo, python):
+    if product not in {'pb8', 'pb9'} or not re.fullmatch(r"[0-9a-f]{40}", expected_commit) or not wheel_installed(pbgdir, product, repo, python):
         return False
     config = configparser.ConfigParser()
     try:
         config.read(pbgdir / "pbgui.ini")
     except (OSError, configparser.Error):
         return False
-    if (config.get("main", "pb8dir", fallback="") != str(repo)
-            or config.get("main", "pb8venv", fallback="") != str(python)):
+    if (config.get("main", product+"dir", fallback="") != str(repo)
+            or config.get("main", product+"venv", fallback="") != str(python)):
         return False
-    marker = pbgdir / "data/locks/pb8-runtime-invalid"
+    marker = pbgdir / f"data/locks/{product}-runtime-invalid"
     venv = python.parent.parent
     site = venv / "lib/python3.12/site-packages"
     source_requirements = repo / "requirements-live.txt"
     installed_requirements = venv / "lib/python3.12/requirements-live.txt"
     cli = python.parent / "passivbot"
-    rust_binaries = list((site / "passivbot_rust").glob("passivbot_rust*.so"))
+    rust_binaries = list((site / "passivbot_rust").glob("passivbot_rust*.so")) + list(site.glob("passivbot_rust*.so"))
     try:
         if (marker.exists() or marker.is_symlink()
                 or not cli.is_file() or not os.access(cli, os.X_OK)
@@ -95,7 +95,7 @@ def prepared_bundle_verified(bundle: Path, product: str, commit: str) -> bool:
         if (manifest.get("format") != 1 or manifest.get("product", "pb8") != product
                 or not re.fullmatch(r"[0-9a-f]{40}", commit)
                 or manifest.get("commit") != commit
-                or not isinstance(artifacts, dict) or len(artifacts) != 3):
+                or not isinstance(artifacts, dict) or len(artifacts) != (2 if product == 'pb9' else 3)):
             return False
         for name, expected in artifacts.items():
             if (not isinstance(name, str) or Path(name).name != name
@@ -128,12 +128,12 @@ def cleanup_vps_rust(
     if role not in {"vps", "slave"}:
         return {"cleaned": False, "reason": "Rust cleanup is restricted to VPS runners"}
     if prepared_product is not None:
-        if prepared_product not in {"pb7", "pb8"} or prepared_bundle is None or prepared_commit is None:
+        if prepared_product not in {"pb7", "pb8", "pb9"} or prepared_bundle is None or prepared_commit is None:
             return {"cleaned": False, "reason": "Incomplete prepared wheel selection"}
         if not prepared_bundle_verified(prepared_bundle, prepared_product, prepared_commit):
             return {"cleaned": False, "reason": "Prepared wheel verification failed"}
     installed = []
-    for product in ("pb7", "pb8"):
+    for product in ("pb7", "pb8", "pb9"):
         repo_text = config.get("main", f"{product}dir", fallback="").strip()
         python_text = config.get("main", f"{product}venv", fallback="").strip()
         repo = Path(repo_text) if repo_text else pbgdir.parent / product
@@ -194,10 +194,10 @@ def main() -> None:
     """Inspect a wheel install or run guarded VPS Rust cleanup."""
     parser = argparse.ArgumentParser()
     parser.add_argument("pbgdir", type=Path)
-    parser.add_argument("--check-product", choices=["pb7", "pb8"])
+    parser.add_argument("--check-product", choices=["pb7", "pb8", "pb9"])
     parser.add_argument("--repo", type=Path)
     parser.add_argument("--python", type=Path)
-    parser.add_argument("--prepare-product", choices=["pb7", "pb8"])
+    parser.add_argument("--prepare-product", choices=["pb7", "pb8", "pb9"])
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--commit")
     parser.add_argument("--current-commit")
@@ -207,10 +207,10 @@ def main() -> None:
             parser.error("--check-product cannot be combined with prepared wheel cleanup")
         if args.repo is None or args.python is None:
             parser.error("--check-product requires --repo and --python")
-        if args.current_commit and args.check_product != "pb8":
-            parser.error("--current-commit requires --check-product pb8")
+        if args.current_commit and args.check_product not in {"pb8", "pb9"}:
+            parser.error("--current-commit requires --check-product pb8 or pb9")
         result = {"installed": (
-            pb8_live_current(args.pbgdir, args.repo, args.python, args.current_commit)
+            pb8_live_current(args.pbgdir, args.repo, args.python, args.current_commit, product=args.check_product)
             if args.current_commit else wheel_installed(args.pbgdir, args.check_product, args.repo, args.python)
         )}
     else:

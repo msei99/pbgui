@@ -28,9 +28,9 @@ class WorkerProfile:
         return self
 
 
-PB9 = WorkerProfile('pb9','1b85ea6cc4bb7b917ada43725044b7559763c46e',
-                    'ghcr.io/msei99/pbgui-pb9-worker@sha256:354e286b2c51ec7512ef2a22d3b7b3f31e5f1523dd7de91ee9b8ac298102f444','v9.0.0',
-                    'https://github.com/msei99/passivbot')
+PB9 = WorkerProfile('pb9','1b5805ed52c9fdf8eab6d21ed938e2c73edda85b',
+                    'ghcr.io/msei99/pbgui-pb9-worker@sha256:9a8a4bbb6c5dfb8f927e1652dd52894da83f4bff03b74d0422814d0b3941d99b','v9.0.0',
+                    'https://github.com/enarjord/passivbot')
 
 
 def worker_profile(runtime='pb8'):

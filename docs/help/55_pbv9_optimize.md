@@ -14,6 +14,10 @@ when selected.
 Open **PBv9 → Optimize**. Configs, Queue, Results and Paretos use the same page,
 controls and engine as PBv8, with a separate native PB9 runtime and data namespace.
 
+Configs load before native metadata, queue and result inspection. While the first
+list request is pending, the page shows a loading state instead of zero configs.
+Backtest counts update separately without delaying the config rows.
+
 ## Editor and native policy
 
 Policy labels and checkboxes follow the PB8 layout. Dotted-underlined labels open
@@ -332,15 +336,33 @@ Building an image locally does not publish it, rent a GPU or deploy to a host.
 A physical GPU test is required before claiming a verified cloud execution path.
 
 GPU optimization has passed a synthetic RTX 3090 smoke test, including upload
-and result import. Performance tuning remains unavailable for this PB9 image:
-its authoritative GPU cohorts do not provide the PB8 proxy-generation evidence
-required by the shared calibration protocols. PBGui rejects these calibration
-rentals before contacting the provider. PB8 calibration remains available.
+and result import. PB9 performance tuning uses a separate native-cohort
+measurement (protocol 5) through the shared test controls. Each population/batch
+probe runs in a fresh process, excludes its first compilation cohort and requires
+at least five minutes of fully completed GPU cohort measurements. Failed,
+prefiltered and cached-only cohorts cannot establish a recommendation. The rate
+includes host preparation and result handling; it is not a CUDA-kernel-only rate.
+The result lists GPU rows, requested batch width and completed cohorts. It does
+not claim a measured dispatch work cap. PB8 retains its own measurement protocol.
+
+The published native-calibration worker supports protocol 5 and is pinned by
+its verified public digest. Small tests compare populations 128 and 256. Native
+reference workloads use 2 coins / 3 days (Small), 3 coins / 7 days (Medium), or
+3 coins / 14 days (Large); PB8 reference workloads remain unchanged. A matching
+job snapshot measures its own workload instead. Physical GPU verification must
+complete before a measured profile can be accepted.
+A synthetic RTX 3090 calibration verified population 128 with ten completed
+cohorts over 316 seconds. The 256 probe reached the rental collection reserve
+before its full window and was excluded; this does not establish an optimum
+for other workloads. Accepted PB9 profiles are separate from PB8. Automatic application requires the
+same workload, allocated CPU worker count, source/image and measured GPU identity and both population and
+batch set to Auto with tuning enabled. Explicit values remain authoritative;
+the profile does not replace the dispatch work cap.
 
 Native cloud bundles include the same launch options and managed seed artifacts.
 Host paths are replaced by verified bundle paths. Only the selected scenarios'
 training inputs are exported. Local checkpoints use local Resume; cloud Requeue
-starts a new job. The native worker is pinned to public source `1b85ea6`; the local
+starts a new job. The native worker is pinned to public source `1b5805ed`; the local
 PB9 source must match that worker before preparation. The existing local
 installation is not updated implicitly. An imported preparation report may reject
 cloud inputs when their dataset identity differs; the worker never bypasses
@@ -348,3 +370,12 @@ PB9's report verification.
 
 The separate AI Loops subsystem is not enabled for PB9 yet. Strategy Explorer
 remains a separate integration step.
+
+The PB9 cloud worker starts through the official native CLI, preserving prepared
+configuration reuse. Search mode is not changed automatically: Max can improve
+CPU preparation throughput but changes the search schedule. PB8 GPU proxy rates
+are not directly comparable to complete PB9 GPU evaluations.
+
+The current worker pins PR #2305 source `1b5805ed` and includes the Hyperliquid
+numeric market-ID age fix. The published image passed offline age and native
+CLI/cohort probes; this revision has no new physical GPU performance measurement.

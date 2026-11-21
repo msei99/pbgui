@@ -1,0 +1,196 @@
+{
+    "status": "published_pinned_api_activation_verified",
+    "image": "pbgui-pb9-worker:1b85ea6-native-cli-candidate",
+    "local_image_id": "sha256:9a1a63abab4a1b7187bddce35c246a8a633358169bf6b372285712572a7603c8",
+    "base_image": "ghcr.io/msei99/pbgui-pb9-worker@sha256:13868e9b2bdc4a2109cf1fb6981971dac90aa1213d0215294983d80da2cc8712",
+    "native_revision": "1b85ea6cc4bb7b917ada43725044b7559763c46e",
+    "change": "Use official installed CLI for PB9 module identity and prepared-config reuse; PB8 command unchanged",
+    "input_hashes": {
+        "setup/vast_gpu_benchmark/cloud_worker.py": "940ffcff21ceb6885d1446f02fae0b40786b51e75c7711f3251fba0f35aff68e",
+        "setup/vast_gpu_benchmark/verify_native_calibration.py": "90ba8fdabdcfff0f5e860a597c7b700ea939e4674417d537f880535059defd83"
+    },
+    "physical_gpu_scope": "Equivalent CLI on unchanged pinned base, not a rental booted from the new candidate image",
+    "workload": {
+        "gpu": "RTX 3090 24 GB",
+        "effective_cpu_cores": 15.36,
+        "synthetic_coins": [
+            "BTC",
+            "ETH"
+        ],
+        "evaluated_days": 2,
+        "population": 128,
+        "seed": 7,
+        "long_only": true,
+        "hsl_enabled": false,
+        "starting_balance": 100000
+    },
+    "measurement_limits": [
+        "Single host; cold generation excluded; complete cohorts only",
+        "PB8 GPU proxies differ from CPU-validated outputs and PB9 complete GPU replays",
+        "Migrated PB8/PB9 search spaces and financial engines differ",
+        "No claim of equal converged optimizer outcome or general speed"
+    ],
+    "active_case_measurements": [
+        {
+            "name": "pb8_pair_active2",
+            "source": "pb8-pair",
+            "mode": "off",
+            "batch_size": 128,
+            "elapsed_seconds": 282.47334575653076,
+            "exit_code": 130,
+            "completed_cohorts": 269,
+            "measured_seconds": 144.44923507864587,
+            "measured_gpu_candidates": 34304,
+            "gpu_candidates_per_second": 237.48135447946868,
+            "observed_wall_seconds": 162.0,
+            "exact_completed_delta": 2142,
+            "exact_per_second": 13.222222222222221
+        },
+        {
+            "name": "pb8_pair_active2_exact8",
+            "source": "pb8-pair",
+            "mode": "off",
+            "batch_size": 128,
+            "elapsed_seconds": 79.2593903541565,
+            "exit_code": 130,
+            "completed_cohorts": 107,
+            "measured_seconds": 60.81921910215169,
+            "measured_gpu_candidates": 13568,
+            "gpu_candidates_per_second": 223.08737600216878,
+            "observed_wall_seconds": 65.0,
+            "exact_completed_delta": 848,
+            "exact_per_second": 13.046153846153846
+        },
+        {
+            "name": "pb9_pair_active2_max_catalogcache",
+            "source": "pb9-pair",
+            "mode": "max",
+            "batch_size": null,
+            "elapsed_seconds": 85.43289422988892,
+            "exit_code": 130,
+            "completed_cohorts": 10,
+            "measured_seconds": 64.226,
+            "measured_gpu_candidates": 1152,
+            "gpu_candidates_per_second": 17.936661165260176
+        },
+        {
+            "name": "pb9_pair_active2_max_cli",
+            "source": "pb9-pair",
+            "mode": "max",
+            "batch_size": null,
+            "elapsed_seconds": 199.25235724449158,
+            "exit_code": 130,
+            "completed_cohorts": 8,
+            "measured_seconds": 69.094,
+            "measured_gpu_candidates": 896,
+            "gpu_candidates_per_second": 12.967840912380236
+        },
+        {
+            "name": "pb9_pair_active2_off_cli",
+            "source": "pb9-pair",
+            "mode": "off",
+            "batch_size": 128,
+            "elapsed_seconds": 166.09643936157227,
+            "exit_code": 130,
+            "completed_cohorts": 4,
+            "measured_seconds": 116.69200000000001,
+            "measured_gpu_candidates": 384,
+            "gpu_candidates_per_second": 3.2907140163850133
+        }
+    ],
+    "correctness": {
+        "active_cli_max_vs_cache_common_candidates": 1024,
+        "active_cli_max_vs_cache_metric_mismatches": 0,
+        "frozen_common_candidates": 16,
+        "frozen_bot_configs_equal": true,
+        "frozen_gpu_modes_full_metrics_equal": true,
+        "cpu_gpu_fill_counts_equal": true,
+        "cpu_gpu_cagr_maximum_relative_difference": 0.028219471381462826,
+        "cpu_gpu_reconstructed_endpoint_factor_maximum_relative_difference": 0.00015673097346672422,
+        "cpu_gpu_numerical_cause": "Unresolved native CPU/GPU discrepancy; not introduced by launch or cache"
+    },
+    "cache_status": "Temporary run-local experiment only; no upstream bot source edits",
+    "checks": {
+        "focused_tests": "136 passed",
+        "offline_candidate_image_probe": "passed; network disabled; actual installed CLI/_Search identity verified",
+        "fable": "Fable 5.2 Medium bounded analysis and follow-up review",
+        "publication_focused_tests": "156 passed in 32.35s; isolated offline checks outside socket-restricted sandbox"
+    },
+    "evidence": {
+        "local_archive": "/tmp/pb9-speed-study-20261120/evidence.tar.gz",
+        "sha256": "ff0b3b71fe6d09c74022d352ff7c4cdc2037e592857f61fac9da6da5e1f4faa6",
+        "bytes": 26719961,
+        "files": 109,
+        "retention": "Temporary directory; raw archive not versioned"
+    },
+    "rental": {
+        "worker_id": "8f4bb625c2af459d92581a69c96861bf",
+        "instance_id": 61703106,
+        "status": "completed",
+        "rental_state": "deletion_verified",
+        "provider_present": false,
+        "billing": {
+            "instance_id": 61703106,
+            "amount_usd": 0.139,
+            "breakdown": {
+                "gpu": 0.127,
+                "disk": 0.012,
+                "bwd": 0.0,
+                "bwu": 0.0
+            },
+            "checked_at": 1795211696.3464205,
+            "reported_at": 1795211696.3464205,
+            "error": null
+        }
+    },
+    "report": "docs/plans/pb9-gpu-throughput-20261120.md",
+    "image_tag": "ghcr.io/msei99/pbgui-pb9-worker:1b85ea6-native-cli-v1",
+    "registry_digest": "sha256:8093291ccefb61db45da7bdc7812186d2267ca91d2492f8d813fa4499b6d291f",
+    "anonymous_manifest_verified": true,
+    "registry_config_digest": "sha256:9a1a63abab4a1b7187bddce35c246a8a633358169bf6b372285712572a7603c8",
+    "layers": {
+        "sha256:b4e4c0127190b05d4a0b5b8de6097a4faf15a2096170c1dc46ea30349b0ad8ac": 49584944,
+        "sha256:08457856946d74c8aede7d750e185d1e479a79b8123d1b805182a580d224a6e2": 24056247,
+        "sha256:8cab6ce149c24516f80b26a762b6b9aaebcaf4fbe51d4c6844af7d7dbc372f2d": 64413065,
+        "sha256:01a6a9ffe665b63ea18491fedb646423413ae3fdefcf7776ee25a2eaff8a673e": 211662335,
+        "sha256:9fc49131440437072df6c70097a5db4accbb50654ef7d3b82c636109f8ef361f": 6162299,
+        "sha256:cbbcd353f76c8ee15dafcb5c2d64bc2d581c6bf87c584725ec8050d8507b33e3": 25718575,
+        "sha256:02a27392fe493a4b31d440408340ea74d5f2608fb54e906215eb836573d4ca84": 250,
+        "sha256:7c456d8cbd6836f1783ab818e8041bce013d3497107df0557f7682f5df871322": 359769944,
+        "sha256:9c34216393e28699a958458342a05266062ae6537dac2add81f8114c0983215b": 541315125,
+        "sha256:f17f0cbe65a4aeeaa5fe127a1442c4c43e8a95298e8521e6b53a1c7b6a2a7bea": 201811276,
+        "sha256:3e0146d86ebcdfc03c1d6422573db258913ae42d27c7bfb1d70f6d23bf547e5d": 1082819,
+        "sha256:ba821429f1106cb7accbdf373b54b564e5b288add0ad8a12ffe019f0337da571": 248,
+        "sha256:e643ea426d575bae9b5cd25d486804985bb335ce771e0d46d69e52dc4d2910ac": 825150784,
+        "sha256:187a155f6592dba56c598d1086f251ec2bec4f623cf918f4b890ae784dc036bb": 375407643,
+        "sha256:f58c928460a726aa787299edc53a38ec916d54ff055b093470efa878e0b6a359": 366946730,
+        "sha256:d807bf62351d7b78e38b373d62a189b70fbb37f6ab8a0d20b72034bb5eed973f": 206185750,
+        "sha256:18bae41f1cfe855efcd0e2934181c7996336e2e188d106974fe0db3ee34f1f18": 61014702,
+        "sha256:1b08118eed339cee4dda97d1c58a70adaa99e4a9bb5fc8aa2b806c714f5ae19f": 170720627,
+        "sha256:a179ce661424a136679ed1c16866e867f779f20aec7745eba48ea6ae1089607b": 90246321,
+        "sha256:60f2c55a3025f0220e4c09450c754596592092f82b8b3b7bbe8eae4b434abf06": 825201,
+        "sha256:ce54c14a1344af248c44a3eaa0f03289d856bfec74c84a669e68e04bcb1267da": 10459111,
+        "sha256:96ce6a972c02036d8a651baf52689fd08d67a5adb8b9adc23df02bb8a8e7fcb9": 153520145,
+        "sha256:d2448e8572e42c85ddb580c1a428cc8847f4830f91ee279a5dae4508a53234f4": 1269,
+        "sha256:ae40b4973d6dad8242e889518644e2a468a271859455ab7e9263f9af87059c1a": 330,
+        "sha256:626c69421ed37de326dd641acf7e3e88d1504599f8b513878c673a19f19285b9": 2601,
+        "sha256:b861e1cf3ea5d1dd0ec7c730ed76b5d4be559b4ec73c6a6026303969a34a0152": 94,
+        "sha256:971246495db5b56e3c9abcae2f047e63f710a28fa7f15804c51951ddf7a7f591": 13094,
+        "sha256:433fe9b1a9818a63c803e09484a1092ddde2a3b904d3dd48ee2c055fe3281d50": 2832,
+        "sha256:1db4136c1b34baef73ff6142fd936d13a019d6ca561fa55337c15b85dbd4bddb": 400019,
+        "sha256:27370f70db28e18f1ca2fe56be1c7f3875e4754ed5eabb8b904b33c29bc01755": 13523,
+        "sha256:a51d0584379bd8a4f6c775eb6ada69f5417513237c5ef771698691d2afaba4fa": 1943,
+        "sha256:8a93aea0cd28f6fb0b90e5db5fbb184ccb8214c5634b84048f359b2c73578bc0": 37827,
+        "sha256:c474e5b50025d95d8adb27de6ab78a2be7a71efb53088a6d7839e687f38c2802": 13663,
+        "sha256:30e8b8d13ce2177ea0949c0f48de37ba470057faf33512d3617d22a5d16e887d": 2268,
+        "sha256:9eecd3d13482fbce22322fd71bc071088dd69f3bcc8bf43fd3b3d559432f40e1": 38309
+    },
+    "api_serial": 3770,
+    "activation": {
+        "api_serial": 3770,
+        "verification": "Authenticated browser GET /api/vast-v9/profile after controlled API-only restart",
+        "image": "ghcr.io/msei99/pbgui-pb9-worker@sha256:8093291ccefb61db45da7bdc7812186d2267ca91d2492f8d813fa4499b6d291f",
+        "published": true,
+        "new_rental_started": false
+    }
+}

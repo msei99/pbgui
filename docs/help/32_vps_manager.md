@@ -331,3 +331,29 @@ There is no automatic source compilation fallback on a live VPS. Existing Rust
 tools are removed only when every installed PB7/PB8 runtime has a verified wheel
 receipt and no unrelated software uses the shared toolchain. Masters keep their
 build tools for new source revisions.
+
+### PB9 installation and updates
+
+Use **Master (local) → Install PB9 / Update PB9** or select a host and its
+**Install PB9 / Update PB9** action. The standalone Master Installer offers the
+same explicit PB9 mode. Fresh master installation still installs PB7/PB8;
+**Update PBGui and installed bots** includes PB9 only after it is configured.
+
+PB9 reuses the PB8 binary build, update lock and validation workflow. Its source
+is a sibling `pb9` directory and its environment is `venv_pb9`; neither may
+share or overlap PBGui, PB7 or PB8. The local standalone installer preserves
+configured absolute PB9 paths. The normal update follows the official `v9`
+branch; it does not retain a temporary local PR checkout automatically.
+The selected commit must declare a v9 config schema before checkout or stopping
+PB9 live instances. PB7/PB8 instances are not selected by that stop operation.
+
+PB9 provides one wheel containing Python code and Rust. The build preserves its
+tracked Cargo.lock, verifies the installed extension against the source-bound
+manifest and writes a PB9 wheel receipt. A failed runtime-changing update leaves
+PB9 unavailable for Run, Backtest and Optimize until a successful update clears
+its marker. Existing independent backtests/optimizations are not stopped.
+Remote install availability uses fresh role and disk telemetry, with separate
+PB9 readiness. Remote actions require an explicit host action; merely opening
+this view performs no installation. Target hosts need the updated PBGui helper
+files before they can use this workflow. Default-path local uninstall includes
+`pb9` and `venv_pb9` under the selected parent, as stated in its confirmation.

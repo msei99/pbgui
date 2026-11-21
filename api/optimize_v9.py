@@ -147,6 +147,8 @@ class NativeOptimizeEngine(OptimizeEngine):
     def _strict_runtime(self):
         """Require a clean native source tree; report local changes as a conflict."""
         try:
+            from pb9_backtest_runtime import require_runtime_available
+            require_runtime_available(self.PBGDIR)
             return self.native.runtime(strict=True)
         except RuntimeError as exc:
             raise HTTPException(409, str(exc)) from None

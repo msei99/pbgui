@@ -2,10 +2,66 @@
 
 ## Development
 
+- Publish the current PB9 work on `dev-pb9-integration` as an explicitly
+  unfinished, not fully tested development snapshot. Document completed focused
+  checks and the still untested real remote install/update and latest-worker GPU
+  paths in the README and PB9 development status. This is not a stable release
+  and does not update any master or VPS.
+
+- Add explicit PB9 Install/Update actions to the shared local installer and VPS
+  Manager. Reuse the PB8 wheel, locking and validation flow with separate sibling
+  source/environment paths, schema checks before checkout, slot-specific failed
+  update guards, optional PB9 telemetry and default-path uninstall coverage.
+  Update All includes PB9 only when configured; fresh installs retain PB7/PB8.
+- Publish and pin the PB9 Vast worker to PR #2305 source `1b5805ed`, including
+  Hyperliquid numeric market-ID age resolution. Verify native build/CLI/cohort
+  probes, offline BTC/ETH/SOL/HYPE age resolution and anonymous image download.
+  Retain previous rental identities and PB8 workers. No new GPU rental or VPS
+  update is performed by this change.
+  Activate locally with API serial 3772 and verify the local/VPS PB9 actions
+  and native worker revision through the normal PBGui browser menus.
+
+- Prioritize the shared PB8/PB9 Optimize config list before native metadata,
+  queue/result inspection and WebSocket snapshots. Show loading and initial
+  failure states instead of a misleading zero-config count; retain deferred
+  backtest counts, navigation and selection.
+
+- Activate Passivbot PR #2305 locally at `1b5805ed` for Hyperliquid numeric
+  market-ID age resolution. Verify the installed package, native source pairing,
+  and offline BTC/ETH/SOL/HYPE age recovery with the existing minimum-age policy.
+  Cloud workers retain their separately pinned source revision.
+
+- Publish and pin the PB9 Vast worker at official merged source `da9f90d6`,
+  retaining existing CUDA layers, native CLI/calibration checks and previous
+  rental identities. Local and cloud source selection agree again.
+
+- Verify the merged Passivbot PR #2268 at `da9f90d6` and update the separate local
+  PB9 runtime with its matching rebuilt Rust extension. Validate native config
+  helpers and offline Bybit/Hyperliquid external-source reads without changing
+  candle files. Cloud workers retain their separately pinned source revision.
+
+- Correct the prepared PB9 cloud worker to use the installed native optimizer CLI,
+  matching local module-import semantics and retaining prepared result configs.
+  Keep PB8 launch behavior and validated native options unchanged. Measure PB8/PB9
+  on one synthetic RTX 3090 workload; distinguish PB8 proxy throughput from CPU
+  validation and native GPU results. Keep the metadata-cache experiment out of
+  production. Publish the verified CLI worker and pin its immutable public digest;
+  retain prior PB9 rental ownership and calibration protocol compatibility.
+
+- Add a separate PB9 native-cohort calibration protocol using shared Vast test,
+  scaling, supervision, acceptance and result controls. Exclude cold compilation
+  and unproven GPU work, revalidate rates on import and isolate accepted profiles
+  by runtime. Preserve explicit execution settings and never infer a PB8 dispatch
+  work cap from native cohort throughput. Publish and pin the protocol-5 worker;
+  use native 128/256 Small probes and bind profiles to allocated CPU workers.
+  Fix helper discovery when the worker starts through SSH outside its image directory.
+  Verify a real RTX 3090 native profile (128 candidates, 10 completed cohorts,
+  316 seconds); discard the incomplete 256 probe at the rental deadline and
+  verify all synthetic test rentals are deleted.
 - Verify native PB9 GPU execution end to end on synthetic RTX 3090 data. Keep
-  PB9 performance-tuning rentals disabled: the native authoritative GPU backend
-  does not emit the PB8 proxy-generation calibration evidence. Show the reason
-  in the shared UI and reject API/direct starts before credentials or payment.
+  runtime-specific calibration evidence: the native GPU backend does not emit
+  PB8 proxy-generation evidence. Reject incompatible images/protocols before
+  credentials or payment.
 
 - Accept and validate configurable protocol-4 calibration plans in the shared
   SSH startup path, alongside the existing fixed protocol-3 tests.
@@ -31,7 +87,7 @@
   Build a native PB9 worker with its runtime entry and public pinned source;
   verify all four CLI options in offline synthetic CPU runs. Publication and
   matching local runtime activation are complete; native GPU optimization passed
-  a physical smoke test. Native performance calibration remains unavailable.
+  a physical smoke test. Native performance calibration uses its own protocol.
 
 - Document all 27 native PB9 metric selectors in the EN/DE Optimize guides,
   with definitions, units, objective/limit guidance and availability rules.

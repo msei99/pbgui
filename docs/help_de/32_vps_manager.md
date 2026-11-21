@@ -336,3 +336,32 @@ Ausweichweg. Vorhandene Rust-Toolchains bleiben erhalten; sie duerfen erst nach
 einer Pruefung aller installierten PB7/PB8-Wheel-Nachweise und fremder Cargo-
 Nutzung entfernt werden. Master behalten ihre Build-Werkzeuge fuer neue
 Quellstaende.
+
+### PB9 installieren und aktualisieren
+
+Nutze **Master (local) → Install PB9 / Update PB9** oder die entsprechende
+Aktion beim ausgewählten Host. Auch der eigenständige Master Installer bietet
+einen ausdrücklichen PB9-Modus. Eine frische Master-Installation installiert
+weiter PB7/PB8. **Update PBGui and installed bots** berücksichtigt PB9 erst,
+wenn es konfiguriert ist.
+
+PB9 nutzt denselben Wheel-Bau, dieselbe Update-Sperre und Prüfung wie PB8.
+Quellcode liegt im benachbarten Verzeichnis `pb9`, die Umgebung in `venv_pb9`.
+Diese Pfade dürfen PBGui, PB7 und PB8 weder teilen noch überlappen. Der lokale
+eigenständige Installer erhält konfigurierte absolute PB9-Pfade. Normale Updates
+folgen dem offiziellen Branch `v9`; ein temporärer lokaler PR-Stand wird dabei
+nicht automatisch beibehalten. Vor Checkout und Stoppen verwalteter PB9-Bots
+muss der ausgewählte Commit ein v9-Konfigurationsschema besitzen. PB7/PB8-Bots
+werden von diesem Stoppen nicht ausgewählt.
+
+PB9 enthält Python und Rust in einem gemeinsamen Wheel. Der Bau erhält die
+versionierte Cargo.lock, prüft die installierte Erweiterung gegen das zur Quelle
+gehörende Manifest und schreibt einen PB9-Wheel-Beleg. Scheitert ein Update nach
+der Runtime-Änderung, bleiben Run, Backtest und Optimize für PB9 gesperrt, bis
+ein erfolgreiches Update den Marker löscht. Bereits unabhängig laufende
+Backtests und Optimierungen werden nicht gestoppt. Remote-Aktionen prüfen Rolle,
+Speicherplatz und Aktualität der Telemetrie sowie die eigene PB9-Bereitschaft.
+Erst die ausdrückliche Host-Aktion installiert; das Öffnen der Ansicht nicht.
+Der Zielhost benötigt vorher die aktualisierten PBGui-Helferdateien. Die lokale
+Deinstallation berücksichtigt auch `pb9` und `venv_pb9` unter dem ausgewählten
+Elternverzeichnis; darauf weist ihre Bestätigung hin.

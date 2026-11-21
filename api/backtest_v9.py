@@ -127,6 +127,8 @@ def _runtime(cancel=None):
     if not status.get('commit'):
         raise HTTPException(409, "The PB9 source commit cannot be verified")
     try:
+        from pb9_backtest_runtime import require_runtime_available
+        require_runtime_available(PBGDIR)
         evidence = source_identity(Path(paths['pb9dir']))
     except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
         raise HTTPException(409, 'PB9 source must be clean and verifiable before backtesting') from exc

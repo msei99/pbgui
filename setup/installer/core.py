@@ -252,7 +252,7 @@ class LocalMasterMaintenanceConfig:
     def validate(self) -> None:
         """Validate maintenance action and install parent."""
         self.install_dir = normalize_local_install_dir(self.install_dir)
-        if self.action not in {"local-pb8", "local-update-all"}:
+        if self.action not in {"local-pb8", "local-pb9", "local-update-all"}:
             raise ValueError("Unsupported local master maintenance action.")
 
 
@@ -520,8 +520,8 @@ def _install_master_wheel(
     _run_command([python, "-m", "pip", "install", "--no-index", "--only-binary=:all:",
                   "--find-links", bundle, requirement], log, timeout=1800)
     _run_command([python, "-m", "pip", "install", "--no-index", "--only-binary=:all:",
-                  "--no-deps", "--force-reinstall", bundle / manifest["python_wheel"],
-                  bundle / manifest["rust_wheel"]], log, timeout=1800)
+                  "--no-deps", "--force-reinstall", *dict.fromkeys(
+                      [bundle / manifest["python_wheel"], bundle / manifest["rust_wheel"]])], log, timeout=1800)
     shutil.copy2(bundle / "Cargo.lock", repo / "passivbot-rust" / "Cargo.lock")
     _run_command([python, wheel_tool, "runtime", "--product", product, "--bundle", bundle,
                   "--repo", repo, "--commit", commit, "--receipt", receipt], log)
@@ -538,8 +538,8 @@ def _clone_installer_wheel_source(product: str, stage: Path, log: LogCallback) -
         _run_command(["git", "-C", repo, "checkout", "--detach", PB7_PINNED_COMMIT], log)
     else:
         _run_command(["git", "clone", "--filter=blob:none", "--depth", "1", "--branch",
-                      "master", "https://github.com/enarjord/passivbot.git", repo], log, timeout=900)
-    verify_passivbot_major(repo, 7 if product == "pb7" else 8)
+                      "v9" if product == "pb9" else "master", "https://github.com/enarjord/passivbot.git", repo], log, timeout=900)
+    verify_passivbot_major(repo, {"pb7": 7, "pb8": 8, "pb9": 9}[product])
     return repo
 
 
@@ -770,9 +770,11 @@ def _local_install_targets(install_dir: Path) -> dict[str, Path]:
         "PBGui": install_dir / "pbgui",
         "PB7": install_dir / "pb7",
         "PB8": install_dir / "pb8",
+        "PB9": install_dir / "pb9",
         "PBGui venv": install_dir / "venv_pbgui",
         "PB7 venv": install_dir / "venv_pb7",
         "PB8 venv": install_dir / "venv_pb8",
+        "PB9 venv": install_dir / "venv_pb9",
     }
 
 
@@ -899,6 +901,9 @@ def inspect_local_master_install(install_dir_value: str) -> dict[str, object]:
         "pbgui_dir": str(pbgui_dir),
         "installed": False,
         "pb8_installed": False,
+        "pb9_installed": False,
+        "pb9_configured": False,
+        "pb9_maintenance_errors": [],
         "maintenance_errors": [],
         "update_all_errors": [],
     }
@@ -956,6 +961,26 @@ def inspect_local_master_install(install_dir_value: str) -> dict[str, object]:
     else:
         pb7_venv = pb7_python.parent.parent
 
+    pb9_errors = list(common_errors)
+    pb9_source = cfg.get("main", "pb9dir", fallback="").strip()
+    pb9_python = cfg.get("main", "pb9venv", fallback="").strip()
+    pb9_dir = Path(pb9_source).expanduser() if pb9_source else install_dir / "pb9"
+    pb9_venv = Path(pb9_python).expanduser().parent.parent if pb9_python else install_dir / "venv_pb9"
+    if pb9_python and Path(pb9_python).parent.name != "bin":
+        pb9_errors.append("Configured PB9 interpreter must be under its own venv/bin directory.")
+    pb9_exists = (pb9_dir / ".git").exists()
+    status["pb9_installed"] = bool(pb9_exists and (pb9_venv / "bin/passivbot").is_file())
+    status["pb9_configured"] = bool(pb9_source or pb9_python or pb9_dir.exists())
+    try:
+        from passivbot_install_paths import validate_install_paths
+        validate_install_paths("pb9", pbgui_dir, pb9_dir, pb9_venv)
+        if pb9_dir.exists() and not pb9_exists and any(pb9_dir.iterdir()):
+            pb9_errors.append("PB9 target exists but is not a Git checkout.")
+        if pb9_exists and _git_output(pb9_dir, "status", "--porcelain", "--untracked-files=no"):
+            pb9_errors.append("PB9 has local changes; refusing to overwrite them.")
+    except (OSError, ValueError, RuntimeError) as exc:
+        pb9_errors.append(f"Could not inspect PB9 install paths: {exc}")
+
     pb8_dir = install_dir / "pb8"
     pb8_venv = install_dir / "venv_pb8"
     pb8_exists = (pb8_dir / ".git").is_dir()
@@ -995,10 +1020,15 @@ def inspect_local_master_install(install_dir_value: str) -> dict[str, object]:
             "pb7_venv": str(pb7_venv) if pb7_venv is not None else "",
             "pb8_dir": str(pb8_dir),
             "pb8_venv": str(pb8_venv),
+            "pb9_dir": str(pb9_dir),
+            "pb9_venv": str(pb9_venv),
+            "pb9_maintenance_errors": pb9_errors,
+            "can_maintain_pb9": not pb9_errors,
             "maintenance_errors": common_errors,
-            "update_all_errors": [*common_errors, *update_all_errors],
+            "update_all_errors": [*common_errors, *update_all_errors,
+                                  *(pb9_errors if status["pb9_configured"] else [])],
             "can_maintain_pb8": not common_errors,
-            "can_update_all": not common_errors and not update_all_errors,
+            "can_update_all": not common_errors and not update_all_errors and not (status["pb9_configured"] and pb9_errors),
         }
     )
     return status
@@ -1142,7 +1172,7 @@ def run_local_master_maintenance(
     install_dir = Path(config.install_dir)
     pbgui_dir = install_dir / "pbgui"
     status = inspect_local_master_install(config.install_dir)
-    errors_key = "update_all_errors" if config.action == "local-update-all" else "maintenance_errors"
+    errors_key = {"local-update-all": "update_all_errors", "local-pb9": "pb9_maintenance_errors"}.get(config.action, "maintenance_errors")
     errors = [str(item) for item in status.get(errors_key) or []]
     if not status.get("installed"):
         raise RuntimeError("No existing local PBGui master was found under the selected install parent.")
@@ -1207,12 +1237,16 @@ def run_local_master_maintenance(
             pb8_playbook = root / "master-update-pb8.yml"
             pb8_guard = root / "pb7_guard.py"
 
-        log("Installing or updating Passivbot v8 without stopping PB7 or PBRun...")
-        run_playbook(
-            pb8_playbook,
-            {**common_vars, "pb8_guard": str(pb8_guard)},
-            "update-pb8",
-        )
+        products = ["pb9"] if config.action == "local-pb9" else ["pb8"]
+        if config.action == "local-update-all" and status.get("pb9_configured"):
+            products.append("pb9")
+        for product in products:
+            log(f"Installing or updating {product.upper()} without stopping other runtimes...")
+            playbook = (pbgui_dir if config.action == "local-update-all" else root) / f"master-update-{product}.yml"
+            variables = {**common_vars, "pb8_guard": str(pb8_guard)}
+            if product == "pb9":
+                variables.update(pb8dir=str(status["pb9_dir"]), pb8venv=str(status["pb9_venv"]))
+            run_playbook(playbook, variables, f"update-{product}")
 
     final_status = inspect_local_master_install(config.install_dir)
     result = {
@@ -1222,6 +1256,7 @@ def run_local_master_maintenance(
         "pbgui_dir": str(final_status.get("pbgui_dir") or pbgui_dir),
         "pb7_dir": str(final_status.get("pb7_dir") or ""),
         "pb8_dir": str(final_status.get("pb8_dir") or install_dir / "pb8"),
+        "pb9_dir": str(final_status.get("pb9_dir") or install_dir / "pb9"),
         "completed_at": int(time.time()),
     }
     log("Local master maintenance completed successfully.")

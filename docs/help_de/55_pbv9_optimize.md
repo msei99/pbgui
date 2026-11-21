@@ -16,6 +16,10 @@ werden bei der Auswahl unverändert erhalten.
 Seite, Bedienung und Engine wie PBv8, mit eigener nativer PB9-Laufzeit und
 getrennten Datenverzeichnissen.
 
+Die Config-Liste lädt vor nativen Metadaten, Queue- und Ergebnisprüfungen. Bis zur
+ersten Antwort erscheint eine Ladeanzeige statt „0 configs“. Backtest-Zähler
+werden separat aktualisiert und verzögern die Config-Zeilen nicht.
+
 ## Editor und native Regeln
 
 Beschriftungen und Checkboxen folgen dem PB8-Aufbau. Gepunktet unterstrichene
@@ -354,17 +358,37 @@ nichts, mietet keine GPU und installiert nichts auf einem Host. Ein Test auf ein
 echten GPU ist nötig, bevor der Cloud-Ablauf als verifiziert gilt.
 
 GPU-Optimierung wurde mit synthetischen Daten auf einer RTX 3090 einschließlich
-Upload und Ergebnisimport geprüft. Performance-Tuning bleibt für dieses
-PB9-Image gesperrt: Seine maßgeblichen GPU-Auswertungen liefern die für die
-gemeinsamen Kalibrierungsprotokolle benötigten PB8-Proxy-Generationsdaten nicht.
-PBGui lehnt solche Kalibrierungsmieten vor dem Provider-Aufruf ab.
-PB8-Kalibrierung bleibt verfügbar.
+Upload und Ergebnisimport geprüft. PB9-Performance-Tuning verwendet über die
+gemeinsamen Bedienelemente eine eigene Messung abgeschlossener GPU-Gruppen
+(Protokoll 5). Jede Populations-/Batch-Probe läuft in einem neuen Prozess,
+verwirft dessen erste Gruppe mit Kompilierung und verlangt mindestens fünf
+Minuten vollständig abgeschlossener GPU-Messungen. Fehler, Vorfilter und reine
+Cache-Treffer begründen keine Empfehlung. Die Rate umfasst auch Vorbereitung
+und Ergebnisverarbeitung auf der CPU; sie ist keine reine CUDA-Kernel-Rate.
+Angezeigt werden GPU-Zeilen, angeforderte Batch-Breite und abgeschlossene
+Gruppen. Eine gemessene Dispatch-Arbeitsgrenze wird daraus nicht abgeleitet.
+PB8 behält sein eigenes Messprotokoll.
+
+Der veröffentlichte Kalibrierungs-Worker unterstützt Protokoll 5 und ist über
+seinen geprüften öffentlichen Digest festgelegt. Small vergleicht Populationen
+128 und 256. Native Referenztests verwenden 2 Coins / 3 Tage (Small), 3 Coins /
+7 Tage (Medium) oder 3 Coins / 14 Tage (Large); PB8-Referenztests bleiben gleich.
+Ein Test aus einem Job-Snapshot misst dessen eigenen Workload. Erst eine
+abgeschlossene echte GPU-Messung ermöglicht die Profilannahme. Angenommene
+Eine synthetische RTX-3090-Kalibrierung bestätigte Population 128 mit zehn
+abgeschlossenen Gruppen über 316 Sekunden. Die 256er-Probe erreichte vor ihrem
+vollen Messfenster die Sammelreserve und wurde verworfen; daraus folgt kein
+Optimum für andere Workloads. PB9-Profile bleiben von PB8 getrennt. Automatische Anwendung erfordert denselben Workload, dieselbe Anzahl
+zugeteilter CPU-Worker, Quellstand und
+Worker sowie die gemessene GPU-Identität. Population und Batch müssen auf Auto
+stehen und Tuning muss aktiviert sein. Ausdrückliche Werte bleiben maßgeblich;
+die Dispatch-Arbeitsgrenze wird durch das Profil nicht ersetzt.
 
 Native Cloud-Pakete enthalten dieselben Startoptionen und verwalteten Seeds.
 Lokale Pfade werden durch geprüfte Paketpfade ersetzt. Exportiert werden die
 Trainingseingaben der ausgewählten Szenarien. Lokale Checkpoints verwenden
 lokales Resume; Cloud Requeue startet einen neuen Job. Der Worker ist auf den
-öffentlichen Stand `1b85ea6` gepinnt. Vor der Vorbereitung muss die lokale PB9-Quelle
+öffentlichen Stand `1b5805ed` gepinnt. Vor der Vorbereitung muss die lokale PB9-Quelle
 dazu passen; die bestehende Installation wird nicht automatisch aktualisiert.
 Ein lokaler Vorbereitungsbericht kann Cloud-Eingaben mit abweichender
 Datensatzidentität ablehnen. Die native Prüfung wird nicht umgangen.
@@ -373,3 +397,14 @@ Das separate AI-Loops-System ist für PB9 noch nicht aktiviert. Strategy Explore
 bleibt ein eigener Integrationsschritt.
 
 Die native Performance History aktualisiert sich automatisch und bleibt nach dem Aufräumen der Cloud-Jobs lesbar. Konto, Marktplatz, Kalibrierung und Mietautomatik verwenden die gemeinsamen Vast-Komponenten.
+
+Der PB9-Cloud-Worker startet über die offizielle native CLI und verwendet bereits
+vorbereitete Konfigurationen wieder. Der Suchmodus wird nicht automatisch geändert:
+Max kann die CPU-Vorbereitung beschleunigen, verändert aber den Suchablauf.
+PB8-GPU-Vorbewertungen sind nicht direkt mit vollständigen PB9-GPU-Auswertungen
+vergleichbar.
+
+Der aktuelle Worker ist auf PR #2305 (`1b5805ed`) gepinnt und enthält die
+Altersauflösung numerischer Hyperliquid-Markt-IDs. Offline-Alterstests und native
+CLI/Cohort-Prüfungen sind bestanden. Für diese Revision gibt es keine neue
+Leistungsmessung auf einer echten GPU.

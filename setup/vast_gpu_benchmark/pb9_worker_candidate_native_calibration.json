@@ -1,0 +1,82 @@
+{
+    "schema_version": 1,
+    "state": "published_physical_calibration_verified",
+    "runtime": "pb9",
+    "source_revision": "1b85ea6cc4bb7b917ada43725044b7559763c46e",
+    "protocol": 5,
+    "measurement": "native_cohort_v1",
+    "image_tag": "ghcr.io/msei99/pbgui-pb9-worker:1b85ea6-native-calibration-v1",
+    "image_id": "sha256:01c7048d3f4f3b75852dca09bde2d31a4bc241618bc2f27632310088003dfc12",
+    "base_registry_digest": "sha256:354e286b2c51ec7512ef2a22d3b7b3f31e5f1523dd7de91ee9b8ac298102f444",
+    "build_inputs_sha256": {
+        "setup/vast_gpu_benchmark/cloud_worker.py": "0539ca580581dd1c9ef43f6985ba4ddd068fd447108910716f62201e0624e8f4",
+        "vast_native_calibration.py": "c31e33eb90fc5d962292e08d31d4a1d1594624b22008627bea89e3ad1ef46cf7",
+        "setup/vast_gpu_benchmark/verify_native_calibration.py": "66ab59d9cd04ae2fb78c1653dbd53daa94a4736027fa246cbd74744a05eef338"
+    },
+    "verification": {
+        "backend": "408 focused tests passed; 210 focused configuration tests passed after final native preset/CPU binding changes (overlapping selections)",
+        "browser": "27 focused browser/help/logging tests passed; 9 browser tests passed again after final result-label and cache-version change (overlapping selections)",
+        "image": "Real PB9 CohortDiagnostics log format validated with simulated timings; no network or CUDA execution",
+        "physical_gpu_calibration": true,
+        "performance_and_logging": "32 passed initially; both flagged audit cases corrected and individually passed; native build allowlist passed again",
+        "ssh_import_boundary": "Passed without module cache or helpful PYTHONPATH after reproducing and fixing the first real attempt failure",
+        "native_presets": "All three native reference presets accepted by the installed PB9 config validator; read-only, no GPU claim",
+        "physical_profile_acceptance": "Real imported evidence accepted/matched in temporary store; PB8 mismatch verified; production profile unchanged"
+    },
+    "review": {
+        "model": "claude-fable-5-2",
+        "effort": "medium",
+        "scope": "one tool-free static review",
+        "followup": "Incremental log reader; exact cohort population; strict native protocol; runtime-isolated profiles; bounded Small preset; defensive malformed-plan and optional-profile handling."
+    },
+    "safety": "Publication and synthetic physical GPU calibration explicitly authorized; independent job and guard services enforce a 45-minute deadline.",
+    "api_serial": 3769,
+    "registry_digest": "sha256:13868e9b2bdc4a2109cf1fb6981971dac90aa1213d0215294983d80da2cc8712",
+    "publication": {
+        "anonymous_manifest_verified": true,
+        "config_digest_verified": true,
+        "layer_count": 32
+    },
+    "physical_gpu_test": {
+        "job_id": "ba2d956600a94ddeb9fe2501e8f116b9",
+        "status": "completed",
+        "instance_id": 61698454,
+        "budget_usd": 1,
+        "maximum_seconds": 2700,
+        "absolute_deadline": 1795208263.421552,
+        "rental_deadline": 1795208062.2358203,
+        "attempts": [
+            {
+                "id": "f3546512438e42859ad5e551be00f03b",
+                "instance_id": 61695903,
+                "deletion_verified": true,
+                "reported_usd": 0.014
+            },
+            {
+                "id": "c896bf8fed2c474caedbd822b8109f2a",
+                "instance_id": 61697368,
+                "deletion_verified": true,
+                "reported_usd": 0.036
+            }
+        ],
+        "current_populations": [
+            128,
+            256
+        ],
+        "first_case": "valid: 10 completed cohorts / 316.487 seconds / 4.044399927959126 candidates per second",
+        "stop_reason": "rental_deadline",
+        "deletion_verified": true,
+        "provider_absence_verified": true,
+        "population_size": 128,
+        "completed_cohorts": 10,
+        "rate_window_seconds": 316.487,
+        "rate_per_second": 4.044399927959126,
+        "cpu_workers": 9,
+        "profile_id": "ad6a6fb6bfdec66599c97b469de1ffd8c7bfcdbdac982e22caa44fab23fda80f",
+        "reported_usd": 0.019,
+        "reported_all_attempts_usd": 0.069,
+        "billing_final": false,
+        "collection": "Existing locked snapshot collector/finalizer explicitly exercised after remote completion; independent deletion verified",
+        "limitation": "256 probe did not complete a full measurement window before the collection reserve; excluded from profile, no scaling optimum claimed"
+    }
+}

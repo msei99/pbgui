@@ -17,12 +17,13 @@ import vast_transfer
 from vast_provider import VastError
 
 
-@pytest.mark.parametrize('protocol', [3, 4])
+@pytest.mark.parametrize('protocol', [3, 4, 5])
 @pytest.mark.parametrize('valid', [False, True])
 def test_calibration_start_transfers_only_valid_supported_plans(monkeypatch, protocol, valid):
     """Exercise real start dispatch for fixed and configurable calibration plans."""
     from vast_calibration import configurable_calibration_plan
-    plan = configurable_calibration_plan(4096, 4096, 8192, .10, 300, 600)
+    plan = configurable_calibration_plan(4096, 4096, 8192, .10, 300, 600,
+                                         protocol=5 if protocol == 5 else 4)
     if protocol == 3:
         plan.update(protocol=3, max_population=131072)
         plan.pop('case_timeout_seconds')
@@ -32,7 +33,8 @@ def test_calibration_start_transfers_only_valid_supported_plans(monkeypatch, pro
     connection.identifier = 'a' * 32
     connection.remote_root = '/work/pbgui/jobs/' + connection.identifier
     connection.store = SimpleNamespace(read=lambda _id, *names: (
-        {'files': []} if names else {'kind': 'calibration', 'calibration_plan': plan}))
+        {'files': []} if names else {'kind': 'calibration', 'calibration_plan': plan,
+                                    'runtime': 'pb9' if protocol == 5 else 'pb8'}))
     monkeypatch.setattr('vast_market_cache.stage_public_markets', lambda _connection: None)
     monkeypatch.setattr('vast_inception.stage_inception', lambda _connection: None)
     connection.proxy_budget_command = lambda: None

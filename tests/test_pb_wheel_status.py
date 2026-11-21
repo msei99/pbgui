@@ -1,4 +1,6 @@
 """Verified PB7/PB8 receipt and guarded VPS Rust cleanup regression tests."""
+from installer_template_helpers import pb8_playbook_source
+
 import hashlib
 import json
 from pathlib import Path
@@ -100,7 +102,7 @@ def test_pb8_live_skip_requires_current_commit_and_complete_runtime(tmp_path, mo
 
 def test_pb8_live_update_skips_only_verified_normal_updates() -> None:
     """The fast path precedes wheel preparation and excludes branch switches."""
-    play = yaml.safe_load(Path("vps-update-pb8.yml").read_text())[0]
+    play = yaml.safe_load(pb8_playbook_source("vps-update-pb8.yml"))[0]
     tasks = {task["name"]: task for task in play["tasks"]}
     names = list(tasks)
     skip = tasks["Skip PB8 update for an already current live runtime"]
@@ -115,7 +117,7 @@ def test_pb8_live_update_skips_only_verified_normal_updates() -> None:
         "Prepare central PB8 wheels before runtime changes"
     )
     assert tasks["Resolve official PB8 commit before checking the installed live runtime"]["register"] == "pb8_preflight_head"
-    preparation = yaml.safe_load(Path("tasks/pb8_live_wheels_prepare.yml").read_text())
+    preparation = yaml.safe_load(pb8_playbook_source("tasks/pb8_live_wheels_prepare.yml"))
     resolve = next(task for task in preparation if task["name"] == "Resolve immutable PB8 wheel source commit on controller")
     assert resolve["register"] == "pb8_controller_head"
     assert resolve["when"] == "not pb8_branch_switch or pb8_target_commit == ''"
@@ -341,7 +343,7 @@ def test_pb7_branch_switch_confirms_controller_commit_and_recovers_pbrun(playboo
 def test_branch_switches_require_explicit_remote_url_before_bot_stop():
     """A missing fork URL cannot silently select the official upstream source."""
     pb7 = yaml.safe_load(Path("tasks/pb7_branch_wheel_commit.yml").read_text())
-    pb8 = yaml.safe_load(Path("tasks/pb8_live_wheels_prepare.yml").read_text())
+    pb8 = yaml.safe_load(pb8_playbook_source("tasks/pb8_live_wheels_prepare.yml"))
     assert pb7[0]["name"] == "Require selected PB7 remote URL for branch switch"
     assert "remote_url != '' or use_pinned_ref" in pb7[0]["assert"]["that"]
     assert pb8[0]["name"] == "Require selected PB8 remote URL for branch switch"

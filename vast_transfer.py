@@ -638,11 +638,12 @@ class WorkerConnection:
             from vast_calibration import (ANCHOR_POPULATIONS, PROTOCOL_VERSION,
                                           CONFIGURABLE_PROTOCOL_VERSION, configurable_calibration_plan)
             plan = state.get('calibration_plan') or {}
-            if plan.get('protocol') == CONFIGURABLE_PROTOCOL_VERSION:
+            if plan.get('protocol') in (CONFIGURABLE_PROTOCOL_VERSION, 5):
                 try:
                     expected_plan = configurable_calibration_plan(
                         plan['populations'][0], plan['population_step'], plan['max_population'],
-                        plan['min_scale_gain'], plan['sample_seconds'], plan['case_timeout_seconds'])
+                        plan['min_scale_gain'], plan['sample_seconds'], plan['case_timeout_seconds'],
+                        protocol=5 if state.get('runtime') == 'pb9' else 4)
                 except (ValueError, TypeError, KeyError, IndexError):
                     expected_plan = None
                 valid_plan = expected_plan is not None and plan == expected_plan

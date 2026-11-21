@@ -13,12 +13,21 @@ from secure_files import atomic_write_private_text, ensure_private_directory
 
 SERVICE = "VastCalibration"
 NATIVE_CALIBRATION_UNAVAILABLE = (
-    'PB9 performance tuning is unavailable for the native GPU backend. Optimization is supported.'
+    'PB9 performance tuning requires the verified native-cohort worker image. Optimization is supported.'
 )
+NATIVE_PROTOCOL_VERSION = 5
+# Public immutable image with its native format/protocol verified offline.
+# Physical calibration verification is recorded separately in the build receipt.
+NATIVE_CALIBRATION_IMAGES = frozenset({
+    'ghcr.io/msei99/pbgui-pb9-worker@sha256:59dfb6f06a33886c9da007a013831c859507f90cfce6ba668cb118b171c9f5c9',
+    'ghcr.io/msei99/pbgui-pb9-worker@sha256:9a8a4bbb6c5dfb8f927e1652dd52894da83f4bff03b74d0422814d0b3941d99b',
+    'ghcr.io/msei99/pbgui-pb9-worker@sha256:8093291ccefb61db45da7bdc7812186d2267ca91d2492f8d813fa4499b6d291f',
+    'ghcr.io/msei99/pbgui-pb9-worker@sha256:13868e9b2bdc4a2109cf1fb6981971dac90aa1213d0215294983d80da2cc8712',
+})
 PROFILE_SCHEMA = 1
 PROTOCOL_VERSION = 3
 CONFIGURABLE_PROTOCOL_VERSION = 4
-SUPPORTED_PROFILE_PROTOCOLS = frozenset({1, 2, PROTOCOL_VERSION, CONFIGURABLE_PROTOCOL_VERSION})
+SUPPORTED_PROFILE_PROTOCOLS = frozenset({1, 2, PROTOCOL_VERSION, CONFIGURABLE_PROTOCOL_VERSION, NATIVE_PROTOCOL_VERSION})
 # The published upstream worker supports both fixed and configurable tests.
 CALIBRATION_WORKER_DIGEST: str | None = "3aa5c16b22a62983ec5dc46862c21c2d959856bf2362d4d9b39e3ded61f000cf"
 PREVIOUS_CALIBRATION_WORKER_DIGEST = "8ad62f43decae47fe670f3ac15ba7e4d7c648f0bb030fa511cd4771321ff4327"
@@ -66,16 +75,16 @@ PRESET_SCENARIOS = {
     'large': (('2024-01-01', '2024-03-31'), ('2024-04-01', '2024-06-30'),
               ('2024-07-01', '2024-09-30'), ('2024-10-01', '2024-12-31')),
 }
-def calibration_worker_available(image: str, protocol: int = PROTOCOL_VERSION) -> bool:
+def calibration_worker_available(image: str, protocol: int | None = None) -> bool:
     """Require an immutable image pin for the exact protocol sent to the worker."""
     if not isinstance(image, str):
         return False
     from vast_worker_profiles import worker_profile
     native=worker_profile('pb9')
     if native.published and image==native.image:
-        # Native authoritative GPU cohorts do not emit the PB8 proxy-generation
-        # evidence required by these protocols. Publication alone is no proof.
-        return False
+        return image in NATIVE_CALIBRATION_IMAGES and protocol in (None, NATIVE_PROTOCOL_VERSION)
+    if protocol is None:
+        protocol = PROTOCOL_VERSION
     return (protocol in (PROTOCOL_VERSION, CONFIGURABLE_PROTOCOL_VERSION)
             and bool(CALIBRATION_WORKER_DIGEST)
             and image.endswith('@sha256:' + CALIBRATION_WORKER_DIGEST))
@@ -152,9 +161,15 @@ def calibration_workload_fingerprint(config: dict) -> str:
     optimize = normalized.get('optimize') if isinstance(normalized, dict) else None
     if isinstance(optimize, dict):
         optimize.pop('population_size', None)
-        optimize.pop('n_cpus', None)
+        if not str(normalized.get('config_version', '')).startswith('v9.'):
+            optimize.pop('n_cpus', None)
+        if str(normalized.get('config_version', '')).startswith('v9.'):
+            for key in ('iters', 'seed'):
+                optimize.pop(key, None)
         gpu = optimize.get('gpu')
         if isinstance(gpu, dict):
+            if str(normalized.get('config_version', '')).startswith('v9.'):
+                gpu.pop('tuning_mode', None)
             for key in ('population_size', 'batch_size', 'max_dispatch_candidate_bars',
                         'validate_per_generation', 'drift_probes', 'drift_window', 'exact_workers'):
                 gpu.pop(key, None)
@@ -209,6 +224,9 @@ def preset_calibration_config(template: dict, preset: str, *, optimize_metadata:
     if preset not in PRESET_COINS:
         raise ValueError('Unknown GPU performance-test preset')
     config = canonical_calibration_config(template, optimize_metadata=optimize_metadata)
+    if str(config.get('config_version', '')).startswith('v9.'):
+        from vast_pb9 import calibration_preset
+        return calibration_preset(config, preset)
     coins = list(PRESET_COINS[preset])
     if str(config.get('config_version','')).startswith('v9.'):
         config['bot']['global']['universe']['approved_coins']=coins
@@ -228,31 +246,59 @@ def preset_calibration_config(template: dict, preset: str, *, optimize_metadata:
 
 def configurable_calibration_plan(start: int, step: int, maximum: int, min_gain: float,
                                   sample_seconds: int = 300,
-                                  case_timeout_seconds: int = 3600) -> dict:
+                                  case_timeout_seconds: int = 3600, *, protocol: int = 4) -> dict:
     """Validate a bounded one-batch search before any rental begins."""
-    if (type(start) is not int or type(step) is not int or type(maximum) is not int
-            or start < 4096 or step < 512 or maximum < start + step
+    if (type(protocol) is not int or protocol not in (4, NATIVE_PROTOCOL_VERSION)
+            or type(start) is not int or type(step) is not int or type(maximum) is not int
+            or start < (16 if protocol == NATIVE_PROTOCOL_VERSION else 4096)
+            or step < (16 if protocol == NATIVE_PROTOCOL_VERSION else 512) or maximum < start + step
             or maximum > 131072 or (maximum - start) // step > 64
             or not isinstance(min_gain, (int, float)) or not .0 <= min_gain <= .5
             or type(sample_seconds) is not int or not 300 <= sample_seconds <= 1800
             or type(case_timeout_seconds) is not int or not 600 <= case_timeout_seconds <= 7200):
         raise ValueError('Invalid configurable GPU performance-test plan')
-    return {'protocol': CONFIGURABLE_PROTOCOL_VERSION, 'populations': [start, start + step],
+    return {'protocol': protocol, 'populations': [start, start + step],
             'sample_seconds': sample_seconds, 'population_step': step,
             'min_scale_gain': float(min_gain), 'max_population': maximum,
             'vram_reserve_ratio': .15, 'case_timeout_seconds': case_timeout_seconds}
 
 
+def calibration_plan_for_runtime(plan: dict, runtime: str) -> dict:
+    """Convert the shared controls into a generation-specific measurement contract."""
+    if runtime == 'pb8':
+        return plan
+    if runtime != 'pb9' or not isinstance(plan, dict):
+        raise ValueError('Invalid calibration runtime')
+    if plan.get('protocol') == PROTOCOL_VERSION:
+        # The Small preset uses the same bounded step search, with native timing.
+        legacy = {'protocol': PROTOCOL_VERSION, 'populations': list(ANCHOR_POPULATIONS),
+                  'sample_seconds': 300, 'population_step': 4096, 'min_scale_gain': .10,
+                  'max_population': 131072, 'vram_reserve_ratio': .15}
+        if plan != legacy:
+            raise ValueError('Invalid native calibration plan')
+        return configurable_calibration_plan(128, 128, 256, .10,
+                                             case_timeout_seconds=600, protocol=NATIVE_PROTOCOL_VERSION)
+    if not isinstance(plan.get('populations'), list) or len(plan['populations']) != 2:
+        raise ValueError('Invalid native calibration plan')
+    expected = configurable_calibration_plan(
+        plan.get('populations', [None])[0], plan.get('population_step'),
+        plan.get('max_population'), plan.get('min_scale_gain'), plan.get('sample_seconds'),
+        plan.get('case_timeout_seconds'), protocol=plan.get('protocol'))
+    if expected != plan:
+        raise ValueError('Invalid native calibration plan')
+    return dict(expected, protocol=NATIVE_PROTOCOL_VERSION)
+
+
 def calibration_decision(cases: dict[int, dict], *, protocol: int = PROTOCOL_VERSION,
                          plan: dict | None = None) -> dict:
     """Choose the next linear probe while retaining protocol-2 anchor semantics."""
-    if protocol == CONFIGURABLE_PROTOCOL_VERSION:
+    if protocol in (CONFIGURABLE_PROTOCOL_VERSION, NATIVE_PROTOCOL_VERSION):
         if not isinstance(plan, dict):
             raise ValueError('Missing configurable calibration plan')
         validated = configurable_calibration_plan(
             plan.get('populations', [None])[0], plan.get('population_step'),
             plan.get('max_population'), plan.get('min_scale_gain'), plan.get('sample_seconds'),
-            plan.get('case_timeout_seconds'),
+            plan.get('case_timeout_seconds'), protocol=protocol,
         )
         if plan != validated:
             raise ValueError('Invalid configurable calibration plan')
@@ -326,7 +372,7 @@ def recommended_population(
     rates = {population: rate for population, rate in rates.items() if rate not in (None, 0)}
     if not rates:
         return None
-    if protocol == CONFIGURABLE_PROTOCOL_VERSION:
+    if protocol in (CONFIGURABLE_PROTOCOL_VERSION, NATIVE_PROTOCOL_VERSION):
         if stop_reason == 'rental_deadline':
             return max(rates, key=rates.get)
         if stop_reason == 'vram_limit':
@@ -346,8 +392,9 @@ def recommended_population(
 class CalibrationProfiles:
     """Read shipped evidence and serialize accepted local profile overrides."""
 
-    def __init__(self, root: Path, shipped_path: Path | None = None):
+    def __init__(self, root: Path, shipped_path: Path | None = None, *, runtime: str = 'pb8'):
         self.root = Path(root)
+        self.runtime = runtime
         self.local_path = self.root / "calibration_profiles.json"
         self.shipped_path = shipped_path or Path(__file__).resolve().parent / "setup/vast_gpu_benchmark/reference_profiles.json"
 
@@ -365,6 +412,10 @@ class CalibrationProfiles:
                         and (type(row['max_dispatch_candidate_bars']) is not int
                              or row['max_dispatch_candidate_bars'] <= 0))):
                 raise ValueError("Invalid GPU calibration profile")
+            if row.get('protocol') == NATIVE_PROTOCOL_VERSION and (
+                    row.get('runtime') != 'pb9' or row.get('measurement') != 'native_cohort_v1'
+                    or row.get('requested_batch_size') != row['population_size']):
+                raise ValueError('Invalid native calibration profile')
             result.append(dict(row, source=source))
         return result
 
@@ -378,7 +429,7 @@ class CalibrationProfiles:
 
     def _preferred_rows(self) -> list[dict]:
         """Keep local precedence while preferring newer protocols at equal hardware match."""
-        return sorted(self.list(), key=lambda row: (
+        return sorted((row for row in self.list() if row.get('runtime', 'pb8') == self.runtime), key=lambda row: (
             row.get('source') != 'local',
             -(row['protocol'] if type(row.get('protocol')) is int else 0),
         ))
@@ -452,8 +503,8 @@ class CalibrationProfiles:
             if self.local_path.is_file() and not self.local_path.is_symlink():
                 current = json.loads(self.local_path.read_text())
             rows = self._validated(current, "local")
-            key = (validated["gpu_variant_fingerprint"], validated.get("workload_fingerprint"))
-            rows = [row for row in rows if (row["gpu_variant_fingerprint"], row.get("workload_fingerprint")) != key]
+            key = (validated.get('runtime', 'pb8'), validated["gpu_variant_fingerprint"], validated.get("workload_fingerprint"))
+            rows = [row for row in rows if (row.get('runtime', 'pb8'), row["gpu_variant_fingerprint"], row.get("workload_fingerprint")) != key]
             rows.append({key: value for key, value in validated.items() if key != "source"})
             atomic_write_private_text(self.local_path, json.dumps({"schema": PROFILE_SCHEMA, "profiles": rows}, indent=4) + "\n")
         return validated
@@ -477,24 +528,28 @@ def finalize_calibration_result(store, identifier: str) -> dict:
         raise ValueError('Calibration evidence is missing or invalid') from exc
     protocol = result.get('protocol')
     stop_reason = result.get('stop_reason')
-    plan = state.get('calibration_plan') if protocol == CONFIGURABLE_PROTOCOL_VERSION else None
-    if protocol == CONFIGURABLE_PROTOCOL_VERSION:
+    native = state.get('runtime', 'pb8') == 'pb9'
+    if native != (protocol == NATIVE_PROTOCOL_VERSION):
+        raise ValueError('Calibration evidence does not match its runtime')
+    configurable = protocol in (CONFIGURABLE_PROTOCOL_VERSION, NATIVE_PROTOCOL_VERSION)
+    plan = state.get('calibration_plan') if configurable else None
+    if configurable:
         if not isinstance(plan, dict):
             raise ValueError('Configurable calibration plan is missing')
         expected = configurable_calibration_plan(
             plan.get('populations', [None])[0], plan.get('population_step'),
             plan.get('max_population'), plan.get('min_scale_gain'), plan.get('sample_seconds'),
-            plan.get('case_timeout_seconds'))
+            plan.get('case_timeout_seconds'), protocol=protocol)
         if plan != expected:
             raise ValueError('Configurable calibration plan changed')
     if (not isinstance(result, dict) or result.get('schema') != PROFILE_SCHEMA
             or protocol not in SUPPORTED_PROFILE_PROTOCOLS or result.get('status') != 'completed'
             or type(result.get('population_size')) is not int
-            or (protocol != CONFIGURABLE_PROTOCOL_VERSION
+            or (not configurable
                 and result['population_size'] not in ALL_POPULATIONS)
             or not isinstance(result.get('cases'), dict)):
         raise ValueError('Calibration evidence did not complete validly')
-    if protocol in (2, PROTOCOL_VERSION, CONFIGURABLE_PROTOCOL_VERSION) and stop_reason not in {
+    if protocol in (2, PROTOCOL_VERSION, CONFIGURABLE_PROTOCOL_VERSION, NATIVE_PROTOCOL_VERSION) and stop_reason not in {
         'scaling_plateau', 'performance_regression', 'vram_limit',
         'rental_deadline', 'maximum_safety_limit',
     }:
@@ -505,20 +560,23 @@ def finalize_calibration_result(store, identifier: str) -> dict:
             population = int(key)
         except (TypeError, ValueError):
             raise ValueError('Calibration evidence contains an invalid population') from None
-        if ((protocol != CONFIGURABLE_PROTOCOL_VERSION and population not in ALL_POPULATIONS)
-                or (protocol == CONFIGURABLE_PROTOCOL_VERSION
+        if ((not configurable and population not in ALL_POPULATIONS)
+                or (configurable
                     and (population < plan['populations'][0] or population > plan['max_population']
                          or (population - plan['populations'][0]) % plan['population_step'] != 0))
                 or not isinstance(row, dict)
                 or row.get('population_size') != population or row.get('valid') is not True
                 or _number(row.get('rate_per_second')) in (None, 0)):
             raise ValueError('Calibration evidence contains an invalid case')
+        if native:
+            from vast_native_calibration import validate_native_case
+            validate_native_case(row, population, plan['sample_seconds'])
         cases[population] = row
     if recommended_population(cases, protocol=protocol, stop_reason=stop_reason,
                               plan=plan) != result['population_size']:
         raise ValueError('Calibration recommendation does not match its evidence')
     measured_dispatch_limit = None
-    if protocol >= 3:
+    if protocol >= 3 and not native:
         chosen = cases[result['population_size']]
         measured_dispatch_limit = chosen.get('candidate_bars')
         tested_dispatch_limit = chosen.get('tested_dispatch_limit')
@@ -544,10 +602,20 @@ def finalize_calibration_result(store, identifier: str) -> dict:
     if not identity.get('runtime_verified'):
         raise ValueError('Runtime GPU identity was not verified')
     own_intent = store.read(identifier, 'intent.json')
+    if native:
+        from vast_worker_profiles import worker_profile
+        profile = worker_profile('pb9')
+        if (own_intent.get('image') not in NATIVE_CALIBRATION_IMAGES
+                or own_intent.get('image') != profile.image
+                or own_intent.get('pb8_revision') != profile.revision):
+            raise ValueError('Native calibration worker identity is not verified')
     if state.get('runtime','pb8')=='pb9':
         from vast_pb9 import _adapter
         load_pb8_config=_adapter().load
     config = load_pb8_config(store.directory(identifier) / 'input/optimize.json')
+    if native:
+        config = copy.deepcopy(config)
+        config.setdefault('optimize', {})['n_cpus'] = state['workers']
     workload_fingerprint = calibration_workload_fingerprint(config)
     evidence = {
         'schema': PROFILE_SCHEMA, 'protocol': protocol,
@@ -559,6 +627,9 @@ def finalize_calibration_result(store, identifier: str) -> dict:
         'stop_reason': result.get('stop_reason'),
         'source_job_id': identifier,
     }
+    if native:
+        evidence.update(runtime='pb9', measurement='native_cohort_v1',
+                        requested_batch_size=result['population_size'], cpu_workers=state['workers'])
     if measured_dispatch_limit is not None:
         evidence['max_dispatch_candidate_bars'] = measured_dispatch_limit
     evidence['id'] = hashlib.sha256(_encoded(evidence).encode()).hexdigest()

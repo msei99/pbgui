@@ -1,6 +1,8 @@
 """Offline native launch coverage; no real configs, downloads or GPU rentals."""
 import hashlib
 import json
+from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -99,18 +101,54 @@ def test_cloud_worker_uses_same_native_argv_and_only_packaged_paths(tmp_path, mo
     (folder/'launch_options.json').write_text(json.dumps(options))
     command = cloud_worker.optimizer_command()
     local_options = {**options, 'source':str(folder/'starting_configs')}
-    assert command[1:] == _optimizer_argv('/opt/passivbot/src/optimize.py', str(folder/'optimize.json'),
-        local_options, runtime='v9', manifest_path=str(tmp_path/'output/preparation.json'))
+    assert command[:3] == [cloud_worker.sys.executable,
+        str(Path(cloud_worker.sys.executable).with_name('passivbot')), 'optimize']
+    assert command[3:] == _optimizer_argv('/opt/passivbot/src/optimize.py', str(folder/'optimize.json'),
+        local_options, runtime='v9', manifest_path=str(tmp_path/'output/preparation.json'))[1:]
     calibration = tmp_path/'calibration-cases/4096/optimize.json'
     calibrated = cloud_worker.optimizer_command(calibration)
-    assert calibrated[2] == str(calibration)
-    assert calibrated[3:] == command[3:]
+    assert calibrated[:3] == command[:3]
+    assert calibrated[3] == str(calibration)
+    assert calibrated[4:] == command[4:]
     options['source'] = '/home/user/private/seeds'
     (folder/'launch_options.json').write_text(json.dumps(options))
     with pytest.raises(ValueError, match='packaged'):
         cloud_worker.optimizer_command()
     monkeypatch.setenv('PBGUI_WORKER_RUNTIME', 'pb8')
     assert cloud_worker.optimizer_command()[1:] == ['/opt/passivbot/src/optimize.py', str(folder/'optimize.json')]
+
+
+def test_native_cloud_cli_preserves_optimizer_module_identity(tmp_path, monkeypatch):
+    """Exercise the module-identity contract used for native prepared-config reuse."""
+    from setup.vast_gpu_benchmark import cloud_worker
+    binary = tmp_path/'bin'; binary.mkdir()
+    python = binary/'python'; python.symlink_to(cloud_worker.sys.executable)
+    optimize = binary/'optimize.py'
+    optimize.write_text('''import json, sys
+def individual_to_config():
+    pass
+def main():
+    from optimize import individual_to_config as canonical
+    if individual_to_config is not canonical:
+        raise RuntimeError('duplicate optimizer module disables prepared-config reuse')
+    print(json.dumps(sys.argv[1:]))
+if __name__ == '__main__':
+    main()
+''')
+    (binary/'passivbot').write_text('''import importlib, sys
+assert sys.argv.pop(1) == 'optimize'
+importlib.import_module('optimize').main()
+''')
+    folder = tmp_path/'input'; folder.mkdir(); (tmp_path/'output').mkdir()
+    (folder/'launch_options.json').write_text('{}')
+    monkeypatch.setattr(cloud_worker, 'ROOT', tmp_path)
+    monkeypatch.setenv('PBGUI_WORKER_RUNTIME', 'pb9')
+    monkeypatch.setattr(cloud_worker.sys, 'executable', str(python))
+    direct = subprocess.run([str(python), str(optimize), '/config'], capture_output=True, text=True)
+    assert direct.returncode != 0 and 'duplicate optimizer module' in direct.stderr
+    result = subprocess.run(cloud_worker.optimizer_command('/config'), capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == ['/config']
 
 
 def test_cloud_seed_bundle_is_independent_of_original_files(tmp_path, monkeypatch):

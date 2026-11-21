@@ -79,11 +79,11 @@ def test_unknown_worker_profile_never_uses_pb8(value):
 def test_native_published_profile_is_bound_to_reviewed_digest_and_source():
     """Native rentals use the exact verified native image, independently of PB8."""
     profile = worker_profile('pb9').require_published()
-    assert profile.image == 'ghcr.io/msei99/pbgui-pb9-worker@sha256:354e286b2c51ec7512ef2a22d3b7b3f31e5f1523dd7de91ee9b8ac298102f444'
-    assert profile.revision == '1b85ea6cc4bb7b917ada43725044b7559763c46e'
+    assert profile.image == 'ghcr.io/msei99/pbgui-pb9-worker@sha256:9a8a4bbb6c5dfb8f927e1652dd52894da83f4bff03b74d0422814d0b3941d99b'
+    assert profile.revision == '1b5805ed52c9fdf8eab6d21ed938e2c73edda85b'
     assert profile.image != worker_profile('pb8').image
     from vast_image_layers import IMAGE_LAYERS
-    assert len(IMAGE_LAYERS[profile.image]) == 29
+    assert len(IMAGE_LAYERS[profile.image]) == 53
     assert all(size > 0 for size in IMAGE_LAYERS[profile.image].values())
 
 
@@ -91,6 +91,7 @@ def test_native_calibration_rejects_before_credentials_or_provider(tmp_path, mon
     """Image publication must not authorize a legacy calibration on native GPU cohorts."""
     from fastapi import HTTPException
     from vast_calibration import calibration_worker_available, NATIVE_CALIBRATION_UNAVAILABLE
+    monkeypatch.setattr('vast_calibration.NATIVE_CALIBRATION_IMAGES', frozenset())
     assert worker_profile('pb9').published
     assert not calibration_worker_available(worker_profile('pb9').image)
     assert not calibration_worker_available(worker_profile('pb9').image, protocol=4)
@@ -107,11 +108,11 @@ def test_native_calibration_rejects_before_credentials_or_provider(tmp_path, mon
     store = JobStore(tmp_path / 'vast')
     row = store.create_preparation('native', 512, 4, False, runtime='pb9')
     store.update(row['id'], status='ready')
-    with pytest.raises(VastError, match='PB9 performance tuning is unavailable'):
+    with pytest.raises(VastError, match='PB9 performance tuning requires'):
         store.create_calibration(row['id'], {})
     store.update(row['id'], kind='calibration')
     monkeypatch.setattr('vast_jobs.services_available', lambda: True)
-    with pytest.raises(VastError, match='PB9 performance tuning is unavailable'):
+    with pytest.raises(VastError, match='PB9 performance tuning requires'):
         store.start(row['id'], {'id': 1, 'price_hour_usd': .1, 'cuda_max_good': 13,
                                'disk_gb': 40, 'cpu_cores': 4}, .25, .1)
 
@@ -176,7 +177,7 @@ def test_native_build_context_shares_recipe_and_excludes_private_files(tmp_path)
     """Only allowlisted public files enter the Docker context, including its shared worker."""
     from setup.vast_gpu_benchmark.build_worker_context import prepare
     context=prepare('pb9',tmp_path/'worker')
-    assert sorted(p.name for p in context.iterdir())==['Dockerfile','cloud_worker.py','optimize_cli.py','pb9_optimize_options.py','run.py','worker_candidate.json']
+    assert sorted(p.name for p in context.iterdir())==['Dockerfile','cloud_worker.py','optimize_cli.py','pb9_optimize_options.py','run.py','vast_native_calibration.py','verify_native_calibration.py','worker_candidate.json']
     candidate=json.loads((context/'worker_candidate.json').read_text())
     assert candidate['base_revision']==worker_profile('pb9').revision
     assert candidate['runtime']=='pb9'
@@ -184,9 +185,40 @@ def test_native_build_context_shares_recipe_and_excludes_private_files(tmp_path)
     assert candidate['upstream_repository']==worker_profile('pb9').repository
     recipe=(context/'Dockerfile').read_text()
     assert 'COPY cloud_worker.py /opt/pbgui/worker.py' in recipe
-    assert 'COPY optimize_cli.py pb9_optimize_options.py /opt/pbgui/' in recipe
+    assert 'COPY optimize_cli.py pb9_optimize_options.py vast_native_calibration.py /opt/pbgui/' in recipe
     assert 'ENV PBGUI_WORKER_RUNTIME=pb9' in (context/'Dockerfile').read_text()
     assert (context/'cloud_worker.py').read_bytes()==(ROOT/'setup/vast_gpu_benchmark/cloud_worker.py').read_bytes()
+
+
+def test_native_candidate_can_target_merged_source_without_changing_active_profile(tmp_path):
+    """Build a candidate against a new source while paid jobs retain the old pin."""
+    from setup.vast_gpu_benchmark.build_worker_context import prepare
+    previous = worker_profile('pb9')
+    revision = 'a' * 40
+    context = prepare('pb9', tmp_path/'candidate', revision=revision,
+                      repository='https://github.com/enarjord/passivbot', reuse_runtime_base=True)
+    provenance = json.loads((context/'worker_candidate.json').read_text())
+    recipe = (context/'Dockerfile').read_text()
+    assert provenance['base_revision'] == revision
+    assert provenance['runtime_base'] == previous.image
+    assert f'FROM {previous.image} AS runtime' in recipe
+    assert 'RUN rm -rf /opt/passivbot' in recipe
+    assert 'verify_native_calibration.py' in recipe
+    assert 'https://github.com/enarjord/passivbot.git' in recipe
+    assert worker_profile('pb9') == previous
+
+
+@pytest.mark.parametrize('options', [
+    {'revision':'main'}, {'revision':'a'*40+';touch /tmp/bad'},
+    {'repository':'https://example.invalid/unreviewed'},
+    {'repository':'https://token@github.com/enarjord/passivbot'},
+])
+def test_native_candidate_rejects_untrusted_build_overrides_before_writes(tmp_path, options):
+    """Candidate source arguments cannot inject Docker commands or private sources."""
+    from setup.vast_gpu_benchmark.build_worker_context import prepare
+    with pytest.raises(ValueError):
+        prepare('pb9', tmp_path/'candidate', **options)
+    assert not (tmp_path/'candidate').exists()
 
 
 def test_native_gpu_tuning_keeps_native_fields_and_explicit_policy():

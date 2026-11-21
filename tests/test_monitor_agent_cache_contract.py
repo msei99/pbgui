@@ -27,6 +27,17 @@ from master.async_store import VPSStore
 from master.cluster_state import build_config_manifest, compute_config_manifest_hash
 
 
+@pytest.mark.parametrize('field,value', [('pb9v','9.0'), ('pb9_config_schema','v9.0.0'), ('pb9ready',True), ('pb9blocked',False), ('pb9wheel',True), ('pb9installed',True)])
+def test_optional_pb9_host_fields_are_validated(field, value):
+    """Old agents remain compatible; new PB9 metadata is bounded and typed."""
+    payload = _valid_payloads(1000.0)['host_meta.json']
+    payload[field] = value
+    monitor_mod._validate_monitor_agent_payload('host_meta.json',payload,now=1001.0)
+    payload[field] = 'x'*501 if isinstance(value,str) else 1
+    with pytest.raises(MonitorAgentPayloadError,match=field):
+        monitor_mod._validate_monitor_agent_payload('host_meta.json',payload,now=1001.0)
+
+
 def _envelope(now: float) -> dict[str, Any]:
     """Return the common monitor-agent cache envelope."""
 

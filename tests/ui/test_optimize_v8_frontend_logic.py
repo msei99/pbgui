@@ -5,6 +5,8 @@ from javascript_checks import run_javascript
 from pathlib import Path
 import textwrap
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -1552,7 +1554,7 @@ def test_v7_and_v8_use_one_optimize_template() -> None:
     assert "'%%OPTIMIZE_VERSION%%': self.profile.text('v8')" in shared
     assert "'%%OPTIMIZE_NAV_CURRENT%%': self.profile.text('v8_optimize')" in shared
     assert not (ROOT / "frontend" / "v8_optimize.html").exists()
-    assert '/app/js/optimize_editor_adapter.js?v=20' in page
+    assert '/app/js/optimize_editor_adapter.js?v=21' in page
     assert "PBGuiOptimizeEditorAdapter.create(OPTIMIZE_VERSION" in page
     assert 'backtestVersion: BACKTEST_VERSION' in page
     for panel in ("panel-configs", "panel-queue", "panel-results", "panel-paretos"):
@@ -1997,20 +1999,22 @@ def test_pb8_metadata_failure_shows_persistent_update_warning() -> None:
     _run_node(script)
 
 
-def test_initial_configs_load_does_not_wait_for_settings_metadata() -> None:
-    """PB8 configs should start loading immediately while slower settings initialize."""
+@pytest.mark.parametrize('version', ['v8', 'v9'])
+def test_initial_configs_load_does_not_wait_for_settings_metadata(version) -> None:
+    """PB8/PB9 rows arrive before slower metadata/settings requests even start."""
     page = (ROOT / "frontend" / "v7_optimize.html").read_text(encoding="utf-8")
     init_function = _page_function(page, "init").split("\n\ninit().catch", 1)[0]
     script = textwrap.dedent(
         f"""
         const assert = browserAssert;
         let resolveSettings;
+        let resolveConfigs;
         let calls = [];
         const el = () => ({{hidden: true}});
-        const optimizeEditorAdapter = {{configureUi() {{}}}};
-        const state = {{initialLoadPending: true}};
+        const optimizeEditorAdapter = {{isV8: true, configureUi() {{}}}};
+        const state = {{initialLoadPending: true, panel: 'configs'}};
         const location = {{hash: ''}};
-        const window = {{location: {{href: 'https://example.test/api/optimize-v8/main_page'}}}};
+        const window = {{location: {{href: 'https://example.test/api/optimize-{version}/main_page'}}}};
         const PANEL_META = {{}};
         function restoreConfigNavigation() {{}}
         function attachEventHandlers() {{}}
@@ -2022,7 +2026,7 @@ def test_initial_configs_load_does_not_wait_for_settings_metadata() -> None:
         function connectWS() {{}}
         function loadSettings() {{ calls.push('settings'); return new Promise(resolve => {{ resolveSettings = resolve; }}); }}
         function loadOptimizeMetadata() {{ calls.push('metadata'); return Promise.resolve(); }}
-        function loadConfigs() {{ calls.push('configs'); return Promise.resolve(); }}
+        function loadConfigs() {{ calls.push('configs'); return new Promise(resolve => {{ resolveConfigs = resolve; }}); }}
         function loadQueue() {{ calls.push('queue'); return Promise.resolve(); }}
         function loadResults() {{ calls.push('results'); return Promise.resolve(); }}
         function handleMigrationDraft() {{ calls.push('migration-draft'); return Promise.resolve(); }}
@@ -2032,10 +2036,13 @@ def test_initial_configs_load_does_not_wait_for_settings_metadata() -> None:
         (async () => {{
           const pending = init();
           await new Promise(resolve => setImmediate(resolve));
-          assert.deepEqual(calls, ['metadata', 'settings', 'configs', 'queue', 'results']);
+          assert.deepEqual(calls, ['configs']);
+          resolveConfigs();
+          await new Promise(resolve => setImmediate(resolve));
+          assert.deepEqual(calls, ['configs', 'metadata', 'settings', 'queue', 'results']);
           resolveSettings();
           await pending;
-          assert.deepEqual(calls, ['metadata', 'settings', 'configs', 'queue', 'results', 'draft', 'open']);
+          assert.deepEqual(calls, ['configs', 'metadata', 'settings', 'queue', 'results', 'draft', 'open']);
         }})().catch(error => {{ console.error(error); finishTest(1); }});
         """
     )

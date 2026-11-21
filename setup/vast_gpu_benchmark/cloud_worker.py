@@ -22,6 +22,7 @@ import tempfile
 import time
 import urllib.request
 
+
 SERVICE = "VastWorker"
 ROOT = Path(os.environ.get("PBGUI_WORKDIR", "/work/pbgui"))
 GUARD_ROOT = Path("/work/pbgui")
@@ -414,7 +415,7 @@ def calibration_dispatch_limit(config: dict, population: int) -> int:
 
 
 def configurable_calibration_plan(plan: dict) -> dict:
-    """Accept only bounded protocol-4 plans created by PBGui."""
+    """Accept bounded PB8 dispatch or PB9 cohort plans created by PBGui."""
     if not isinstance(plan, dict):
         raise ValueError('Invalid configurable calibration plan')
     populations = plan.get('populations')
@@ -423,10 +424,14 @@ def configurable_calibration_plan(plan: dict) -> dict:
     gain = plan.get('min_scale_gain')
     sample = plan.get('sample_seconds')
     timeout = plan.get('case_timeout_seconds')
-    if (plan.get('protocol') != 4 or not isinstance(populations, list) or len(populations) != 2
+    if (type(plan.get('protocol')) is not int or plan['protocol'] not in (4, 5)
+            or set(plan) != {'protocol', 'populations', 'population_step', 'max_population',
+                             'min_scale_gain', 'sample_seconds', 'case_timeout_seconds', 'vram_reserve_ratio'}
+            or not isinstance(populations, list) or len(populations) != 2
             or any(type(value) is not int for value in populations)
             or type(step) is not int or type(maximum) is not int
-            or populations[0] < 4096 or step < 512 or populations[1] != populations[0] + step
+            or populations[0] < (16 if plan['protocol'] == 5 else 4096)
+            or step < (16 if plan['protocol'] == 5 else 512) or populations[1] != populations[0] + step
             or maximum < populations[1] or maximum > 131072
             or (maximum - populations[0]) // step > 64
             or not isinstance(gain, (int, float)) or not 0 <= gain <= .5
@@ -570,7 +575,15 @@ def seed_calibration_case_caches(output: Path, case_root: Path, exchanges: list[
 def run_calibration(config: dict, hardware: dict, environment: dict, plan: dict) -> dict:
     """Run bounded fresh-process population probes on one immutable input."""
     protocol = plan.get('protocol')
-    if protocol == 4:
+    native = str(config.get('config_version', '')).startswith('v9.')
+    if native != (protocol == 5):
+        raise ValueError('Calibration protocol does not match worker runtime')
+    if native:
+        # SSH starts the control script from /work/pbgui, while generation-
+        # specific helpers are immutable files baked into the native image.
+        sys.path.insert(0, '/opt/pbgui')
+        from vast_native_calibration import native_calibration_progress, NativeCohortReader
+    if protocol in (4, 5):
         configurable_calibration_plan(plan)
     else:
         if (protocol != 3 or plan.get('populations') != [4096, 8192]
@@ -587,7 +600,7 @@ def run_calibration(config: dict, hardware: dict, environment: dict, plan: dict)
     output.mkdir(exist_ok=True)
     combined_log = output / 'optimizer.log'
     while True:
-        decision = (configurable_calibration_decision(cases, plan) if protocol == 4
+        decision = (configurable_calibration_decision(cases, plan) if protocol in (4, 5)
                     else calibration_decision(cases))
         population = decision['next_population']
         if population is None:
@@ -620,9 +633,10 @@ def run_calibration(config: dict, hardware: dict, environment: dict, plan: dict)
         gpu = optimize.setdefault('gpu', {})
         if str(case_config.get('config_version','')).startswith('v9.'):
             gpu.update(batch_size=population,tuning_mode='off')
+            case_config.setdefault('logging', {})['level'] = 'info'
         else:
             gpu.update(population_size=population, batch_size=population, auto_lean_parallelism=False)
-        if protocol >= 3:
+        if not native and protocol >= 3:
             gpu['max_dispatch_candidate_bars'] = calibration_dispatch_limit(case_config, population)
         config_path = case_root / 'optimize.json'
         write_record(config_path, case_config)
@@ -631,6 +645,7 @@ def run_calibration(config: dict, hardware: dict, environment: dict, plan: dict)
         peak_vram = baseline_vram
         last_memory_sample = 0.0
         case_log = case_root / 'optimizer.log'
+        native_reader = NativeCohortReader(population) if native else None
         with case_log.open('ab') as log, combined_log.open('ab') as combined:
             combined.write((f'PBGUI calibration case | population={population}\n').encode())
             combined.flush()
@@ -649,18 +664,20 @@ def run_calibration(config: dict, hardware: dict, environment: dict, plan: dict)
                         if current_vram is not None:
                             peak_vram = current_vram if peak_vram is None else max(peak_vram, current_vram)
                         last_memory_sample = time.monotonic()
-                    progress = (calibration_generation_profile(case_log) if protocol == 4
+                    progress = (native_calibration_progress(case_log, reader=native_reader) if native else
+                                calibration_generation_profile(case_log) if protocol == 4
                                 else calibration_progress(case_log))
-                    if ((protocol == 4 and progress and progress.get('all_dispatches_full')
+                    if ((native and progress and progress['rate_window_seconds'] >= plan['sample_seconds'])
+                            or (protocol == 4 and progress and progress.get('all_dispatches_full')
                          and progress.get('dispatch_batch_size') == population)
-                            or (protocol != 4 and progress and progress.get('source') == 'heartbeat'
+                            or (protocol not in (4, 5) and progress and progress.get('source') == 'heartbeat'
                                 and progress.get('valid')
                                 and (protocol < 3 or (progress.get('dispatch_batch_size') == population
                                                      and type(progress.get('candidate_bars')) is int
                                                      and progress['candidate_bars'] > 0)))):
                         requested_stop = True
                         break
-                    if time.monotonic() - case_started >= (plan['case_timeout_seconds'] if protocol == 4 else 390):
+                    if time.monotonic() - case_started >= (plan['case_timeout_seconds'] if protocol in (4, 5) else 390):
                         requested_stop = True
                         break
                     if (ROOT / 'stop').exists() or time.time() >= json.loads((GUARD_ROOT / 'guard.json').read_text())['deadline'] - 240:
@@ -675,10 +692,15 @@ def run_calibration(config: dict, hardware: dict, environment: dict, plan: dict)
                 else:
                     process.wait()
                 mirror_log_delta(case_log, combined, mirrored_bytes)
-        progress = (calibration_generation_profile(case_log) if protocol == 4
+        progress = (native_calibration_progress(case_log, reader=native_reader) if native else
+                    calibration_generation_profile(case_log) if protocol == 4
                     else calibration_progress(case_log)) or {}
         case_valid = bool(progress.get('valid')) and not cancelled
-        if protocol >= 3:
+        if native:
+            case_valid = (case_valid and progress['rate_window_seconds'] >= plan['sample_seconds']
+                          and (process.returncode == 0 or (requested_stop and process.returncode in
+                               (-signal.SIGTERM, -signal.SIGINT, -signal.SIGKILL, 130, 143))))
+        elif protocol >= 3:
             case_valid = (case_valid and progress.get('dispatch_batch_size') == population
                           and type(progress.get('candidate_bars')) is int
                           and progress['candidate_bars'] > 0
@@ -693,6 +715,8 @@ def run_calibration(config: dict, hardware: dict, environment: dict, plan: dict)
             'baseline_vram_bytes': baseline_vram,
             'peak_vram_bytes': peak_vram,
         }
+        if native:
+            cases[str(population)]['requested_batch_size'] = population
         if not cancelled and not case_valid:
             failure_reason = calibration_failure_reason(case_log)
             if failure_reason == 'vram_limit' and previous_population:
@@ -758,8 +782,13 @@ def optimizer_command(config_path=None):
         temporary.write_text(text, encoding='utf-8'); temporary.chmod(0o600)
         os.replace(temporary, destination)
     manifest_path = stage_manifest(options, ROOT/'output/preparation.json', write_text)
-    return [sys.executable, *optimizer_argv('/opt/passivbot/src/optimize.py', str(config_path),
-                                          options, runtime='v9', manifest_path=manifest_path)]
+    arguments = optimizer_argv('/opt/passivbot/src/optimize.py', str(config_path),
+                               options, runtime='v9', manifest_path=manifest_path)
+    # The native CLI imports optimize.main, matching the local runner. Executing
+    # optimize.py as __main__ creates a second optimize module on self-import;
+    # the GPU backend then cannot recognize/reuse its prepared record configs.
+    return [sys.executable, str(Path(sys.executable).with_name('passivbot')),
+            'optimize', *arguments[1:]]
 
 
 def run() -> None:

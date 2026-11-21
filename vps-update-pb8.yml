@@ -1,20 +1,24 @@
 ---
-# Install or update PB8 on a selected remote PBGui host.
-# Masters receive the full research profile; VPS runners receive live-only PB8.
+# Install or update {{ passivbot_label }} on a selected remote PBGui host.
+# Masters receive the full research profile; VPS runners receive live-only {{ passivbot_label }}.
 
 - hosts: "{{ pb8_target_group if pb8_target_group is defined else hostname }}"
   gather_facts: no
   force_handlers: true
 
   vars:
+    passivbot_product: "{{ runtime_product | default('pb8') }}"
+    passivbot_major: "{{ 9 if passivbot_product == 'pb9' else 8 }}"
+    passivbot_label: "{{ passivbot_product | upper }}"
+    passivbot_default_branch: "{{ 'v9' if passivbot_product == 'pb9' else 'master' }}"
     install_dir: "{{ install_dir }}"
     pbgdir: "{{ install_dir }}/pbgui"
     pbgui_python: "{{ install_dir }}/venv_pbgui/bin/python"
-    pb8dir: "{{ install_dir }}/pb8"
-    pb8venv: "{{ install_dir }}/venv_pb8"
+    pb8dir: "{{ install_dir }}/{{ passivbot_product }}"
+    pb8venv: "{{ install_dir }}/venv_{{ passivbot_product }}"
     pb8_required_free_bytes: "{{ pb8_min_free_bytes | default(536870912 if pb8_install_profile == 'live' else 3221225472) | int }}"
     pb8_branch_switch: "{{ (pb8_branch | default('') | string | trim | length) > 0 }}"
-    pb8_target_branch: "{{ pb8_branch | default('master') }}"
+    pb8_target_branch: "{{ pb8_branch | default(passivbot_default_branch) }}"
     pb8_source_branch_value: "{{ pb8_source_branch | default(pb8_target_branch) }}"
     pb8_target_commit: "{{ pb8_commit | default('') }}"
     pb8_remote_name_value: "{{ pb8_remote_name | default('origin') }}"
@@ -22,7 +26,19 @@
     pb8_selected_ref: "{{ pb8_target_commit if pb8_target_commit != '' else 'refs/remotes/' ~ pb8_remote_name_value ~ '/' ~ pb8_source_branch_value }}"
 
   tasks:
-    - name: Read remote PBGui role before PB8 changes
+    - name: Validate selected Passivbot generation
+      assert:
+        that: passivbot_product in ['pb8', 'pb9']
+        fail_msg: "Unsupported Passivbot installation profile."
+
+    - name: Check separate PB9 installation paths
+      script:
+        cmd: "passivbot_install_paths.py {{ passivbot_product }} {{ pbgdir | quote }} {{ pb8dir | quote }} {{ pb8venv | quote }}"
+        executable: "{{ pbgui_python }}"
+      changed_when: false
+      when: passivbot_product == 'pb9'
+
+    - name: Read remote PBGui role before {{ passivbot_label }} changes
       command:
         argv:
           - python3
@@ -33,24 +49,24 @@
       register: pb8_role_probe
       changed_when: false
 
-    - name: Require supported PBGui role for PB8
+    - name: Require supported PBGui role for {{ passivbot_label }}
       assert:
         that:
           - pb8_role_probe.stdout | trim | lower in ['master', 'vps', 'slave']
-        fail_msg: "PB8 can only be installed or updated on a PBGui master or VPS runner."
+        fail_msg: "{{ passivbot_label }} can only be installed or updated on a PBGui master or VPS runner."
 
-    - name: Select PB8 installation profile
+    - name: Select {{ passivbot_label }} installation profile
       set_fact:
         pb8_install_profile: "{{ 'full' if (pb8_role_probe.stdout | trim | lower) == 'master' else 'live' }}"
 
-    - name: Resolve official PB8 commit before checking the installed live runtime
+    - name: Resolve official {{ passivbot_label }} commit before checking the installed live runtime
       command:
         argv:
           - "{{ ansible_playbook_python }}"
           - "{{ playbook_dir }}/pb8_wheels.py"
           - resolve
           - --url=https://github.com/enarjord/passivbot.git
-          - --branch=master
+          - "--branch={{ passivbot_default_branch }}"
       delegate_to: localhost
       vars:
         ansible_python_interpreter: "{{ ansible_playbook_python }}"
@@ -58,14 +74,14 @@
       changed_when: false
       when: not pb8_branch_switch and pb8_install_profile == 'live'
 
-    - name: Check whether the selected PB8 live wheel is already installed
+    - name: Check whether the selected {{ passivbot_label }} live wheel is already installed
       command:
         argv:
           - "{{ pbgui_python }}"
           - "{{ pbgdir }}/pb_wheel_status.py"
           - "{{ pbgdir }}"
           - --check-product
-          - pb8
+          - "{{ passivbot_product }}"
           - --repo
           - "{{ pb8dir }}"
           - --python
@@ -76,7 +92,7 @@
       changed_when: false
       when: not pb8_branch_switch and pb8_install_profile == 'live'
 
-    - name: Check whether PBRun is active before skipping PB8
+    - name: Check whether PBRun is active before skipping {{ passivbot_label }}
       command:
         argv: [systemctl, --user, is-active, pbgui-pbrun.service]
       register: pb8_current_pbrun
@@ -84,16 +100,16 @@
       failed_when: false
       when: not pb8_branch_switch and pb8_install_profile == 'live'
 
-    - name: Report already current PB8 live runtime
+    - name: Report already current {{ passivbot_label }} live runtime
       debug:
-        msg: "PB8 live wheel already matches official master; skipping download, reinstall and bot restart."
+        msg: "{{ passivbot_label }} live wheel already matches official master; skipping download, reinstall and bot restart."
       when:
         - not pb8_branch_switch
         - pb8_install_profile == 'live'
         - (pb8_current_live_wheel.stdout | from_json).installed | bool
         - pb8_current_pbrun.rc == 0
 
-    - name: Skip PB8 update for an already current live runtime
+    - name: Skip {{ passivbot_label }} update for an already current live runtime
       meta: end_host
       when:
         - not pb8_branch_switch
@@ -101,7 +117,7 @@
         - (pb8_current_live_wheel.stdout | from_json).installed | bool
         - pb8_current_pbrun.rc == 0
 
-    - name: Measure PB8 disk state before changes
+    - name: Measure {{ passivbot_label }} disk state before changes
       command:
         argv:
           - python3
@@ -113,54 +129,54 @@
       register: pb8_disk_before
       changed_when: false
 
-    - name: Require free disk space for PB8
+    - name: Require free disk space for {{ passivbot_label }}
       assert:
         that:
           - (pb8_disk_before.stdout | from_json).free_bytes | int >= pb8_required_free_bytes | int
         fail_msg: >-
-          PB8 {{ pb8_install_profile }} installation/update requires at least
+          {{ passivbot_label }} {{ pb8_install_profile }} installation/update requires at least
           {{ ((pb8_required_free_bytes | int) / 1073741824) | round(2) }} GiB free on {{ install_dir }};
           currently {{ (((pb8_disk_before.stdout | from_json).free_bytes | int) / 1073741824) | round(2) }} GiB is available.
 
-    - name: Report PB8 disk state before changes
+    - name: Report {{ passivbot_label }} disk state before changes
       debug:
-        msg: "PB8 disk before profile={{ pb8_install_profile }} state={{ pb8_disk_before.stdout }}"
+        msg: "{{ passivbot_label }} disk before profile={{ pb8_install_profile }} state={{ pb8_disk_before.stdout }}"
 
-    - name: Acquire PB8 update writer ownership
+    - name: Acquire {{ passivbot_label }} update writer ownership
       script:
         cmd: "master_update_lock.py --acquire-writer {{ install_dir | quote }}"
         executable: "{{ pbgui_python }}"
-      notify: Release PB8 update writer ownership
+      notify: Release {{ passivbot_label }} update writer ownership
 
-    - name: Ensure PB8 update state directory exists
+    - name: Ensure {{ passivbot_label }} update state directory exists
       file:
         path: "{{ pbgdir }}/data/locks"
         state: directory
         mode: "0700"
 
-    - name: Inspect existing PB8 checkout
+    - name: Inspect existing {{ passivbot_label }} checkout
       stat:
         path: "{{ pb8dir }}/.git"
       register: pb8_git
 
-    - name: Inspect PB8 target
+    - name: Inspect {{ passivbot_label }} target
       stat:
         path: "{{ pb8dir }}"
       register: pb8_target
 
-    - name: Refuse a non-Git PB8 target
+    - name: Refuse a non-Git {{ passivbot_label }} target
       fail:
-        msg: "PB8 target exists but is not a Git checkout: {{ pb8dir }}"
+        msg: "{{ passivbot_label }} target exists but is not a Git checkout: {{ pb8dir }}"
       when: not pb8_git.stat.exists and pb8_target.stat.exists
 
     # A clone left by an interrupted first install has no index yet; its
     # "deleted" entries are not local work and must not block the retry.
-    - name: Inspect PB8 checkout index
+    - name: Inspect {{ passivbot_label }} checkout index
       stat:
         path: "{{ pb8dir }}/.git/index"
       register: pb8_git_index
 
-    - name: Check PB8 checkout for tracked changes
+    - name: Check {{ passivbot_label }} checkout for tracked changes
       command:
         argv:
           - git
@@ -173,11 +189,11 @@
       changed_when: false
       when: pb8_branch_switch and pb8_git_index.stat.exists
 
-    - name: Refuse PB8 branch switch with tracked changes
+    - name: Refuse {{ passivbot_label }} branch switch with tracked changes
       assert:
         that:
           - pb8_git_status.stdout == ''
-        fail_msg: "Uncommitted tracked changes detected in PB8. Commit or stash them before switching branches."
+        fail_msg: "Uncommitted tracked changes detected in {{ passivbot_label }}. Commit or stash them before switching branches."
       when: pb8_branch_switch and pb8_git_index.stat.exists
 
     - name: Clone official Passivbot without checking out source
@@ -190,7 +206,7 @@
           - "{{ pb8dir }}"
       when: not pb8_git.stat.exists
 
-    - name: Fetch and verify latest official Passivbot v8 for an existing checkout
+    - name: Fetch and verify latest official Passivbot v{{ passivbot_major }} for an existing checkout
       command:
         argv:
           - "{{ pbgui_python }}"
@@ -200,7 +216,7 @@
           - --ref
           - refs/remotes/pbgui-pb7-pin/master
           - --expected-major
-          - "8"
+          - "{{ passivbot_major }}"
           - --fetch-url
           - https://github.com/enarjord/passivbot.git
       changed_when: false
@@ -208,7 +224,7 @@
         - pb8_git.stat.exists
         - not pb8_branch_switch
 
-    - name: Fetch and verify latest official Passivbot v8 for a new checkout
+    - name: Fetch and verify latest official Passivbot v{{ passivbot_major }} for a new checkout
       command:
         argv:
           - "{{ pbgui_python }}"
@@ -218,7 +234,7 @@
           - --ref
           - refs/remotes/pbgui-pb7-pin/master
           - --expected-major
-          - "8"
+          - "{{ passivbot_major }}"
           - --fetch-url
           - https://github.com/enarjord/passivbot.git
       changed_when: false
@@ -227,7 +243,7 @@
         - not pb8_branch_switch
 
 
-    - name: Inspect selected PB8 remote
+    - name: Inspect selected {{ passivbot_label }} remote
       command:
         argv:
           - git
@@ -241,16 +257,16 @@
       changed_when: false
       when: pb8_branch_switch
 
-    - name: Require URL for a missing PB8 remote
+    - name: Require URL for a missing {{ passivbot_label }} remote
       assert:
         that:
           - pb8_remote_url_value != ''
-        fail_msg: "PB8 remote {{ pb8_remote_name_value }} is not configured; provide its remote URL."
+        fail_msg: "{{ passivbot_label }} remote {{ pb8_remote_name_value }} is not configured; provide its remote URL."
       when:
         - pb8_branch_switch
         - pb8_selected_remote.rc != 0
 
-    - name: Add selected PB8 remote
+    - name: Add selected {{ passivbot_label }} remote
       command:
         argv:
           - git
@@ -264,7 +280,7 @@
         - pb8_branch_switch
         - pb8_selected_remote.rc != 0
 
-    - name: Update selected PB8 remote URL
+    - name: Update selected {{ passivbot_label }} remote URL
       command:
         argv:
           - git
@@ -279,7 +295,7 @@
         - pb8_selected_remote.rc == 0
         - pb8_remote_url_value != ''
 
-    - name: Fetch selected PB8 remote
+    - name: Fetch selected {{ passivbot_label }} remote
       command:
         argv:
           - git
@@ -290,7 +306,7 @@
       changed_when: false
       when: pb8_branch_switch
 
-    - name: Require selected PB8 source branch
+    - name: Require selected {{ passivbot_label }} source branch
       command:
         argv:
           - git
@@ -303,7 +319,7 @@
       changed_when: false
       when: pb8_branch_switch
 
-    - name: Resolve selected PB8 ref
+    - name: Resolve selected {{ passivbot_label }} ref
       command:
         argv:
           - git
@@ -315,7 +331,7 @@
       changed_when: false
       when: pb8_branch_switch
 
-    - name: Require selected PB8 commit to belong to source branch
+    - name: Require selected {{ passivbot_label }} commit to belong to source branch
       command:
         argv:
           - git
@@ -328,7 +344,7 @@
       changed_when: false
       when: pb8_branch_switch
 
-    - name: Verify selected PB8 commit before checkout
+    - name: Verify selected {{ passivbot_label }} commit before checkout
       command:
         argv:
           - "{{ pbgui_python }}"
@@ -338,22 +354,22 @@
           - --ref
           - "{{ pb8_resolved_commit.stdout }}"
           - --expected-major
-          - "8"
+          - "{{ passivbot_major }}"
       changed_when: false
       when: pb8_branch_switch
 
-    - name: Prepare central PB8 wheels before runtime changes
+    - name: Prepare central {{ passivbot_label }} wheels before runtime changes
       include_tasks: tasks/pb8_live_wheels_prepare.yml
 
-    - name: Mark PB8 runtime unavailable until validation completes
+    - name: Mark {{ passivbot_label }} runtime unavailable until validation completes
       copy:
-        dest: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
-        content: "PB8 installation or update in progress\n"
+        dest: "{{ pbgdir }}/data/locks/{{ 'pb9-runtime-invalid' if passivbot_product == 'pb9' else 'pb8-runtime-invalid' }}"
+        content: "{{ passivbot_label }} installation or update in progress\n"
         mode: "0600"
       when: not pb8_branch_switch
 
 
-    - name: Wait for already-starting PB8 runners to cross the launch boundary
+    - name: Wait for already-starting {{ passivbot_label }} runners to cross the launch boundary
       script:
         cmd: "master_update_lock.py --barrier {{ pbgdir | quote }} --timeout 120"
         executable: "{{ pbgui_python }}"
@@ -361,7 +377,7 @@
       when: not pb8_branch_switch
 
 
-    - name: Checkout verified official Passivbot v8 commit
+    - name: Checkout verified official Passivbot v{{ passivbot_major }} commit
       command:
         argv:
           - "{{ pbgui_python }}"
@@ -371,28 +387,28 @@
           - --ref
           - "{{ pb8_wheel_commit.stdout }}"
           - --expected-major
-          - "8"
+          - "{{ passivbot_major }}"
           - --checkout
       register: pb8_repo
       changed_when: "'checkout_changed=true' in pb8_repo.stdout"
       when: not pb8_branch_switch
 
 
-    - name: Wait for starting PB8 runners before branch checkout
+    - name: Wait for starting {{ passivbot_label }} runners before branch checkout
       script:
         cmd: "master_update_lock.py --barrier {{ pbgdir | quote }} --timeout 120"
         executable: "{{ pbgui_python }}"
       changed_when: false
       when: pb8_branch_switch
 
-    - name: Mark PB8 runtime unavailable for branch checkout
+    - name: Mark {{ passivbot_label }} runtime unavailable for branch checkout
       copy:
-        dest: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
-        content: "PB8 branch switch in progress\n"
+        dest: "{{ pbgdir }}/data/locks/{{ 'pb9-runtime-invalid' if passivbot_product == 'pb9' else 'pb8-runtime-invalid' }}"
+        content: "{{ passivbot_label }} branch switch in progress\n"
         mode: "0600"
       when: pb8_branch_switch
 
-    - name: Checkout selected PB8 branch at verified commit
+    - name: Checkout selected {{ passivbot_label }} branch at verified commit
       command:
         argv:
           - git
@@ -406,7 +422,7 @@
       changed_when: true
       when: pb8_branch_switch
 
-    - name: Set selected PB8 branch upstream
+    - name: Set selected {{ passivbot_label }} branch upstream
       command:
         argv:
           - git
@@ -419,12 +435,12 @@
       changed_when: false
       when: pb8_branch_switch
 
-    - name: Check PB8 virtualenv
+    - name: Check {{ passivbot_label }} virtualenv
       stat:
         path: "{{ pb8venv }}/bin/python"
       register: pb8_python
 
-    - name: Create PB8 virtualenv
+    - name: Create {{ passivbot_label }} virtualenv
       command:
         argv:
           - python3.12
@@ -433,7 +449,7 @@
           - "{{ pb8venv }}"
       when: not pb8_python.stat.exists
 
-    - name: Install binary PB8 dependencies
+    - name: Install binary {{ passivbot_label }} dependencies
       command:
         argv:
           - "{{ pb8venv }}/bin/python"
@@ -446,7 +462,7 @@
           - "{{ pb8_wheel_remote_stage.path }}/bundle"
           - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.python_wheel }}{{ pb8_wheel_extras }}"
 
-    - name: Install verified PB8 wheels
+    - name: Install verified {{ passivbot_label }} wheels
       command:
         argv:
           - "{{ pb8venv }}/bin/python"
@@ -460,32 +476,32 @@
           - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.python_wheel }}"
           - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.rust_wheel }}"
 
-    - name: Install source-bound PB8 Cargo lockfile
+    - name: Install source-bound {{ passivbot_label }} Cargo lockfile
       copy:
         src: "{{ pb8_wheel_remote_stage.path }}/bundle/Cargo.lock"
         dest: "{{ pb8dir }}/passivbot-rust/Cargo.lock"
         remote_src: true
         mode: "0600"
 
-    - name: Validate centrally built PB8 runtime
+    - name: Validate centrally built {{ passivbot_label }} runtime
       script:
-        cmd: "pb8_wheels.py runtime --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --repo {{ pb8dir | quote }} --commit {{ pb8_wheel_commit.stdout | quote }} --receipt {{ (pbgdir ~ '/data/state/pb8-wheel.json') | quote }}"
+        cmd: "pb8_wheels.py runtime --product {{ passivbot_product }} --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --repo {{ pb8dir | quote }} --commit {{ pb8_wheel_commit.stdout | quote }} --receipt {{ (pbgdir ~ '/data/state/' ~ passivbot_product ~ '-wheel.json') | quote }}"
         executable: "{{ pb8venv }}/bin/python"
       changed_when: false
 
-    - name: Validate PB8 CLI
+    - name: Validate {{ passivbot_label }} CLI
       command:
         argv:
           - "{{ pb8venv }}/bin/passivbot"
           - --help
       changed_when: false
 
-    - name: Validate PB8 schema without source compilation
+    - name: Validate {{ passivbot_label }} schema without source compilation
       command:
         argv:
           - "{{ pb8venv }}/bin/python"
           - -c
-          - "from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v8.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
+          - "from config.schema import CONFIG_SCHEMA_VERSION; assert str(CONFIG_SCHEMA_VERSION).startswith('v{{ passivbot_major }}.'), CONFIG_SCHEMA_VERSION; print(CONFIG_SCHEMA_VERSION)"
       args:
         chdir: "{{ pb8dir }}"
       changed_when: false
@@ -508,12 +524,12 @@
         - pb8_install_profile == 'live'
         - (pb8_rust_cleanup.stdout | from_json).cleaned | default(false)
 
-    - name: Save PB8 runtime paths after validation
+    - name: Save {{ passivbot_label }} runtime paths after validation
       command:
         argv:
           - "{{ pbgui_python }}"
           - -c
-          - "import configparser,sys; from pbgui_purefunc import save_ini_section; c=configparser.ConfigParser(); c.read('pbgui.ini'); desired={'pb8dir':sys.argv[1],'pb8venv':sys.argv[2]}; changed=any(c.get('main',k,fallback='') != v for k,v in desired.items()); save_ini_section('main', desired) if changed else None; print('changed=' + str(changed).lower())"
+          - "import configparser,sys; from pbgui_purefunc import save_ini_section; c=configparser.ConfigParser(); c.read('pbgui.ini'); desired={'{{ passivbot_product }}dir':sys.argv[1],'{{ passivbot_product }}venv':sys.argv[2]}; changed=any(c.get('main',k,fallback='') != v for k,v in desired.items()); save_ini_section('main', desired) if changed else None; print('changed=' + str(changed).lower())"
           - "{{ pb8dir }}"
           - "{{ pb8venv }}/bin/python"
       args:
@@ -521,14 +537,14 @@
       register: save_pb8_paths
       changed_when: "'changed=true' in save_pb8_paths.stdout"
 
-    - name: Mark validated PB8 runtime available
+    - name: Mark validated {{ passivbot_label }} runtime available
       file:
-        path: "{{ pbgdir }}/data/locks/pb8-runtime-invalid"
+        path: "{{ pbgdir }}/data/locks/{{ 'pb9-runtime-invalid' if passivbot_product == 'pb9' else 'pb8-runtime-invalid' }}"
         state: absent
 
-    - name: Restart managed PB8 live bots after successful update
+    - name: Restart managed {{ passivbot_label }} live bots after successful update
       script:
-        cmd: "pb8_live_stop.py {{ pbgdir | quote }} {{ pb8dir | quote }} {{ (pb8venv ~ '/bin/python') | quote }}"
+        cmd: "pb8_live_stop.py {{ pbgdir | quote }} {{ pb8dir | quote }} {{ (pb8venv ~ '/bin/python') | quote }} --runtime {{ passivbot_product }}"
         executable: "{{ pbgui_python }}"
       register: pb8_live_restart
       changed_when: "'stopped_processes=0' not in pb8_live_restart.stdout"
@@ -544,7 +560,7 @@
       register: pb8_pb7_runtime_probe
       changed_when: false
 
-    - name: Detect PB8-only support in installed PBRun
+    - name: Detect {{ passivbot_label }}-only support in installed PBRun
       command:
         argv:
           - grep
@@ -555,7 +571,7 @@
       changed_when: false
       failed_when: false
 
-    - name: Ensure PBRun is enabled for PB8 live supervision
+    - name: Ensure PBRun is enabled for {{ passivbot_label }} live supervision
       command:
         argv:
           - /bin/bash
@@ -600,7 +616,7 @@
         - (pb8_pb7_runtime_probe.stdout | trim | lower) == 'true' or pb8_pbrun_compatibility_probe.rc == 0
         - pb8_pbrun_active.rc != 0
 
-    - name: Disable incompatible PBRun on PB8-only hosts
+    - name: Disable incompatible PBRun on {{ passivbot_label }}-only hosts
       command:
         argv:
           - systemctl
@@ -616,15 +632,15 @@
         - (pb8_pb7_runtime_probe.stdout | trim | lower) != 'true'
         - pb8_pbrun_compatibility_probe.rc != 0
 
-    - name: Report PB8-only PBRun upgrade requirement
+    - name: Report {{ passivbot_label }}-only PBRun upgrade requirement
       debug:
-        msg: "PB8 is installed, but this PBGui release does not support PB8-only PBRun supervision. Update PBGui before enabling PB8 live instances."
+        msg: "{{ passivbot_label }} is installed, but this PBGui release does not support {{ passivbot_label }}-only PBRun supervision. Update PBGui before enabling {{ passivbot_label }} live instances."
       when:
         - pb8_install_profile == 'live'
         - (pb8_pb7_runtime_probe.stdout | trim | lower) != 'true'
         - pb8_pbrun_compatibility_probe.rc != 0
 
-    - name: Measure PB8 disk state after validation
+    - name: Measure {{ passivbot_label }} disk state after validation
       command:
         argv:
           - python3
@@ -636,17 +652,17 @@
       register: pb8_disk_after
       changed_when: false
 
-    - name: Report PB8 disk state after validation
+    - name: Report {{ passivbot_label }} disk state after validation
       debug:
-        msg: "PB8 disk after profile={{ pb8_install_profile }} state={{ pb8_disk_after.stdout }}"
+        msg: "{{ passivbot_label }} disk after profile={{ pb8_install_profile }} state={{ pb8_disk_after.stdout }}"
 
   handlers:
-    - name: Release PB8 update writer ownership
+    - name: Release {{ passivbot_label }} update writer ownership
       file:
         path: "{{ install_dir }}/.pbgui-pb8-update-active"
         state: absent
 
-    - name: Clean master PB8 wheel staging
+    - name: Clean master {{ passivbot_label }} wheel staging
       file:
         path: "{{ pb8_wheel_master_stage.path }}"
         state: absent
@@ -655,7 +671,7 @@
         ansible_python_interpreter: "{{ ansible_playbook_python }}"
       when: pb8_wheel_master_stage is defined and pb8_wheel_master_stage.path is defined
 
-    - name: Clean runner PB8 wheel staging
+    - name: Clean runner {{ passivbot_label }} wheel staging
       file:
         path: "{{ pb8_wheel_remote_stage.path }}"
         state: absent

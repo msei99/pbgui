@@ -349,9 +349,9 @@ class ConfigurableCalibrationRequest(BaseModel):
     budget: float = Field(ge=.1, le=100, allow_inf_nan=False)
     preset: Literal['small', 'medium', 'large'] = 'small'
     source_job_id: str | None = None
-    start_population: int = Field(default=4096, ge=4096, le=131072)
-    population_step: int = Field(default=4096, ge=512, le=32768)
-    max_population: int = Field(default=32768, ge=4096, le=131072)
+    start_population: int = Field(default=4096, ge=16, le=131072)
+    population_step: int = Field(default=4096, ge=16, le=32768)
+    max_population: int = Field(default=32768, ge=16, le=131072)
     min_scale_gain: float = Field(default=.10, ge=0, le=.5, allow_inf_nan=False)
     case_timeout_seconds: int = Field(default=3600, ge=600, le=7200)
     accept_rental_and_cleanup: bool = False
@@ -401,7 +401,7 @@ class CalibrationAcceptRequest(BaseModel):
 class RentalGpuProfile(BaseModel):
     """One bounded GPU sizing triple shared by Auto jobs on a manual rental."""
     model_config = ConfigDict(extra='forbid')
-    population_size: int = Field(ge=1024, le=131072, strict=True)
+    population_size: int = Field(ge=16, le=131072, strict=True)
     batch_size: int = Field(ge=1, le=131072, strict=True)
     max_dispatch_candidate_bars: int = Field(ge=1, le=1_000_000_000_000, strict=True)
 
@@ -637,19 +637,21 @@ def _calibration_status(body: CalibrationOfferRequest, response: Response,
     offer = body.model_dump()
     queue = CloudQueue()
     store = queue.store
-    profile = CalibrationProfiles(store.root).preliminary_match(offer)
+    profile = CalibrationProfiles(store.root, runtime=runtime).preliminary_match(offer)
     if runtime=='pb9' and profile and profile.get('worker_image')!=IMAGE:profile=None
     from vast_calibration import WORKLOAD_VERSION
     return {
         'identity': gpu_variant_identity(offer), 'match': profile,
-        'rental_profile': rental_card_profile(offer, profile_root=store.root),
+        'rental_profile': rental_card_profile(offer, {'runtime': runtime}, profile_root=store.root),
         'queued_gpu_previews': queued_gpu_previews(queue,offer,**({'runtime':'pb9'} if runtime=='pb9' else {})),
         'match_is_preliminary': profile is not None,
-        'workload': {'version': WORKLOAD_VERSION, 'coins': ['BTC', 'ETH', 'SOL'],
-                     'exchange': 'binance', 'start_date': '2024-01-01', 'end_date': '2024-12-31',
+        'workload': {'version': 'pb9-gpu-calibration-v2-small' if runtime == 'pb9' else WORKLOAD_VERSION,
+                     'coins': ['BTC', 'ETH'] if runtime == 'pb9' else ['BTC', 'ETH', 'SOL'],
+                     'exchange': 'binance', 'start_date': '2024-01-01',
+                     'end_date': '2024-01-03' if runtime == 'pb9' else '2024-12-31',
                      'seed': 7, 'objective':'cagr_fraction_strategy_equity' if runtime=='pb9' else 'adg_strategy_eq'},
         'calibration_worker': calibration_worker_available(IMAGE),
-        'configurable_worker': calibration_worker_available(IMAGE, protocol=4),
+        'configurable_worker': calibration_worker_available(IMAGE, protocol=5 if runtime == 'pb9' else 4),
         'unavailable_reason': (NATIVE_CALIBRATION_UNAVAILABLE
                                if runtime == 'pb9' and not calibration_worker_available(IMAGE) else ''),
     }
@@ -701,6 +703,8 @@ def _start_calibration(body: CalibrationStartRequest,
                 'sample_seconds': 300, 'population_step': 4096,
                 'min_scale_gain': .10, 'max_population': 131072,
                 'vram_reserve_ratio': .15}
+        from vast_calibration import calibration_plan_for_runtime
+        plan = calibration_plan_for_runtime(plan, runtime)
         with _PREPARATION_LOCK:
             if _PREPARATION_STOPPING:
                 raise VastError('API is shutting down; retry after it has restarted', 409)
@@ -710,7 +714,7 @@ def _start_calibration(body: CalibrationStartRequest,
             calibration = queue.store.create_preparation('PBGui GPU calibration v1',10_000_000,4,False,**({'runtime':'pb9'} if runtime=='pb9' else {}))
             calibration = queue.store.update(
                 calibration['id'], kind='calibration', calibration_plan=plan,
-                calibration_workload_version=WORKLOAD_VERSION,
+                calibration_workload_version='pb9-gpu-calibration-v2-small' if runtime == 'pb9' else WORKLOAD_VERSION,
                 estimated_coin_candles=estimate_coin_candles(canonical),
             )
             future = _PREPARATION_EXECUTOR.submit(
@@ -741,7 +745,7 @@ def _start_configurable_calibration(body: ConfigurableCalibrationRequest,
     if runtime=='pb9':
         from vast_worker_profiles import worker_profile
         IMAGE=worker_profile('pb9').image
-    if not calibration_worker_available(IMAGE, protocol=4):
+    if not calibration_worker_available(IMAGE, protocol=5 if runtime == 'pb9' else 4):
         from vast_calibration import NATIVE_CALIBRATION_UNAVAILABLE
         raise HTTPException(
             status_code=409,
@@ -751,8 +755,10 @@ def _start_configurable_calibration(body: ConfigurableCalibrationRequest,
     try:
         plan = configurable_calibration_plan(
             body.start_population, body.population_step, body.max_population,
-            body.min_scale_gain, 300, body.case_timeout_seconds,
+            body.min_scale_gain, 300, body.case_timeout_seconds, protocol=5 if runtime == 'pb9' else 4,
         )
+        from vast_calibration import calibration_plan_for_runtime
+        plan = calibration_plan_for_runtime(plan, runtime)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     queue = CloudQueue()
@@ -878,6 +884,8 @@ def _start_calibration_watch(body: CalibrationWatchRequest,
             'sample_seconds': 300, 'population_step': 4096,
             'min_scale_gain': .10, 'max_population': 131072,
             'vram_reserve_ratio': .15}
+    from vast_calibration import calibration_plan_for_runtime
+    plan = calibration_plan_for_runtime(plan, runtime)
     try:
         with _PREPARATION_LOCK:
             if _PREPARATION_STOPPING:
@@ -898,7 +906,7 @@ def _start_calibration_watch(body: CalibrationWatchRequest,
                 calibration = queue.store.create_preparation('PBGui GPU calibration v1',10_000_000,4,False,**({'runtime':'pb9'} if runtime=='pb9' else {}))
                 calibration = queue.store.update(
                     calibration['id'], kind='calibration', calibration_plan=plan,
-                    calibration_workload_version=WORKLOAD_VERSION,
+                    calibration_workload_version='pb9-gpu-calibration-v2-small' if runtime == 'pb9' else WORKLOAD_VERSION,
                     calibration_watch_preferences=preferences,
                     estimated_coin_candles=estimate_coin_candles(canonical),
                 )

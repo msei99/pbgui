@@ -93,7 +93,7 @@ def test_vast_controls_from_real_menu_preserve_shell_and_guide(unconfirmed):
                 page.locator('#collect-job').click()
                 page.wait_for_function("document.getElementById('queue-message').textContent.includes('Pareto results collected')")
             assert sum(method == 'POST' and url.endswith('/collect') for method, url in calls) == int(not unconfirmed)
-            assert any('/app/js/vast.js?v=187' in url for _, url in calls)
+            assert any('/app/js/vast.js?v=192' in url for _, url in calls)
             location_before = page.url
             page.locator('#pbgui-guide-btn').click()
             page.wait_for_function("document.getElementById('pbgui-shared-help-ovl')?.getAttribute('aria-hidden')==='false'")
@@ -883,6 +883,20 @@ def test_completed_calibration_remains_visible_and_acceptable():
             page.evaluate('''jobRows.find(row=>row.id==='watch-job').status='ready';
               workers=[{calibration_job_id:'watch-job',rental_state:'provisioning'}]; renderCalibration()''')
             assert page.locator('#calibration-watch-phase').inner_text() == 'GPU found · starting test'
+            page.evaluate('''renderCalibrationResult(document.getElementById('calibration-result'), {
+              kind:'calibration', status:'completed',
+              calibration_profile_candidate:{protocol:5, population_size:4096,
+                hardware_identity:{gpu_name:'Native PB9 card'},
+                cases:{'4096':{population_size:4096,requested_batch_size:4096,
+                  rate_per_second:13.65,rate_window_seconds:300,wall_seconds:700,
+                  completed_cohorts:1,gpu_rows:4096,source:'native_cohort_v1',valid:true}}}
+            })''')
+            native_text = page.locator('#calibration-result').inner_text()
+            assert 'PB9 completed cohorts' in native_text
+            assert 'dispatch work cap not measured' in native_text
+            assert 'GPU rows' in native_text and 'Requested batch' in native_text
+            assert 'Completed GPU proxy' not in native_text
+            assert '1 cohorts' in native_text
         finally:
             browser.close()
 

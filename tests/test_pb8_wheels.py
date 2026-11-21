@@ -13,6 +13,7 @@ import zipfile
 import pytest
 import yaml
 
+from installer_template_helpers import pb8_playbook_source
 import pb8_wheels as wheels
 
 COMMIT = 'a' * 40
@@ -173,7 +174,7 @@ def test_controller_resolves_exact_branch_head_without_target_input(monkeypatch)
 
 def test_pb8_wheel_commit_is_controller_selected_and_target_confirmed():
     """PB8 normal and branch updates cannot build a target-reported commit alone."""
-    tasks = yaml.safe_load(Path('tasks/pb8_live_wheels_prepare.yml').read_text())
+    tasks = yaml.safe_load(pb8_playbook_source('tasks/pb8_live_wheels_prepare.yml'))
     by_name = {task['name']: task for task in tasks}
     resolve = by_name['Resolve immutable PB8 wheel source commit on controller']
     assert resolve['delegate_to'] == 'localhost'
@@ -265,7 +266,7 @@ def test_receipt_preflight_creates_private_state_before_runtime_changes(tmp_path
 @pytest.mark.parametrize('playbook', ['vps-update-pb8.yml', 'master-update-pb8.yml'])
 def test_playbook_prepares_binaries_before_runtime_guard_and_never_compiles(playbook):
     """Masters and VPS targets install checked binaries before releasing their guard."""
-    tasks = yaml.safe_load(Path(playbook).read_text())[0]['tasks']
+    tasks = yaml.safe_load(pb8_playbook_source(playbook))[0]['tasks']
     names = [task['name'] for task in tasks]
     assert names.index('Prepare central PB8 wheels before runtime changes') < names.index('Mark PB8 runtime unavailable until validation completes')
     assert not any('install rustup' in name.lower() or 'Rebuild' in name for name in names)
@@ -274,7 +275,7 @@ def test_playbook_prepares_binaries_before_runtime_guard_and_never_compiles(play
     assert '-e' not in install['command']['argv']
     assert 'when' not in install
     assert names.index('Validate centrally built PB8 runtime') < names.index('Mark validated PB8 runtime available')
-    prep = yaml.safe_load(Path('tasks/pb8_live_wheels_prepare.yml').read_text())
+    prep = yaml.safe_load(pb8_playbook_source('tasks/pb8_live_wheels_prepare.yml'))
     download = next(task for task in prep if task['name'].startswith('Download binary PB8 dependencies'))
     assert '--only-binary=:all:' in download['command']['argv']
     assert '{{ pb8_wheel_extras }}' in download['command']['argv'][-1]

@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 from pathlib import Path
+from time import perf_counter
 
 from fastapi import HTTPException
 import pytest
@@ -58,6 +59,26 @@ def test_native_and_legacy_engines_share_implementation_without_runtime_state(na
     assert native._QUEUE_SETTINGS_SECTION=='optimize_v9'
     assert legacy._QUEUE_SETTINGS_SECTION=='optimize_v7'
     assert native.profile.text('/ws/opt8')=='/ws/opt9'
+
+
+def test_native_config_list_is_subsecond_without_runtime_or_result_work(native_optimizer, monkeypatch):
+    """List cold config summaries without native helpers, scans or a configured bot."""
+    engine, metadata, _ = native_optimizer
+    for index in range(20):
+        engine.save_config(f'fixture-{index:02}', {'config': copy.deepcopy(metadata['template'])}, session=None)
+    engine._config_summary_cache.clear()
+    def forbidden(*args, **kwargs):
+        """Fail if lightweight browsing starts unrelated expensive work."""
+        pytest.fail('config list attempted native runtime/result work')
+    for method in ('metadata', 'runtime', 'load', 'prepare', 'effective'):
+        monkeypatch.setattr(engine.native, method, forbidden)
+    monkeypatch.setattr(engine, '_list_results', forbidden)
+    monkeypatch.setattr(engine, '_backtests_root', forbidden)
+    started = perf_counter()
+    rows = engine.list_configs(None, include_result_summary=False, include_backtest_counts=False)['configs']
+    assert perf_counter() - started < 1.0
+    assert len(rows) == 20
+    assert all(row['backtest_count_status'] == 'pending' for row in rows)
 
 
 def test_native_cli_options_survive_snapshot_and_result_resume(native_optimizer):

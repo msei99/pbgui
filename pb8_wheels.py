@@ -131,7 +131,7 @@ def builder_identity(target: dict) -> tuple[dict, dict]:
     return identity, env
 
 
-def compile_wheels(source: Path, artifacts: Path, identity: dict, base_env: dict) -> None:
+def compile_wheels(source: Path, artifacts: Path, identity: dict, base_env: dict, *, product='pb8') -> None:
     """Build in private directories on this master, then audit actual target ABI."""
     root = source.parent
     environment = root / 'buildenv'
@@ -148,7 +148,10 @@ def compile_wheels(source: Path, artifacts: Path, identity: dict, base_env: dict
     python = str(environment / 'bin/python')
     env['PATH'] = str(environment / 'bin') + os.pathsep + env['PATH']
     run([python, '-m', 'pip', 'install', '--disable-pip-version-check', *BUILD_REQUIREMENTS], env=env)
-    run(['cargo', 'generate-lockfile', '--manifest-path', 'passivbot-rust/Cargo.toml'], cwd=source, env=env)
+    if product != 'pb9':
+        run(['cargo', 'generate-lockfile', '--manifest-path', 'passivbot-rust/Cargo.toml'], cwd=source, env=env)
+    elif not (source/'passivbot-rust/Cargo.lock').is_file():
+        raise ValueError('PB9 requires its tracked Cargo.lock')
     fingerprint = subprocess.check_output(
         [python, '-c', "import sys; sys.path.insert(0,'src'); from rust_utils import source_fingerprint; print(source_fingerprint())"],
         cwd=source, env=env, text=True, timeout=30).strip()
@@ -156,8 +159,9 @@ def compile_wheels(source: Path, artifacts: Path, identity: dict, base_env: dict
         raise ValueError('Invalid source fingerprint from build checkout')
     env['PASSIVBOT_RUST_SOURCE_FINGERPRINT'] = fingerprint
     run([python, '-m', 'pip', 'wheel', '--no-deps', '--no-build-isolation', '--wheel-dir', str(raw), '.'], cwd=source, env=env)
-    run([python, '-m', 'maturin', 'build', '--release', '--manifest-path', 'passivbot-rust/Cargo.toml',
-         '--interpreter', python, '--compatibility', 'linux', '--out', str(raw)], cwd=source, env=env)
+    if product != 'pb9':
+        run([python, '-m', 'maturin', 'build', '--release', '--manifest-path', 'passivbot-rust/Cargo.toml',
+             '--interpreter', python, '--compatibility', 'linux', '--out', str(raw)], cwd=source, env=env)
     for wheel in sorted(raw.glob('*.whl')):
         run([python, '-m', 'auditwheel', 'repair', '--plat', identity['platform'],
              '--wheel-dir', str(artifacts), str(wheel)], cwd=source, env=env)
@@ -245,11 +249,13 @@ def unpack_source(archive: Path, destination: Path) -> None:
             raise ValueError(f'PB8 source archive lacks {required}')
 
 
-def wheel_extension_hash(wheel: Path) -> str:
+def wheel_extension_hash(wheel: Path, *, combined=False) -> str:
     """Identify the canonical Rust extension packaged by Maturin."""
     with zipfile.ZipFile(wheel) as archive:
         candidates = [x for x in archive.infolist()
-                      if x.filename.startswith('passivbot_rust/') and x.filename.endswith('.so')]
+                      if (x.filename.startswith('passivbot_rust/') or
+                          combined and '/' not in x.filename and x.filename.startswith('passivbot_rust.'))
+                      and x.filename.endswith('.so')]
         if len(candidates) != 1 or candidates[0].file_size > 128 * 1024**2:
             raise ValueError('Rust wheel must contain exactly one bounded extension')
         return hashlib.sha256(archive.read(candidates[0])).hexdigest()
@@ -266,7 +272,7 @@ def verify_bundle(bundle: Path, commit: str | None = None, target: dict | None =
     manifest = json.loads(manifest_path.read_text())
     if not isinstance(manifest, dict):
         raise ValueError('Expected a wheel manifest object')
-    if (product not in {'pb7', 'pb8'} or manifest.get('product', 'pb8') != product
+    if (product not in {'pb7', 'pb8', 'pb9'} or manifest.get('product', 'pb8') != product
             or manifest.get('format') != 1
             or not re.fullmatch(r'[0-9a-f]{40}', manifest.get('commit', ''))):
         raise ValueError('Invalid PB8 wheel manifest')
@@ -275,7 +281,7 @@ def verify_bundle(bundle: Path, commit: str | None = None, target: dict | None =
     if not re.fullmatch(r'[0-9a-f]{64}', manifest.get('source_fingerprint', '')):
         raise ValueError('Invalid Rust source fingerprint')
     artifacts = manifest.get('artifacts', {})
-    if not isinstance(artifacts, dict) or len(artifacts) != 3 or 'Cargo.lock' not in artifacts:
+    if not isinstance(artifacts, dict) or len(artifacts) != (2 if product == 'pb9' else 3) or 'Cargo.lock' not in artifacts:
         raise ValueError('Expected PB8 wheel, canonical Rust wheel and Cargo.lock')
     wheels = []
     for name, expected in artifacts.items():
@@ -298,6 +304,12 @@ def verify_bundle(bundle: Path, commit: str | None = None, target: dict | None =
             wheels.append(name)
     rust = [name for name in wheels if name.startswith('passivbot_rust-')]
     python = [name for name in wheels if name.startswith('passivbot-')]
+    if product == 'pb9':
+        if rust or len(python) != 1 or wheel_extension_hash(bundle/python[0], combined=True) != manifest.get('extension_sha256'):
+            raise ValueError('PB9 combined wheel Rust checksum mismatch')
+        # PB9 verifies its binary against passivbot's own RECORD. Installing a
+        # separate Rust distribution would shadow that authoritative artifact.
+        return {**manifest, 'python_wheel': python[0], 'rust_wheel': python[0]}
     if len(rust) != 1 or len(python) != 1 or wheel_extension_hash(bundle / rust[0]) != manifest.get('extension_sha256'):
         raise ValueError('Canonical Rust extension checksum mismatch')
     return {**manifest, 'python_wheel': python[0], 'rust_wheel': rust[0]}
@@ -307,7 +319,7 @@ def build(archive: Path, commit: str, target: dict, cache: Path, output: Path,
           product: str = 'pb8') -> dict:
     """Reuse local/imported artifacts first; otherwise build natively on this master."""
     require_target(target)
-    if product not in {'pb7', 'pb8'}:
+    if product not in {'pb7', 'pb8', 'pb9'}:
         raise ValueError('Unsupported Passivbot runtime')
     if not re.fullmatch(r'[0-9a-f]{40}', commit):
         raise ValueError('Expected a full Git commit')
@@ -351,15 +363,19 @@ def build(archive: Path, commit: str, target: dict, cache: Path, output: Path,
                 source = private_directory(root / 'source')
                 artifacts = private_directory(root / 'artifacts')
                 unpack_source(archive, source)
-                compile_wheels(source, artifacts, identity, env)
+                if product == 'pb9':
+                    compile_wheels(source, artifacts, identity, env, product=product)
+                else:
+                    compile_wheels(source, artifacts, identity, env)
                 wheels = sorted(artifacts.glob('*.whl'))
                 rust = [p for p in wheels if p.name.startswith('passivbot_rust-')]
-                if len(wheels) != 2 or len(rust) != 1:
+                if ((product == 'pb9' and (len(wheels) != 1 or rust)) or
+                        (product != 'pb9' and (len(wheels) != 2 or len(rust) != 1))):
                     raise ValueError('Builder did not produce both PB8 wheels')
                 manifest = {'format': 1, 'product': product, 'commit': commit, 'builder': identity,
                             'source_archive_sha256': archive_hash,
                             'source_fingerprint': (artifacts / 'source-fingerprint').read_text().strip(),
-                            'extension_sha256': wheel_extension_hash(rust[0]),
+                            'extension_sha256': wheel_extension_hash(wheels[0], combined=True) if product == 'pb9' else wheel_extension_hash(rust[0]),
                             'artifacts': {p.name: digest(p) for p in [*wheels, artifacts / 'Cargo.lock']}}
                 (artifacts / 'source-fingerprint').unlink()
                 (artifacts / 'manifest.json').write_text(json.dumps(manifest, indent=4) + '\n')
@@ -534,7 +550,7 @@ def validate_runtime(bundle: Path, repo: Path, commit: str, product: str = 'pb8'
     module_path = helpers._compiled_path_from_loaded_module()
     if not module_path or digest(module_path) != manifest['extension_sha256']:
         raise ValueError('Loaded Rust binary differs from verified wheel')
-    if product == 'pb8':
+    if product in {'pb8', 'pb9'}:
         procedures_spec = importlib.util.find_spec('procedures')
         if procedures_spec is None or not procedures_spec.origin:
             raise ValueError('Installed PB8 procedures module is missing')
@@ -574,7 +590,7 @@ def main() -> None:
     parser.add_argument('--cache', type=Path)
     parser.add_argument('--bundle', type=Path)
     parser.add_argument('--repo', type=Path)
-    parser.add_argument('--product', choices=['pb7', 'pb8'], default='pb8')
+    parser.add_argument('--product', choices=['pb7', 'pb8', 'pb9'], default='pb8')
     parser.add_argument('--receipt', type=Path)
     parser.add_argument('--url', default=PASSIVBOT_UPSTREAM)
     parser.add_argument('--branch')

@@ -40,6 +40,9 @@ ORIGINAL_REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
 # Persisted rental intents keep their own immutable image/revision pair.
 SUPPORTED_RENTAL_IMAGE_REVISIONS = {
     IMAGE: REVISION,
+    "ghcr.io/msei99/pbgui-pb9-worker@sha256:59dfb6f06a33886c9da007a013831c859507f90cfce6ba668cb118b171c9f5c9": "da9f90d6d1c27ec77bb582164bbf7ab78d12a0a2",
+    "ghcr.io/msei99/pbgui-pb9-worker@sha256:8093291ccefb61db45da7bdc7812186d2267ca91d2492f8d813fa4499b6d291f": "1b85ea6cc4bb7b917ada43725044b7559763c46e",
+    "ghcr.io/msei99/pbgui-pb9-worker@sha256:13868e9b2bdc4a2109cf1fb6981971dac90aa1213d0215294983d80da2cc8712": "1b85ea6cc4bb7b917ada43725044b7559763c46e",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1": REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:15698800ffa48634708742425856608c403db26d6aeeb32d6cb5d05b15b0266d": REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:d966b601dedbf49641a85feb4b5c13963f855d998c7d465c02af89f73c272abf": REVISION,
@@ -765,7 +768,8 @@ class JobStore:
             expected = configurable_calibration_plan(
                 plan.get('populations', [None])[0], plan.get('population_step'),
                 plan.get('max_population'), plan.get('min_scale_gain'),
-                plan.get('sample_seconds'), plan.get('case_timeout_seconds'))
+                plan.get('sample_seconds'), plan.get('case_timeout_seconds'),
+                protocol=5 if profile.runtime == 'pb9' else 4)
         except (AttributeError, IndexError, TypeError, ValueError) as exc:
             raise VastError('Invalid GPU calibration plan', 422) from exc
         if plan != expected:
@@ -855,8 +859,27 @@ class JobStore:
         with advisory_file_lock(self.root / ".lock"):
             state = self.read(identifier)
             if state.get('runtime') == 'pb9' and state.get('kind') == 'calibration':
-                from vast_calibration import NATIVE_CALIBRATION_UNAVAILABLE
-                raise VastError(NATIVE_CALIBRATION_UNAVAILABLE, 409)
+                from vast_calibration import (calibration_worker_available, NATIVE_CALIBRATION_UNAVAILABLE,
+                                              configurable_calibration_plan)
+                from vast_worker_profiles import worker_profile
+                native_profile = worker_profile('pb9')
+                if not calibration_worker_available(native_profile.image, protocol=5):
+                    raise VastError(NATIVE_CALIBRATION_UNAVAILABLE, 409)
+                intent = self.read(identifier, 'intent.json')
+                if (intent.get('image') != native_profile.image
+                        or intent.get('pb8_revision') != native_profile.revision
+                        or (state.get('calibration_plan') or {}).get('protocol') != 5):
+                    raise VastError(NATIVE_CALIBRATION_UNAVAILABLE, 409)
+                plan = state['calibration_plan']
+                try:
+                    expected = configurable_calibration_plan(
+                        plan.get('populations', [None])[0], plan.get('population_step'),
+                        plan.get('max_population'), plan.get('min_scale_gain'),
+                        plan.get('sample_seconds'), plan.get('case_timeout_seconds'), protocol=5)
+                    if expected != plan:
+                        raise ValueError('Noncanonical native calibration plan')
+                except (AttributeError, IndexError, TypeError, ValueError) as exc:
+                    raise VastError('Invalid native calibration plan; no GPU rented', 422) from exc
             if state["rental_state"] != "none":
                 return state  # Start retries never create another rental.
             if (number(offer.get("cpu_cores")) or 0) < state["workers"]:

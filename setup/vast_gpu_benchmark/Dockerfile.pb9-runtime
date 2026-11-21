@@ -1,0 +1,35 @@
+# Rebuild official PB9 while retaining the verified CUDA dependency layers.
+FROM rust:1.90-bookworm AS rust
+FROM %%BASE_IMAGE%% AS build
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+RUN apt-get update && apt-get install -y --no-install-recommends git build-essential && rm -rf /var/lib/apt/lists/*
+RUN rm -rf /opt/passivbot && git init /opt/passivbot \
+    && git -C /opt/passivbot fetch --depth=1 %%REPOSITORY%%.git %%REVISION%% \
+    && git -C /opt/passivbot checkout --detach FETCH_HEAD \
+    && test "$(git -C /opt/passivbot rev-parse HEAD)" = "%%REVISION%%" \
+    && python -m pip wheel --no-deps --wheel-dir /tmp/pb9-wheels /opt/passivbot
+
+FROM %%BASE_IMAGE%% AS runtime
+# Removing the previous source first also removes upstream-deleted modules.
+RUN rm -rf /opt/passivbot
+COPY --from=build /opt/passivbot /opt/passivbot
+COPY --from=build /tmp/pb9-wheels /tmp/pb9-wheels
+RUN python -m pip install --no-deps --force-reinstall /tmp/pb9-wheels/*.whl \
+    && rm -rf /tmp/pb9-wheels \
+    && python -m pip check \
+    && printf '%s\n' '%%REVISION%%' > /opt/pb8-revision \
+    && python -m pip freeze > /opt/pb8-pip-freeze.txt
+COPY worker_candidate.json /opt/pb8-worker-provenance.json
+COPY cloud_worker.py /opt/pbgui/worker.py
+COPY optimize_cli.py pb9_optimize_options.py vast_native_calibration.py verify_native_calibration.py /opt/pbgui/
+RUN cd /opt/passivbot && PYTHONPATH=/opt/pbgui:/opt/passivbot/src python -c 'import passivbot_rust; from rust_utils import source_fingerprint, verify_loaded_runtime_extension; r=verify_loaded_runtime_extension(fingerprint=source_fingerprint()); assert r["runtime_compiled_source_stamp"] == r["expected_source_fingerprint"]'
+RUN cd /work && PYTHONPATH=/opt/pbgui:/opt/passivbot/src python /opt/pbgui/verify_native_calibration.py
+ENV PBGUI_WORKER_RUNTIME=pb9
+LABEL pbgui.worker.protocol="native-launch-v1"
+LABEL pbgui.worker.calibration="native-cohort-v1"
+LABEL pbgui.worker.native.entrypoint="module-cli-v1"
+WORKDIR /work
+CMD ["bash"]

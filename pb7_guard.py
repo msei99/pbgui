@@ -243,18 +243,18 @@ def verify_passivbot_major(repo_dir: str | Path, expected_major: int, *, ref: st
         raise RuntimeError(
             f"Refusing {target}: expected Passivbot v{expected_major}, found v{version}."
         )
-    if expected_major == 8:
+    if expected_major in (8, 9):
         try:
             schema = read_source_string_literal(
                 _source_file(Path(repo_dir), "src/config/schema.py", ref),
                 "CONFIG_SCHEMA_VERSION", source_name="src/config/schema.py",
             )
         except (ValueError, OSError, subprocess.SubprocessError) as exc:
-            raise RuntimeError(f"Could not inspect Passivbot v8 config schema: {exc}") from exc
-        if generation_from_schema(schema) != "pb8":
+            raise RuntimeError(f"Could not inspect Passivbot v{expected_major} config schema: {exc}") from exc
+        if generation_from_schema(schema) != f"pb{expected_major}":
             target = f"ref {ref}" if ref else "checkout"
             raise RuntimeError(
-                f"Refusing {target}: expected Passivbot v8 config schema, found {schema}."
+                f"Refusing {target}: expected Passivbot v{expected_major} config schema, found {schema}."
             )
     return version
 

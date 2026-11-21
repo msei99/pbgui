@@ -9,11 +9,13 @@ from pathlib import Path
 from typing import Any
 
 
-def _managed_run_root(pbgdir: Path) -> Path:
+def _managed_run_root(pbgdir: Path, runtime: str = 'pb8') -> Path:
     """Return a non-symlinked PB8 run root below the supplied PBGui directory."""
     base = pbgdir.expanduser().absolute()
     data_dir = base / "data"
-    run_root = data_dir / "run_v8"
+    if runtime not in {'pb8', 'pb9'}:
+        raise ValueError('Unsupported live runtime')
+    run_root = data_dir / ('run_v9' if runtime == 'pb9' else 'run_v8')
     for path in (base, data_dir, run_root):
         if path.is_symlink():
             raise RuntimeError(f"PB8 live process root must not contain symlinks: {path}")
@@ -28,17 +30,22 @@ def stop_managed_pb8_live_processes(
     run_v8_class: type[Any] | None = None,
 ) -> list[int]:
     """Stop exact PBRun-style live commands without touching PB8 batch jobs."""
+    return stop_managed_live_processes(pbgdir, pb8dir, pb8_python, runner_class=run_v8_class)
+
+
+def stop_managed_live_processes(pbgdir: Path, pb8dir: Path, pb8_python: Path, *,
+                                runtime: str = 'pb8', runner_class: type[Any] | None = None) -> list[int]:
+    """Share exact live-process ownership checks across separate PB8/PB9 slots."""
     pbgdir = pbgdir.expanduser().absolute()
     pb8dir = pb8dir.expanduser().absolute()
     pb8_python = pb8_python.expanduser().absolute()
-    run_root = _managed_run_root(pbgdir)
+    run_root = _managed_run_root(pbgdir, runtime)
     if not run_root.is_dir():
         return []
-    if run_v8_class is None:
+    if runner_class is None:
         sys.path.insert(0, str(pbgdir))
-        from PBRun import RunV8
-
-        run_v8_class = RunV8
+        from PBRun import RunV8, RunV9
+        runner_class = RunV9 if runtime == 'pb9' else RunV8
 
     stopped: list[int] = []
     for instance_dir in sorted(run_root.iterdir(), key=lambda path: path.name):
@@ -50,12 +57,12 @@ def stop_managed_pb8_live_processes(
             or not config_path.is_file()
         ):
             continue
-        runner = run_v8_class()
+        runner = runner_class()
         runner.path = str(instance_dir)
         runner.user = instance_dir.name
         runner.name = platform.node()
-        runner.pb8dir = str(pb8dir)
-        runner.pb8venv = str(pb8_python)
+        setattr(runner, runtime + 'dir', str(pb8dir))
+        setattr(runner, runtime + 'venv', str(pb8_python))
         runner.pbgdir = str(pbgdir)
         process = runner.pid()
         if process is None:
@@ -71,8 +78,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("pbgdir", type=Path)
     parser.add_argument("pb8dir", type=Path)
     parser.add_argument("pb8_python", type=Path)
+    parser.add_argument('--runtime', choices=['pb8', 'pb9'], default='pb8')
     args = parser.parse_args(argv)
-    stopped = stop_managed_pb8_live_processes(args.pbgdir, args.pb8dir, args.pb8_python)
+    stopped = stop_managed_live_processes(args.pbgdir, args.pb8dir, args.pb8_python, runtime=args.runtime)
     sys.stdout.write(f"stopped_processes={len(stopped)}\n")
     return 0
 

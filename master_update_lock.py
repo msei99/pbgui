@@ -141,8 +141,10 @@ def _pb8_update_process_active(install_dir: Path) -> bool:
     pb8_text = str(Path(install_text) / "pb8")
     playbook_markers = (
         "master-update-pb8.yml",
+        "master-update-pb9.yml",
         "master-update-pbgui-pb8.yml",
         "vps-update-pb8.yml",
+        "vps-update-pb9.yml",
         "vps-update-pbgui-pb8.yml",
     )
     build_markers = ("pip", "maturin", "cargo", "rustc")

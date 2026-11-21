@@ -4377,6 +4377,9 @@
           pb7_installed: !!st.pb7_installed,
           pb7_allowed: st.pb7_action_allowed !== false,
           pb7_reason: String(st.pb7_action_reason || ''),
+          pb9_installed: !!st.pb9_installed,
+          pb9_allowed: !!st.pb9_action_allowed,
+          pb9_reason: String(st.pb9_action_reason || st.pb9_runtime_reason || ''),
           pb8_installed: !!st.pb8_installed,
           pb8_up: !!st.pb8_update_available,
           pb8_blocked: !!st.pb8_runtime_blocked,
@@ -4402,6 +4405,9 @@
           pbgui_up: !!st.pbgui_update_available,
           pb7_up: !!st.pb7_update_available,
           pb7_installed: !!st.pb7_installed,
+          pb9_installed: !!st.pb9_installed,
+          pb9_allowed: !!st.pb9_action_allowed,
+          pb9_reason: String(st.pb9_action_reason || st.pb9_runtime_reason || ''),
           pb8_installed: !!st.pb8_installed,
           pb8_up: !!st.pb8_update_available,
           pb8_blocked: !!st.pb8_runtime_blocked,
@@ -11936,6 +11942,7 @@
           <button class='${masterPbguiBtnClass}' type='button' onclick='runMasterWithLog("master-update-pbgui", "Update PBGui")'>Update PBGui</button>
           <button class='${masterPb7BtnClass}' type='button' onclick='runMasterWithLog("master-update-pb7", "${masterPb7ButtonText}")'>${masterPb7ButtonText}</button>
           ${st.pb8_action_allowed ? `<button class='${masterPb8BtnClass}' type='button' title='${escAttr(masterPb8ButtonTitle)}' onclick='runMasterWithLog("master-update-pb8", "${masterPb8ButtonText}")'>${masterPb8ButtonText}</button>` : ''}
+          ${st.pb9_action_allowed ? `<button class='sb-btn ${st.pb9_installed ? 'ok' : 'install'}' type='button' title='${escAttr(st.pb9_runtime_reason || "Official PB9 v9 branch; separate source and environment")}' onclick='runMasterWithLog("master-update-pb9", "${st.pb9_installed ? "Update PB9" : "Install PB9"}")'>${st.pb9_installed ? 'Update PB9' : 'Install PB9'}</button>` : ''}
           ${masterHasBothRuntimes ? `<button class='${masterPbguiPb8BtnClass}' type='button' onclick='runMasterWithLog("master-update-pbgui-pb8", "Update PBGui and PB8")'>Update PBGui and PB8</button>` : ''}
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${store.master.updateReboot ? 'checked' : ''} ${linuxUpdateSupported ? '' : 'disabled'} onchange="setMasterBool('updateReboot', this.checked)"> Reboot after Linux update</label>
@@ -12011,6 +12018,7 @@
           <button class='${pb7BtnClass}' type='button' title='${escAttr(st.pb7_action_reason || '')}' ${pb7ActionAllowed ? '' : 'disabled'} data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb7' data-command-text='${pb7ButtonText}'>${pb7ButtonText}</button>
           ${!pb7ActionAllowed && st.pb7_action_reason ? `<div class='notice warning'>${esc(st.pb7_action_reason)}</div>` : ''}
           ${st.pb8_action_allowed ? `<button class='${pb8BtnClass}' type='button' title='${escAttr(pb8ButtonTitle)}' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb8' data-command-text='${pb8ButtonText}'>${pb8ButtonText}</button>` : ''}
+          <button class='sb-btn ${st.pb9_installed ? 'ok' : 'install'}' type='button' title='${escAttr(st.pb9_action_reason || st.pb9_runtime_reason || "Official PB9 v9 branch; separate source and environment")}' ${st.pb9_action_allowed ? '' : 'disabled'} data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb9' data-command-text='${st.pb9_installed ? "Update PB9" : "Install PB9"}'>${st.pb9_installed ? 'Update PB9' : 'Install PB9'}</button>
           ${!st.pb8_action_allowed && st.pb8_action_reason ? `<div class='notice warning'>${esc(st.pb8_action_reason)}</div>` : ''}
           <button class='${bothBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='${combinedCommand}' data-command-text='${combinedText}'>${combinedText}</button>
           ${hasBothRuntimes ? `<button class='${pbguiPb8BtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pbgui-pb8' data-command-text='Update PBGui and PB8'>Update PBGui and PB8</button>` : ''}

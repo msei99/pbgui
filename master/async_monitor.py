@@ -863,6 +863,13 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
                 raise MonitorAgentPayloadError(f"invalid type for {field}")
         if "pb8reason" in payload and (not isinstance(payload.get("pb8reason"), str) or len(payload["pb8reason"]) > 500):
             raise MonitorAgentPayloadError("invalid pb8reason")
+        pb9_strings = ('pb9v', 'pb9_config_schema', 'pb9c', 'pb9b', 'pb9py', 'pb9reason')
+        for field in pb9_strings:
+            if field in payload and (not isinstance(payload[field], str) or len(payload[field]) > 500):
+                raise MonitorAgentPayloadError(f'invalid {field}')
+        for field in ('pb9ready', 'pb9installed', 'pb9blocked', 'pb9wheel'):
+            if field in payload and type(payload[field]) is not bool:
+                raise MonitorAgentPayloadError(f'invalid {field}')
         _monitor_agent_require_number(payload, "boot", minimum=0.0)
         if type(payload.get("reboot")) is not bool:
             raise MonitorAgentPayloadError("invalid type for reboot")
@@ -3938,6 +3945,27 @@ result['pb8blocked'] = pb8_invalid_marker.exists() or pb8_invalid_marker.is_syml
 if result['pb8blocked']:
     result['pb8reason'] = 'PB8 installation or update did not complete; run Update PB8.'
 result['pb8ready'] = result['pb8installed'] and not result['pb8blocked']
+
+# Optional PB9 slot: older hosts can omit these fields until PBGui is updated.
+pb9dir = cfg.get('main', 'pb9dir', fallback='')
+pb9venv = cfg.get('main', 'pb9venv', fallback='')
+pb9_marker = Path(PBGDIR) / 'data/locks/pb9-runtime-invalid'
+result.update(pb9v=read_pb7_version(pb9dir), pb9_config_schema=read_pb7_config_schema(pb9dir),
+    pb9c=git_value(str(Path(pb9dir)/'.git'), ['rev-parse', 'HEAD'], '') if pb9dir else '',
+    pb9b=git_value(str(Path(pb9dir)/'.git'), ['rev-parse', '--abbrev-ref', 'HEAD'], 'unknown') if pb9dir else 'unknown',
+    pb9py=python_version(pb9venv) or 'N/A', pb9wheel=False,
+    pb9blocked=pb9_marker.exists() or pb9_marker.is_symlink(), pb9reason='')
+result['pb9installed'] = bool(result['pb9v'].startswith('v9.') and result['pb9_config_schema'].startswith('v9.')
+    and result['pb9c'] and pb9venv and Path(pb9venv).is_file() and Path(pb9venv).parent.joinpath('passivbot').is_file())
+result['pb9ready'] = result['pb9installed'] and not result['pb9blocked']
+if result['pb9blocked']:
+    result['pb9reason'] = 'PB9 installation or update did not complete; run Update PB9.'
+if pb9dir and pb9venv:
+    try:
+        from pb_wheel_status import wheel_installed
+        result['pb9wheel'] = wheel_installed(Path(PBGDIR), 'pb9', Path(pb9dir), Path(pb9venv))
+    except (ImportError, OSError, ValueError):
+        pass  # An older host has no PB9 wheel verifier; no receipt is claimed.
 
 available = []
 logs_dir = os.path.join(PBGDIR, 'data', 'logs')

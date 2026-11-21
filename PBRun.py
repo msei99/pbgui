@@ -1811,6 +1811,12 @@ class RunV9(RunV8):
 
         from pb9_runtime import inspect_pb9_runtime
 
+        from pb9_backtest_runtime import require_runtime_available
+        try:
+            require_runtime_available(self.pbgdir)
+        except RuntimeError as exc:
+            self._log_block('runtime_invalid', str(exc))
+            return False
         try:
             status = inspect_pb9_runtime(self.pb9dir, self.pb9venv, dict(self.other_slots or {}))
         except Exception:

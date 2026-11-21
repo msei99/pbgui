@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from installer_template_helpers import pb8_playbook_source
+
 import configparser
 from pathlib import Path
 from types import SimpleNamespace
@@ -90,7 +92,7 @@ def test_local_master_restart_waits_for_imported_pb8_update() -> None:
 )
 def test_delayed_api_restart_disables_systemd_environment_expansion(playbook_path: str) -> None:
     """systemd must pass Bash variables through instead of expanding restart scripts itself."""
-    source = Path(playbook_path).read_text(encoding="utf-8")
+    source = pb8_playbook_source(playbook_path)
 
     assert "systemd-run --user" in source
     assert "--expand-environment=no" in source
@@ -162,7 +164,7 @@ def test_pb8_full_updates_request_platform_gated_gpu_dependencies(playbook: str)
 @pytest.mark.parametrize("playbook_path", ["master-update-pbgui.yml", "master-update-pb.yml"])
 def test_master_updates_migrate_missing_legacy_master_role(playbook_path: str) -> None:
     """Master updates repair old configs without replacing an explicit role."""
-    source = Path(playbook_path).read_text(encoding="utf-8")
+    source = pb8_playbook_source(playbook_path)
 
     task = source.split("- name: Migrate missing legacy master role", 1)[1]
     task = task.split("\n    - name:", 1)[0]
@@ -175,7 +177,7 @@ def test_master_updates_migrate_missing_legacy_master_role(playbook_path: str) -
 @pytest.mark.parametrize("playbook_path", ["master-update-pb8.yml", "vps-update-pb8.yml"])
 def test_pb8_playbooks_validate_before_restarting_live_processes(playbook_path: str) -> None:
     """PB8 updates restart managed live bots only after complete runtime validation."""
-    source = Path(playbook_path).read_text(encoding="utf-8")
+    source = pb8_playbook_source(playbook_path)
 
     role_index = source.index("Read ")
     assert_index = source.index("Require ")
@@ -391,7 +393,7 @@ def test_remote_pb8_branch_state_uses_controller_sources_not_target_remotes(monk
 @pytest.mark.parametrize("playbook_path", ["master-update-pb8.yml", "vps-update-pb8.yml"])
 def test_pb8_playbooks_validate_optional_branch_before_checkout(playbook_path: str) -> None:
     """Explicit PB8 branch changes preserve the official path and validate v8 before checkout."""
-    source = Path(playbook_path).read_text(encoding="utf-8")
+    source = pb8_playbook_source(playbook_path)
 
     assert "pb8_branch_switch" in source
     assert "Check PB8 checkout for tracked changes" in source
@@ -906,7 +908,7 @@ def test_pb8_remote_action_status_uses_role_and_free_disk_only() -> None:
 
 def test_pb8_runner_playbook_never_requires_target_cargo_environment() -> None:
     """Target installs use binaries and cannot require a local Rust environment."""
-    source = Path("vps-update-pb8.yml").read_text(encoding="utf-8")
+    source = pb8_playbook_source("vps-update-pb8.yml")
 
     assert '.cargo/env' not in source
     assert "rustup update" not in source
@@ -917,9 +919,9 @@ def test_runtime_update_playbooks_support_pb8_only_maintenance_and_pb7_install()
     """Dedicated maintenance paths must cover PB8-only combined updates and later PB7 installation."""
     remote_combined = Path("vps-update-pbgui-pb8.yml").read_text(encoding="utf-8")
     master_combined = Path("master-update-pbgui-pb8.yml").read_text(encoding="utf-8")
-    master_pb8 = Path("master-update-pb8.yml").read_text(encoding="utf-8")
+    master_pb8 = pb8_playbook_source("master-update-pb8.yml")
     pb7_update = Path("vps-update-pb7.yml").read_text(encoding="utf-8")
-    pb8_update = Path("vps-update-pb8.yml").read_text(encoding="utf-8")
+    pb8_update = pb8_playbook_source("vps-update-pb8.yml")
 
     assert "import_playbook: vps-update-pbgui.yml" in remote_combined
     assert "import_playbook: vps-update-pb8.yml" in remote_combined
@@ -967,7 +969,7 @@ def test_vps_setup_pb8_profile_skips_every_pb7_runtime_task() -> None:
 def test_vps_setup_runs_pb8_inside_the_same_ansible_run() -> None:
     """PB8 setup is a second play in vps-setup, not a Python follow-up job."""
     setup_source = Path("vps-setup.yml").read_text(encoding="utf-8")
-    pb8_source = Path("vps-update-pb8.yml").read_text(encoding="utf-8")
+    pb8_source = pb8_playbook_source("vps-update-pb8.yml")
     core_source = Path("vps_manager_core.py").read_text(encoding="utf-8")
     setup_method = core_source.split("    def setup_vps(self, vps: VPS", 1)[1].split(
         "    def update_vps(self, vps: VPS", 1

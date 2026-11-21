@@ -248,7 +248,7 @@ def preflight_local_metadata(store: JobStore, jobs: list[dict], resolve_missing:
 
 
 
-def validated_rental_job_profiles(profiles: dict | None, allowed_ids: set[str]) -> dict:
+def validated_rental_job_profiles(profiles: dict | None, allowed_ids: set[str], *, runtime='pb8') -> dict:
     """Bound and validate job-specific manual GPU overrides against the frozen waiting queue."""
     from vast_gpu_tuning import _validated_rental_gpu_profile
     if profiles is None:
@@ -263,7 +263,7 @@ def validated_rental_job_profiles(profiles: dict | None, allowed_ids: set[str]) 
         if profile is None:
             raise VastError('Invalid job GPU profile selection', 422)
         try:
-            result[identifier] = _validated_rental_gpu_profile(profile)
+            result[identifier] = _validated_rental_gpu_profile(profile, runtime=runtime)
         except ValueError:
             raise VastError('Invalid job GPU profile selection', 422) from None
     return result
@@ -408,7 +408,7 @@ class CloudQueue:
                 raise VastError('Rental GPU overrides require a manual rental', 422)
             from vast_gpu_tuning import _validated_rental_gpu_profile
             try:
-                rental_gpu_profile = _validated_rental_gpu_profile(rental_gpu_profile)
+                rental_gpu_profile = _validated_rental_gpu_profile(rental_gpu_profile, runtime=selected_runtime)
             except ValueError:
                 raise VastError('Invalid rental GPU profile', 422) from None
         if rental_job_gpu_profiles and not manual and replacement_authorization is None:
@@ -520,6 +520,7 @@ class CloudQueue:
                 raise VastError('Cloud inputs changed during local metadata preparation; retry rental', 409)
             job_profiles = validated_rental_job_profiles(
                 rental_job_gpu_profiles, {row['id'] for row in jobs if row.get('kind') != 'calibration'},
+                runtime=selected_runtime,
             )
             if replacement_authorization is not None and (
                     rental_gpu_profile != replacement_authorization.get('rental_gpu_profile')
@@ -581,7 +582,7 @@ class CloudQueue:
         from vast_gpu_tuning import _validated_rental_gpu_profile
         identifier = job_id(identifier)
         try:
-            profile = _validated_rental_gpu_profile(profile)
+            profile = _validated_rental_gpu_profile(profile, runtime=self.store.read(identifier).get('runtime', 'pb8'))
         except ValueError:
             raise VastError('Invalid rental GPU profile', 422) from None
         with advisory_file_lock(self.root / '.queue-lock'):
@@ -600,7 +601,7 @@ class CloudQueue:
                 compatible = worker_compatible_jobs(
                     self.store, self.waiting(), image=intent['image'], revision=intent['pb8_revision'])
                 selected = validated_rental_job_profiles(
-                    job_profiles, {row['id'] for row in compatible},
+                    job_profiles, {row['id'] for row in compatible}, runtime=worker.get('runtime', 'pb8'),
                 )
                 intent['rental_job_gpu_profiles'] = selected
             intent['rental_gpu_profile'] = profile
