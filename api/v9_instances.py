@@ -495,11 +495,34 @@ def _assert_stopped(name: str, target: Path) -> None:
         observed = _remote_rows(name)
         active_host = str(_last_active_host(name).get("host") or "")
         remote_hosts = set(observed)
+        required_versions = {}
+        root = _cluster_root()
+        stored_gui = _read_bundle(target)[1]
+        managed_stop = stored_gui.get("cluster_managed") is True and stored_gui["enabled_on"] == "disabled"
+        if managed_stop and not (root / "desired_state.json").is_file():
+            raise HTTPException(409, "PB9 disabled Cluster generation is not yet available")
+        if (root / "desired_state.json").is_file():
+            from master.cluster_state import read_materialized_state
+            from api import v8_instances as shared
+            record = ((read_materialized_state(root).get("desired_state") or {}).get("pb9_instances") or {}).get(name) or {}
+            if managed_stop and (record.get("desired_state") != "stopped" or record.get("conflicted") is True
+                                 or _coerce_version(record.get("version")) != stored_gui["version"]):
+                raise HTTPException(409, "PB9 disabled Cluster generation is not yet confirmed")
+            if record.get("desired_state") == "stopped":
+                node = shared._cluster_nodes(root).get(record.get("assigned_host")) or {}
+                source = str(node.get("pbname") or node.get("hostname") or "")
+                if not source:
+                    raise HTTPException(409, "PB9 stopped-source identity is unavailable")
+                if source != _master_hostname():
+                    remote_hosts.add(source)
+                    required_versions[source] = _coerce_version(record.get("version"))
         if active_host and active_host != _master_hostname():
             remote_hosts.add(active_host)
         for host in remote_hosts:
             if not _remote_snapshot_fresh(host) or observed.get(host, {}).get("running") is not False:
                 raise HTTPException(409, f"PB9 stopped state on '{host}' is not freshly confirmed; nothing was removed")
+            if host in required_versions and _coerce_version(observed.get(host, {}).get("cv")) != required_versions[host]:
+                raise HTTPException(409, f"PB9 stopped state on '{host}' does not match the disabled config")
     except HTTPException:
         raise
     except Exception as exc:
@@ -956,7 +979,7 @@ def _cluster_context(enabled_on: str, schema: str) -> tuple[dict, str] | None:
 
 
 def _publish_cluster_bundle(name: str, target: Path, sidecar: dict, context: tuple | None,
-                            parent_version: int, is_new: bool, parent_manifest_hash: str = "") -> None:
+                            parent_version: int, is_new: bool, parent_manifest_hash: str = "") -> dict | None:
     """Publish immutable native files, then append one signed PB9 operation."""
     if context is None:
         return
@@ -980,18 +1003,11 @@ def _publish_cluster_bundle(name: str, target: Path, sidecar: dict, context: tup
         rebuild_materialized_state(root)
     except Exception as exc:
         _log(SERVICE, f"PB9 desired-state rebuild deferred after {operation['op_id']}: {type(exc).__name__}", level="WARNING")
+    return operation
 
 
-def _save(
-    name: str,
-    config: Any,
-    *,
-    expected_version: int | None,
-    cancel_event,
-    create_only: bool = False,
-    require_stopped: bool = False,
-) -> dict[str, Any]:
-    """Validate natively, then back up and atomically publish one complete bundle."""
+def _validate_save_config(name: str, config: Any, cancel_event) -> tuple:
+    """Validate the complete requested change before any handover stops its source."""
     name = _validate_name(name)
     native, pbgui = _split_config(config)
     if _config_user(native) != name:
@@ -1005,8 +1021,6 @@ def _save(
         preferences = _filter_preferences(pbgui)
     except _BundleError:
         raise HTTPException(status_code=422, detail="Invalid PB9 editor filter preferences") from None
-    if expected_version is None:
-        expected_version = _coerce_version(pbgui.get("version"))
     cluster = _cluster_context(enabled_on, str(native.get("config_version") or ""))
     try:
         known_users = {item["name"] for item in _available_users()}
@@ -1017,6 +1031,18 @@ def _save(
         raise HTTPException(status_code=409, detail=f"Exchange user '{name}' is not configured")
     # Native validation needs no storage lock; listings stay responsive meanwhile.
     _validate_native(native, cancel_event)
+    return name, native, pbgui, enabled_on, note, preferences, cluster
+
+
+def _save(
+    name: str, config: Any, *, expected_version: int | None, cancel_event,
+    create_only: bool = False, require_stopped: bool = False, activate: bool = False,
+) -> dict[str, Any]:
+    """Validate natively, then back up and atomically publish one complete bundle."""
+    name, native, pbgui, enabled_on, note, preferences, cluster = _validate_save_config(name, config, cancel_event)
+    if expected_version is None:
+        expected_version = _coerce_version(pbgui.get("version"))
+    operation = {}
 
     with _run_lock() as root:
         target = root / name
@@ -1092,8 +1118,9 @@ def _save(
                     backup_id = _snapshot(name, target)
                 live_bundle_store.publish_staged_bundle(
                     stage, target, generation_prefix=".pbgui-v9", label="PB9",
-                    on_publish=lambda: _publish_cluster_bundle(name, target, sidecar, cluster, current, not existed,
-                                                              parent_manifest_hash=parent_manifest_hash),
+                    on_publish=lambda: operation.update(_publish_cluster_bundle(
+                        name, target, sidecar, cluster, current, not existed,
+                        parent_manifest_hash=parent_manifest_hash) or {}),
                 )
                 published = True
         except (HTTPException, PB9ConfigError):
@@ -1109,6 +1136,16 @@ def _save(
                 shutil.rmtree(stage, ignore_errors=True)
     _invalidate_instance_list()
     _log(SERVICE, f"Saved PB9 live config '{name}' (v{sidecar['version']})", level="INFO")
+    sync = {"ok": True, "pending": cluster is not None, "direct": False,
+            "status": "pending" if cluster is not None else "local"}
+    if activate and operation:
+        from master.cluster_sync_worker import push_pb9_activation
+        try:
+            direct = push_pb9_activation(_cluster_root(), operation, timeout=3)
+            sync.update(ok=bool(direct.get("ok")), pending=not bool(direct.get("ok")),
+                        direct=bool(direct.get("direct")))
+        except Exception as exc:
+            _log(SERVICE, f"PB9 activation deferred for '{name}': {type(exc).__name__}", level="WARNING")
     return {
         "ok": True,
         "name": name,
@@ -1116,8 +1153,7 @@ def _save(
         "config": {**native, "pbgui": sidecar},
         "overrides": [],
         "backup_id": backup_id,
-        "sync": {"ok": True, "pending": cluster is not None, "direct": False,
-                 "status": "pending" if cluster is not None else "local"},
+        "sync": sync,
     }
 
 
@@ -1189,12 +1225,68 @@ def _op_draft_create(args, body, cancel_event) -> dict[str, Any]:
     return {"draft_id": draft_id, "expires_in": _DRAFT_TTL_SECONDS}
 
 
+_MOVE_STOP_TIMEOUT_SECONDS = 30.0
+
+
+def _save_from_editor(name: str, config: Any, *, expected_version: int | None,
+                      cancel_event, create_only: bool) -> dict[str, Any]:
+    """Complete a requested host change through a durable disabled generation."""
+    _native, requested_gui = _split_config(config)
+    target_host = _validate_target(requested_gui.get("enabled_on", "disabled"))
+    previous = None
+    if not create_only:
+        try:
+            with _read_lock():
+                previous = _load_instance(name)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
+    if previous and target_host not in {"disabled", previous[2]["enabled_on"]} and previous[2]["enabled_on"] != "disabled":
+        _validate_save_config(name, config, cancel_event)
+        source_native, source_gui = previous[1:]
+        source_host = source_gui["enabled_on"]
+        disabled = _save(name, {**source_native, "pbgui": {**source_gui, "enabled_on": "disabled"}},
+                         expected_version=expected_version if expected_version is not None else _coerce_version(requested_gui.get("version")),
+                         cancel_event=cancel_event, activate=True)
+        disabled_version = disabled["version"]
+        deadline = time.monotonic() + _MOVE_STOP_TIMEOUT_SECONDS
+        try:
+            while True:
+                _check_cancel(cancel_event)
+                with _read_lock():
+                    directory, _native, current = _load_instance(name)
+                    if current["version"] != disabled_version or current["enabled_on"] != "disabled":
+                        raise HTTPException(409, "PB9 move cancelled because another save changed the instance")
+                    try:
+                        _assert_stopped(name, directory)
+                        break
+                    except HTTPException as exc:
+                        if exc.status_code != 409:
+                            raise
+                        waiting_reason = str(exc.detail)
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise HTTPException(409, f"PB9 move is waiting for the confirmed stop on '{source_host}'. The instance is disabled; retry Save. {waiting_reason}")
+                time.sleep(min(0.2, remaining))
+            result = _save(name, config, expected_version=disabled_version, cancel_event=cancel_event, activate=True)
+            result["move"] = {"from": source_host, "to": target_host, "stopped_version": disabled_version}
+            return result
+        except HTTPException as exc:
+            with _read_lock():
+                _directory, _native, current = _load_instance(name)
+            if current["version"] == disabled_version and current["enabled_on"] == "disabled":
+                exc.headers = {**(exc.headers or {}), "X-PB9-Saved-Version": str(disabled_version)}
+            raise
+    return _save(name, config, expected_version=expected_version, cancel_event=cancel_event,
+                 create_only=create_only, activate=True)
+
+
 def _op_save(args, body, cancel_event) -> dict[str, Any]:
-    """Create or update one bundle under optimistic version control."""
+    """Save a bundle or safely hand over an existing instance to its new target."""
     body = _body_fields(body, {"config"}, {"expected_version", "override_configs"})
     _require_no_overrides(body)
     expected = body.get("expected_version")
-    return _save(
+    return _save_from_editor(
         args["name"],
         body["config"],
         expected_version=None if expected is None else _version_number(expected),

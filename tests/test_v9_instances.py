@@ -28,6 +28,16 @@ def run_api(tmp_path, monkeypatch):
     monkeypatch.setattr(api, 'load_pb9_template', lambda *a, **k: {'config': {k: copy.deepcopy(v) for k, v in config.items() if k != 'pbgui'}})
     monkeypatch.setattr(api, '_runner', lambda *a, **k: SimpleNamespace(pid=lambda: None))
     monkeypatch.setattr(api.psutil, 'process_iter', lambda *a, **k: [])
+    from master import cluster_sync_worker
+    activations = []
+    def activate(_root, operation, **kwargs):
+        """Record synthetic delivery only; never contact a real Cluster host."""
+        activations.append(copy.deepcopy(operation))
+        callback = getattr(state, 'activation_callback', None)
+        if callback:
+            callback(operation)
+        return {'ok': False, 'direct': False}
+    monkeypatch.setattr(cluster_sync_worker, 'push_pb9_activation', activate)
     api._invalidate_instance_list()
     api.clear_drafts()
 
@@ -43,8 +53,10 @@ def run_api(tmp_path, monkeypatch):
     app = FastAPI(lifespan=lifespan)
     app.dependency_overrides[auth.require_auth] = lambda: SimpleNamespace(user_id='fixture')
     app.include_router(api.router, prefix='/api/v9')
+    state = SimpleNamespace(config=config, root=tmp_path, monkeypatch=monkeypatch, activations=activations)
     with TestClient(app) as client:
-        yield SimpleNamespace(client=client, config=config, root=tmp_path, monkeypatch=monkeypatch)
+        state.client = client
+        yield state
 
 
 def _save(state, config=None, **extra):
@@ -435,7 +447,9 @@ def test_remote_disable_keeps_placement_until_stop_and_move_is_verified(remote_r
     s = remote_run
     saved = _save(s).json()['config']
     moving = copy.deepcopy(saved); moving['pbgui']['enabled_on'] = 'node'
-    assert _save(s, moving).status_code == 409
+    import threading
+    with pytest.raises(api.HTTPException, match='Disable the PB9 instance'):
+        api._save('fixture', moving, expected_version=1, cancel_event=threading.Event())
     saved['pbgui']['enabled_on'] = 'disabled'
     disabled = _save(s, saved)
     assert disabled.status_code == 200
@@ -446,3 +460,141 @@ def test_remote_disable_keeps_placement_until_stop_and_move_is_verified(remote_r
     s.monitor.store.v9_instances['remote'] = [{'name':'fixture','running':False,'cv':2,'rv':0}]
     s.monitor.store.v9_snapshot_times['remote'] = (time.time(), time.time())
     assert _save(s, moving).status_code == 200
+
+
+def test_editor_move_remote_to_local_waits_for_disabled_generation(remote_run):
+    """One Save delivers Stop to the source before publishing the target assignment."""
+    import time
+    s = remote_run
+    saved = _save(s).json()['config']
+    s.monitor.store.v9_instances['remote'] = [{'name': 'fixture', 'running': True, 'cv': 1, 'rv': 1}]
+    def stopped(operation):
+        """Simulate the source's observation of this exact disabled generation."""
+        if operation['desired_state'] == 'stopped':
+            version = int(operation['version'])
+            s.monitor.store.v9_instances['remote'] = [{'name': 'fixture', 'running': False, 'cv': version, 'rv': 0}]
+            s.monitor.store.v9_snapshot_times['remote'] = (time.time(), time.time())
+    s.activation_callback = stopped
+    saved['pbgui']['enabled_on'] = 'node'
+    result = _save(s, saved)
+    assert result.status_code == 200, result.text
+    assert result.json()['move'] == {'from': 'remote', 'to': 'node', 'stopped_version': 2}
+    assert result.json()['config']['pbgui']['enabled_on'] == 'node'
+    assert [(op['version'], op['enabled_on']) for op in s.activations] == [('1', 'remote'), ('2', 'disabled'), ('3', 'node')]
+
+
+def test_editor_move_local_to_remote_retains_remote_log_target(remote_run):
+    """Local Log, a host change and Save cannot redirect the resulting remote log."""
+    from api import vps
+    s = remote_run
+    s.config['pbgui']['enabled_on'] = 'node'
+    saved = _save(s).json()['config']
+    path = s.root / 'data/run_v9/fixture/passivbot_err.log'
+    path.write_text('previous local output')
+    assert s.client.get('/api/v9/instances/fixture/log-smart').json()['host'] == 'node'
+    running = [True]
+    s.monkeypatch.setattr(api, '_runner', lambda *a, **k: SimpleNamespace(pid=lambda: object() if running[0] else None))
+    def stopped(operation):
+        """Model PBRun stopping after it receives the disabled source config."""
+        if operation['desired_state'] == 'stopped':
+            running[0] = False
+    s.activation_callback = stopped
+    saved['pbgui']['enabled_on'] = 'remote'
+    result = _save(s, saved)
+    assert result.status_code == 200, result.text
+    assert result.json()['version'] == 3
+    assert result.json()['config']['pbgui']['enabled_on'] == 'remote'
+    async def no_remote_output(*a, **k):
+        """No remote log exists yet; do not contact any host."""
+        return ''
+    s.monkeypatch.setattr(vps, 'get_bot_log_tail', no_remote_output)
+    log = s.client.get('/api/v9/instances/fixture/log-smart').json()
+    assert log['host'] == 'remote' and log['log'] == ''
+
+
+@pytest.mark.parametrize('snapshot_version', [1, 2])
+def test_move_timeout_keeps_source_disabled_and_retry_requires_current_proof(remote_run, snapshot_version):
+    """A stale stopped row cannot authorize transfer, including a later Save retry."""
+    import time
+    s = remote_run
+    saved = _save(s).json()['config']
+    s.monkeypatch.setattr(api, '_MOVE_STOP_TIMEOUT_SECONDS', 0)
+    s.monitor.store.v9_instances['remote'] = [{'name': 'fixture', 'running': False, 'cv': 1, 'rv': 0}]
+    s.monitor.store.v9_snapshot_times['remote'] = (time.time(), time.time())
+    saved['pbgui']['enabled_on'] = 'node'
+    result = _save(s, saved)
+    assert result.status_code == 409
+    assert result.headers['X-PB9-Saved-Version'] == '2'
+    assert s.client.get('/api/v9/instances/fixture/config').json()['config']['pbgui']['enabled_on'] == 'disabled'
+    assert [op['enabled_on'] for op in s.activations] == ['remote', 'disabled']
+    import shutil
+    shutil.rmtree(s.root / 'data/backup/v9/fixture')
+    s.monitor.store.v9_instances['remote'][0]['cv'] = snapshot_version
+    retry = _save(s, saved, expected_version=2)
+    assert retry.status_code == (200 if snapshot_version == 2 else 409)
+
+
+def test_invalid_move_does_not_disable_source(remote_run):
+    """All requested input is validated before the first durable stop command."""
+    s = remote_run
+    saved = _save(s).json()['config']
+    saved['pbgui'].update(enabled_on='node', note='x' * 2001)
+    assert _save(s, saved).status_code == 422
+    assert len(s.activations) == 1
+    current = s.client.get('/api/v9/instances/fixture/config').json()['config']['pbgui']
+    assert current['version'] == 1 and current['enabled_on'] == 'remote'
+
+
+def test_concurrent_save_cancels_move_without_overwriting_newer_state(remote_run):
+    """An intervening writer keeps ownership even while a move waits for Stop."""
+    import threading
+    s = remote_run
+    saved = _save(s).json()['config']
+    def another_save(operation):
+        """Publish a newer disabled edit without invoking transport recursively."""
+        if operation['desired_state'] == 'stopped':
+            other = copy.deepcopy(saved)
+            other['pbgui'].update(enabled_on='disabled', note='another editor')
+            api._save('fixture', other, expected_version=2, cancel_event=threading.Event())
+    s.activation_callback = another_save
+    saved['pbgui']['enabled_on'] = 'node'
+    result = _save(s, saved)
+    assert result.status_code == 409
+    assert 'X-PB9-Saved-Version' not in result.headers
+    current = s.client.get('/api/v9/instances/fixture/config').json()['config']['pbgui']
+    assert current['version'] == 3 and current['note'] == 'another editor'
+    assert current['enabled_on'] == 'disabled'
+
+
+def test_cancelled_move_never_publishes_target(remote_run):
+    """API shutdown leaves the durable source Stop in force without a target start."""
+    import threading
+    s = remote_run
+    saved = _save(s).json()['config']
+    cancel = threading.Event()
+    s.activation_callback = lambda operation: cancel.set() if operation['desired_state'] == 'stopped' else None
+    saved['pbgui']['enabled_on'] = 'node'
+    with pytest.raises(PB9ConfigError):
+        api._save_from_editor('fixture', saved, expected_version=1, cancel_event=cancel, create_only=False)
+    current = s.client.get('/api/v9/instances/fixture/config').json()['config']['pbgui']
+    assert current['version'] == 2 and current['enabled_on'] == 'disabled'
+    assert [op['enabled_on'] for op in s.activations] == ['remote', 'disabled']
+
+
+def test_unmaterialized_stop_cannot_reuse_old_stopped_observation(remote_run):
+    """A durable Stop still needs its matching desired generation before transfer."""
+    import time
+    from master import cluster_state
+    s = remote_run
+    saved = _save(s).json()['config']
+    def deferred(*args, **kwargs):
+        """Leave the previous desired-state generation in place."""
+        raise RuntimeError('synthetic deferred rebuild')
+    s.monkeypatch.setattr(cluster_state, 'rebuild_materialized_state', deferred)
+    s.monkeypatch.setattr(api, '_MOVE_STOP_TIMEOUT_SECONDS', 0)
+    s.monitor.store.v9_instances['remote'] = [{'name': 'fixture', 'running': False, 'cv': 1, 'rv': 0}]
+    s.monitor.store.v9_snapshot_times['remote'] = (time.time(), time.time())
+    saved['pbgui']['enabled_on'] = 'node'
+    result = _save(s, saved)
+    assert result.status_code == 409
+    assert [op['enabled_on'] for op in s.activations] == ['remote', 'disabled']

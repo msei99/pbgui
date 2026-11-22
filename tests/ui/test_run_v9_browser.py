@@ -71,14 +71,28 @@ def editor():
                 route.fulfill(json={'users': [{'name': 'fixture', 'exchange': 'bybit'}]})
             elif path == '/api/v9/hosts':
                 route.fulfill(json={**getattr(state, 'hosts_payload', {'hosts': ['disabled', 'fixture-host'], 'host_capabilities': {'fixture-host': {'pb9_capable': True, 'target_eligible': True}}}), 'request_id': parse_qs(url.query).get('request_id', [''])[0]})
+            elif path.endswith('/log-smart'):
+                host = state.config['pbgui']['enabled_on']
+                route.fulfill(json={'host': host if host != 'disabled' else 'fixture-host',
+                                    'master': 'fixture-host', 'version': str(state.config['pbgui']['version']),
+                                    'log': '', 'source': 'current'})
             elif path.endswith('/next-version'):
                 route.fulfill(json={'next_version': 1, 'version': 1})
             elif path.endswith('/config') and route.request.method == 'PUT':
                 payload = route.request.post_data_json
                 state.saved.append(copy.deepcopy(payload))
+                if getattr(state, 'reject_move', False):
+                    state.reject_move = False
+                    state.config['pbgui'].update(enabled_on='disabled', version=2)
+                    route.fulfill(status=409, json={'detail': 'PB9 move is waiting for the confirmed stop. The instance is disabled; retry Save.'},
+                                  headers={'X-PB9-Saved-Version': '2'})
+                    return
+                previous_host = state.config['pbgui']['enabled_on']
+                previous_version = state.config['pbgui']['version']
                 state.config = copy.deepcopy(payload['config'])
-                state.config['pbgui']['version'] = len(state.saved)
-                result = {'ok': True, 'name': 'fixture', 'version': len(state.saved), 'config': state.config}
+                moved = getattr(state, 'simulate_move', False) and previous_host not in ('disabled', state.config['pbgui']['enabled_on'])
+                state.config['pbgui']['version'] = previous_version + (2 if moved else 1)
+                result = {'ok': True, 'name': 'fixture', 'version': state.config['pbgui']['version'], 'config': state.config}
                 if state.hold_save:
                     state.pending.append((route, copy.deepcopy(result)))
                 else:
@@ -103,6 +117,7 @@ def editor():
 
         page.route('**/*', respond)
         page.route_web_socket('**/ws/v9', lambda socket: None)
+        page.route_web_socket('**/ws/vps', lambda socket: None)
         page.goto('http://run9.test/api/v9/edit_page?new=1')
         try:
             yield state
@@ -468,4 +483,69 @@ def test_target_readiness_updates_without_replacing_dirty_assignment(editor):
     expect(page.locator('#f-enabled-on option[value="remote"]')).to_be_enabled()
     expect(page.locator('#f-note')).to_have_value('unsaved note')
     assert len(editor.saved) == 1
+    assert not editor.errors and not editor.unexpected
+
+
+def test_local_log_home_move_save_and_remote_log(editor):
+    """Reproduce the reported navigation sequence using the actual shared viewer."""
+    page = editor.page
+    editor.simulate_move = True
+    editor.hosts_payload = {
+        'hosts': ['disabled', 'fixture-host', 'remote'],
+        'host_capabilities': {host: {'pb9_capable': True, 'target_eligible': True,
+                                    'schema_compatible': True} for host in ['fixture-host', 'remote']},
+    }
+    page.reload()
+    expect(page.locator('#f-enabled-on option[value="fixture-host"]')).to_have_count(1)
+    page.locator('#f-enabled-on').select_option('fixture-host')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('1')
+    page.locator('#btn-log').click()
+    expect(page.locator('#log-panel-host')).to_have_text('fixture-host (v1)')
+    expect(page.locator('#log-viewer-target .lvp-host-sel')).to_have_value('local')
+    page.get_by_role('button', name='🏠 Home', exact=True).click()
+    expect(page).to_have_url('http://run9.test/api/v9/main_page')
+    page.locator('[data-edit="fixture"]').click()
+    expect(page.locator('#f-enabled-on')).to_have_value('fixture-host')
+    page.locator('#f-enabled-on').select_option('remote')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('3')
+    assert editor.saved[-1]['config']['pbgui']['enabled_on'] == 'remote'
+    page.locator('#btn-log').click()
+    expect(page.locator('#log-panel-host')).to_have_text('remote (v3)')
+    expect(page.locator('#log-viewer-target .lvp-host-sel')).to_have_value('remote')
+    # Repeat the change with the panel already open: the old viewer must be replaced.
+    page.locator('#f-enabled-on').select_option('fixture-host')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('5')
+    expect(page.locator('#log-panel-host')).to_have_text('fixture-host (v5)')
+    expect(page.locator('#log-viewer-target .lvp-host-sel')).to_have_value('local')
+    assert not editor.errors and not editor.unexpected
+
+
+def test_incomplete_move_keeps_draft_and_retry_version(editor):
+    """A visible stop-pending error acknowledges only the disabled generation."""
+    page = editor.page
+    editor.hosts_payload = {
+        'hosts': ['disabled', 'fixture-host', 'remote'],
+        'host_capabilities': {host: {'pb9_capable': True, 'target_eligible': True,
+                                    'schema_compatible': True} for host in ['fixture-host', 'remote']},
+    }
+    page.reload()
+    expect(page.locator('#f-enabled-on option[value="fixture-host"]')).to_have_count(1)
+    page.locator('#f-enabled-on').select_option('fixture-host')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('1')
+    editor.reject_move = True
+    page.locator('#f-enabled-on').select_option('remote')
+    page.locator('#f-note').fill('keep this draft')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('2')
+    expect(page.locator('#f-enabled-on')).to_have_value('remote')
+    expect(page.locator('#f-note')).to_have_value('keep this draft')
+    page.get_by_role('button', name='OK', exact=True).click()
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('3')
+    assert editor.saved[-1]['expected_version'] == 2
+    assert editor.saved[-1]['config']['pbgui']['enabled_on'] == 'remote'
     assert not editor.errors and not editor.unexpected

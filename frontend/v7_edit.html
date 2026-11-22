@@ -3326,7 +3326,14 @@ async function saveConfig() {
     var data = await resp.json();
     if (!resp.ok) {
       var detail = data.detail || resp.statusText;
-      if (resp.status === 409 && String(detail || '').indexOf('Update your VPS first') === 0) {
+      var stoppedVersion = Number(resp.headers.get('X-PB9-Saved-Version') || 0);
+      if (runEditorAdapter.metadataDriven && stoppedVersion > 0) {
+        if (cfg.pbgui) cfg.pbgui.version = stoppedVersion;
+        setVal('f-version', stoppedVersion);
+        dirty = true;
+      }
+      if ((runEditorAdapter.metadataDriven && resp.status === 409)
+          || (resp.status === 409 && String(detail || '').indexOf('Update your VPS first') === 0)) {
         window.PBGuiDialogs.alert({
           title: 'Save blocked',
           message: detail,
@@ -3350,6 +3357,7 @@ async function saveConfig() {
       updateSavedRunLocation(name);
       dirty = true;
       toast('Saved PB9 v' + data.version + '. Newer edits remain unsaved.', 'ok');
+      if (_logPanelOpen) { closeLogPanel(); openLogPanel(); }
       return;
     }
     cfg = data.config || config;
@@ -3385,6 +3393,7 @@ async function saveConfig() {
 
     toast('Saved ' + runEditorAdapter.label + ' v' + data.version + syncMsg, 'ok');
     dirty = false;
+    if (_logPanelOpen) { closeLogPanel(); openLogPanel(); }
   } catch (e) {
     toast('Save error: ' + e.message, 'err');
     console.error(e);

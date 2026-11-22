@@ -41,7 +41,7 @@ Saving a managed instance publishes a signed PB9 operation and an immutable nati
 
 Use **Backtest** to pass the current editor config to the shared PB9 Backtest page. Strategy Explorer remains pending. Changing a host assignment can start or stop trading; use only accounts and settings you intend to run.
 
-Before moving an existing instance to another host, disable it and wait for a fresh confirmed stop. The disabled config remains assigned to its previous host until that proof arrives.
+To move an existing instance, select its new host and Save. PBGui first publishes a disabled source version through the existing Cluster transport, waits for a confirmed stop, then saves and activates the requested target. The target is checked again before publication. If the stop cannot be confirmed within 30 seconds, the instance stays disabled; the editor preserves your draft and acknowledges the disabled version so Save can be retried. A remote stop must match that disabled config generation. Concurrent saves cancel the move rather than overwriting newer state.
 
 ## Backups and logs
 

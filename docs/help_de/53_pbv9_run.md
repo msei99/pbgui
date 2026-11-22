@@ -42,7 +42,7 @@ Beim Speichern einer verwalteten Instanz werden eine signierte PB9-Operation und
 
 Backtest ist über den gleichnamigen Editor-Button angebunden. Strategy Explorer bleibt offen. Eine geänderte Host-Zuordnung kann Trading starten oder stoppen; wähle nur beabsichtigte Konten und Einstellungen.
 
-Deaktiviere eine bestehende Instanz vor dem Verschieben auf einen anderen Host und warte auf den frisch bestätigten Stopp. Die deaktivierte Config bleibt dafür zunächst dem bisherigen Host zugeordnet.
+Zum Verschieben einer bestehenden Instanz wählst du den neuen Host und Save. PBGui veröffentlicht zunächst eine deaktivierte Quellversion über den bestehenden Cluster-Transport, wartet auf den bestätigten Stopp und speichert und aktiviert erst dann das gewünschte Ziel. Das Ziel wird vor der Veröffentlichung erneut geprüft. Kann der Stopp innerhalb von 30 Sekunden nicht bestätigt werden, bleibt die Instanz deaktiviert. Der Editor erhält deinen Entwurf und übernimmt die deaktivierte Versionsnummer, damit du Save erneut versuchen kannst. Ein Remote-Stopp muss genau diese deaktivierte Config-Generation bestätigen. Parallele Speicherungen brechen den Move ab, statt neuere Änderungen zu überschreiben.
 
 ## Backups und Logs
 
