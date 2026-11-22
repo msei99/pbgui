@@ -81,6 +81,61 @@ def test_native_config_list_is_subsecond_without_runtime_or_result_work(native_o
     assert all(row['backtest_count_status'] == 'pending' for row in rows)
 
 
+@pytest.mark.parametrize('version', ['v8', 'v9'])
+def test_shared_config_list_never_reads_private_transaction_directories(tmp_path, monkeypatch, version):
+    """Concurrent atomic-save stages/backups are not user configs or validation errors."""
+    from optimize_profile import OptimizeProfile
+    engine = OptimizeEngine(OptimizeProfile(version)) if version == 'v8' else optimize_v9.NativeOptimizeEngine()
+    engine.PBGDIR = tmp_path
+    root = engine._configs_dir()
+    root.mkdir(parents=True)
+    source = {'backtest': {'exchanges': ['bybit']}, 'bot': {}, 'live': {}}
+    public = root / 'PB8_named_config'
+    public.mkdir()
+    (public / engine._CONFIG_FILENAME).write_text(json.dumps(source))
+    hidden = []
+    for suffix in ('stage', 'backup'):
+        directory = root / (f'.PB8_named_config.{suffix}-' + 'a' * 32)
+        directory.mkdir()
+        (directory / engine._CONFIG_FILENAME).write_text('not a published document')
+        hidden.append(directory)
+    logs = []
+    monkeypatch.setattr(engine, '_log', lambda *args, **kwargs: logs.append(args))
+    original = engine._validate_name
+    def validate(name):
+        """The public validator must never even receive an internal transaction name."""
+        assert not name.startswith('.')
+        return original(name)
+    monkeypatch.setattr(engine, '_validate_name', validate)
+    result = engine.list_configs(None, include_result_summary=False, include_backtest_counts=False)
+    assert [row['name'] for row in result['configs']] == ['PB8_named_config']
+    assert logs == []
+    assert all(directory.is_dir() for directory in hidden)
+
+
+@pytest.mark.parametrize('version', ['v8', 'v9'])
+def test_shared_optimizer_errors_name_the_owning_generation(tmp_path, monkeypatch, version):
+    """Shared diagnostics identify PB9 while preserving names containing PB8."""
+    from optimize_profile import OptimizeProfile
+    from pb8_config import PB8ConfigurationError
+    engine = OptimizeEngine(OptimizeProfile(version)) if version == 'v8' else optimize_v9.NativeOptimizeEngine()
+    engine.PBGDIR = tmp_path
+    messages = []
+    monkeypatch.setattr(engine, '_log', lambda service, message, **kwargs: messages.append(message))
+    error = engine._configuration_error(f'Queueing {engine.label} optimize config PB8_keep_name', PB8ConfigurationError('native failure'))
+    assert error.status_code == 422
+    assert messages == [f'Queueing {engine.label} optimize config PB8_keep_name failed: native failure']
+    engine._configuration_error('Saving optimize config PB8_keep_name', PB8ConfigurationError('native failure'))
+    assert messages[-1] == 'Saving optimize config PB8_keep_name failed: native failure'
+    def unavailable(**kwargs):
+        """Exercise the real shared metadata route's generation-labelled failure path."""
+        raise engine.PB8ConfigurationError('native_failure')
+    monkeypatch.setattr(engine, 'get_pb8_optimize_metadata', unavailable)
+    with pytest.raises(HTTPException):
+        engine._load_optimizer_metadata()
+    assert messages[-1] == f'Loading {engine.label} optimize metadata failed: {engine.PB8ConfigurationError("native_failure")}'
+
+
 def test_native_cli_options_survive_snapshot_and_result_resume(native_optimizer):
     """Freeze scenario selection in the queue and restore it from the result sidecar."""
     from pb9_optimize_options import OPTIONS_FILENAME

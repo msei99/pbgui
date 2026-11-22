@@ -2049,7 +2049,7 @@ def test_embedded_instance_collector_remains_valid_python() -> None:
     assert "def _pb8_rust_stamp_error():" in monitor_mod.INSTANCE_COLLECT_SCRIPT
     assert "def _pb8_last_error(config_dir):" in monitor_mod.INSTANCE_COLLECT_SCRIPT
     assert "cluster_gate = 'runtime_not_ready'" in monitor_mod.INSTANCE_COLLECT_SCRIPT
-    assert "blocked_reason = 'PB8 exits on start: ' + last_error" in monitor_mod.INSTANCE_COLLECT_SCRIPT
+    assert "blocked_reason = 'PB' + runtime + ' exits on start: ' + last_error" in monitor_mod.INSTANCE_COLLECT_SCRIPT
     assert "'pnl_cache_version': PB8_PNL_CACHE_VERSION" in monitor_mod.INSTANCE_COLLECT_SCRIPT
     assert "'history': bot_history" in monitor_mod.INSTANCE_COLLECT_SCRIPT
 
@@ -2312,3 +2312,69 @@ def test_unrelated_monitor_processes_need_no_root_resolution(monkeypatch, tmp_pa
         pb8_dir=tmp_path / 'pb8', pb8_python=tmp_path / 'venv/bin/python',
         pb8_cli=tmp_path / 'venv/bin/passivbot',
     ) is None
+
+
+def test_pb9_process_identity_is_separate_from_pb8(tmp_path, monkeypatch):
+    """An exact native9 command/cwd resolves to runtime9, never to the PB8 slot."""
+    import monitor_agent as agent
+    monkeypatch.setattr(agent, 'PBGDIR', tmp_path)
+    proc = tmp_path / 'fake-proc'
+    proc.mkdir()
+    source = tmp_path / 'pb9'
+    source.mkdir()
+    (proc / 'cwd').symlink_to(source, target_is_directory=True)
+    python = tmp_path / 'venv9/bin/python'
+    cli = python.parent / 'passivbot'
+    config = tmp_path / 'data/run_v9/same/config.json'
+    argv = [str(cli), 'live', str(config), '--fail-on-stale-rust']
+    values = dict(pb7_main=tmp_path / 'pb7/src/main.py', pb8_dir=tmp_path / 'pb8',
+                  pb8_python=tmp_path / 'venv8/bin/python', pb8_cli=tmp_path / 'venv8/bin/passivbot',
+                  pb9_dir=source, pb9_python=python, pb9_cli=cli)
+    assert agent._bot_identity_from_process(proc, argv, **values) == ('same', '9')
+    assert agent._bot_identity_from_process(proc, [*argv, '--other'], **values) is None
+    (proc / 'cwd').unlink()
+    (proc / 'cwd').symlink_to(tmp_path, target_is_directory=True)
+    assert agent._bot_identity_from_process(proc, argv, **values) is None
+
+
+def test_shared_native_collector_reads_pb9_sidecars_without_mixing_pb8(tmp_path, monkeypatch, capsys):
+    """Execute the real collector against temp bundles and an empty synthetic /proc."""
+    import os
+    import json
+    monkeypatch.setenv('PBGUI_PBGDIR', str(tmp_path))
+    monkeypatch.setenv('PBGUI_PB7DIR', str(tmp_path / 'pb7'))
+    monkeypatch.setenv('PBGUI_CACHE', '{}')
+    monkeypatch.delenv('PBGUI_DUMP', raising=False)
+    (tmp_path / 'pbgui.ini').write_text('[main]\npb8dir = ' + str(tmp_path / 'pb8') + '\npb8venv = ' + str(tmp_path / 'venv8/bin/python') + '\npb9dir = ' + str(tmp_path / 'pb9') + '\npb9venv = ' + str(tmp_path / 'venv9/bin/python') + '\n')
+    old = tmp_path / 'data/run_v8/same'
+    native = tmp_path / 'data/run_v9/same'
+    old.mkdir(parents=True); native.mkdir(parents=True)
+    (old / 'config.json').write_text(json.dumps({'live': {'user': 'same8'}, 'pbgui': {'runtime': 'pb8', 'enabled_on': 'node', 'version': 8}}))
+    (native / 'config.json').write_text(json.dumps({'config_version': 'v9.0.0', 'live': {'account': {'user': 'same9'}}}))
+    (native / 'pbgui.json').write_text(json.dumps({'runtime': 'pb9', 'enabled_on': 'node', 'version': 9}))
+    original = os.listdir
+    monkeypatch.setattr(os, 'listdir', lambda path: [] if str(path) == '/proc' else original(path))
+    prefix = 'python3 -u -c "\n'
+    exec(compile(monitor_mod.INSTANCE_COLLECT_SCRIPT[len(prefix):-2], '<isolated-collector>', 'exec'), {})
+    result = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert result['v8'][0]['name'] == result['v9'][0]['name'] == 'same'
+    assert result['v8'][0]['cv'] == 8 and result['v9'][0]['cv'] == 9
+    assert result['v9'][0]['eo'] == 'node'
+    assert 'PB9' in result['v9'][0]['blocked_reason']
+    assert 'PB8' in result['v8'][0]['blocked_reason']
+
+
+def test_pb9_store_drops_untrusted_or_rehydrated_freshness():
+    """PB9 deletion proof must come from this collection, never from persisted row stamps."""
+    from master.async_store import VPSStore
+    store = VPSStore()
+    source = [{'name': 'same', 'running': False, 'snapshot_generated_at': 9999999999}]
+    store.update_v9_instances('host', source)
+    assert 'snapshot_generated_at' not in store.v9_instances['host'][0]
+    assert 'host' not in store.v9_snapshot_times
+    store.update_v9_instances('host', source, snapshot_generated_at=100, snapshot_checked_at=101)
+    assert store.v9_snapshot_times['host'] == (100, 101)
+    assert store.v9_instances['host'][0]['snapshot_generated_at'] == 100
+    assert source[0]['snapshot_generated_at'] == 9999999999
+    store.update_v9_instances('host', store.v9_instances['host'])
+    assert 'host' not in store.v9_snapshot_times

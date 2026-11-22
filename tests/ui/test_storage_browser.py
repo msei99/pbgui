@@ -56,6 +56,9 @@ def _snapshot():
                 _item("run_a", 2 * 1024 ** 3), _item("run_b", 1024 ** 3), _item("run_c", 512 * 1024 ** 2),
                 _item("run_live", 1024, age_days=0, blocked="Changed within the last 24 hours"),
             ]},
+            "pb9_optimize_results": {"items": [_item("native_opt", 4096)]},
+            "pb9_backtests": {"items": [_item("managed/config", 8192),
+                                                _item("native/pbgui/config", 1024, blocked="Changed within the last 24 hours")]},
             "protected_core": {"items": [_item("PBGui database", 4096, blocked="Protected")]},
         },
     }
@@ -76,6 +79,11 @@ def storage_page(tmp_path, monkeypatch):
 
     monkeypatch.setattr(controller, "_start_job", fake_start)
     monkeypatch.setattr(storage_api, "_controller", controller)
+    monkeypatch.setattr(storage_api, "_python_versions", lambda: {
+        "PBGui": "Python 3.12.3", "PB7": "Python 3.12.3", "PB8": "Python 3.12.3", "PB9": "Python 3.12.3"})
+    monkeypatch.setattr(storage_api.system_stats, "collect_live", lambda: {})
+    monkeypatch.setattr(storage_api.system_stats, "collect_processes", lambda root: {"items": [], "count": 0, "rss": 0})
+    monkeypatch.setattr(storage_api.system_stats, "collect_gpus", lambda: [])
     monkeypatch.setattr(storage_api, "live_mounts", lambda ctrl: [
         {"mount": "/", "total": 100 * 1024 ** 3, "used": 86 * 1024 ** 3, "free": 14 * 1024 ** 3, "percent": 86.0, "roots": ["pbgui", "pb7"]}])
     storage_api._cache.clear()
@@ -152,6 +160,31 @@ def test_menu_overview_and_prefix(storage_page):
     assert "Refresh" not in page.evaluate("document.getElementById('page-body').innerText")
     assert page.evaluate("""Array.from(document.querySelectorAll('script[src],link[rel=stylesheet]'))
         .every(node => new URL(node.src || node.href).origin === location.origin)""")
+
+
+@_concise
+def test_pb9_categories_selection_restore_and_python(storage_page):
+    """The shared Storage renderer exposes both PB9 outputs, blocks recent rows and shows Python."""
+    page, _controller, started, calls, errors = storage_page
+    page.locator('#sidebar .sb-section[data-view="results"]').click()
+    page.wait_for_function("document.getElementById('category-table').textContent.includes('PB9 backtests')")
+    assert "PB9 optimize results" in page.locator("#category-table").text_content()
+    row = page.locator("#category-table tbody tr", has_text="PB9 backtests")
+    row.locator("button", has_text="Choose entries").click()
+    page.wait_for_function("document.querySelectorAll('#items-table tbody tr[data-index]').length === 2")
+    page.locator("#items-table tbody tr", has_text="managed/config").click()
+    page.locator("#items-table tbody tr", has_text="native/pbgui/config").click()
+    assert page.evaluate("document.querySelectorAll('#items-table tbody tr.selected').length") == 1
+    page.reload()
+    page.wait_for_function("document.querySelectorAll('#items-table tbody tr.selected').length === 1")
+    assert page.evaluate("location.hash") == "#results/pb9_backtests"
+    page.locator("#items-preview").click()
+    page.wait_for_function("document.getElementById('preview-table').textContent.includes('managed/config')")
+    assert started == []
+    page.locator('#sidebar .sb-section[data-view="system"]').click()
+    page.wait_for_function("document.getElementById('system-grid').textContent.includes('PB9: Python 3.12.3')")
+    assert any(path == PREFIX + "/api/storage/system" for _, path in calls)
+    assert not [error for error in errors if "Plotly" not in error]
 
 
 @_concise

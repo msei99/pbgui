@@ -578,8 +578,27 @@ def test_native_validation_failures_never_return_or_log_raw_error_text(validatio
         pb9_config.validate_pb9_config({"config_version": "v9.0.0"}, validation_runtime.root, validation_runtime.python)
     assert caught.value.error_codes == (code,)
     assert secret not in str(caught.value)
+    if exception == 'RuntimeError':
+        assert caught.value.diagnostic == {'stage': 'config_prepare', 'kind': 'runtime_error'}
     for path in logging_helpers.LOG_ROOT.glob("*.log"):
         assert secret not in path.read_text()
+
+
+@pytest.mark.parametrize('diagnostic', [
+    {'stage': 'config_prepare', 'kind': 'runtime_error', 'message': 'fixture-secret'},
+    {'stage': 'fixture-secret', 'kind': 'runtime_error'},
+    {'stage': 'config_prepare', 'kind': ['fixture-secret']},
+])
+def test_helper_diagnostics_are_allowlisted(diagnostic):
+    """Untrusted helper fields cannot widen the safe diagnostic vocabulary."""
+    payload = {'ok': False, 'error_code': 'native_validation_failed', 'diagnostic': diagnostic}
+    with pytest.raises(pb9_config.PB9ConfigError) as caught:
+        pb9_config._checked_response(json.dumps(payload).encode(), {})
+    assert 'fixture-secret' not in repr(caught.value.diagnostic)
+    if diagnostic.get('stage') == 'config_prepare' and diagnostic.get('kind') == 'runtime_error':
+        assert caught.value.diagnostic == {'stage': 'config_prepare', 'kind': 'runtime_error'}
+    else:
+        assert caught.value.diagnostic == {}
 
 
 def test_validation_protocol_accepts_more_than_template_input_budget(validation_runtime):

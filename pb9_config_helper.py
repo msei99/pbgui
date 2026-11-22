@@ -23,6 +23,27 @@ MAX_RESPONSE_BYTES = 2 * 1024 * 1024
 class _HelperError(RuntimeError):
     """Carry a fixed protocol error code without native exception contents."""
 
+    def __init__(self, code, *, stage=None):
+        """Keep only a fixed local stage alongside the existing error code."""
+        super().__init__(code)
+        self.stage = stage
+
+
+DIAGNOSTIC_STAGES = frozenset({'native_import', 'metadata', 'config_prepare', 'operation'})
+DIAGNOSTIC_KINDS = frozenset({'import_error', 'os_error', 'runtime_error', 'unexpected_error'})
+
+
+def _failure_diagnostic(exc, stage):
+    """Classify native failures without returning names, messages, paths or source."""
+    if isinstance(exc, _HelperError) and stage not in DIAGNOSTIC_STAGES:
+        return None
+    cause = exc.__cause__ if isinstance(exc, _HelperError) else exc
+    if cause is None:
+        return None
+    kind = ('import_error' if isinstance(cause, ImportError) else 'os_error' if isinstance(cause, OSError)
+            else 'runtime_error' if isinstance(cause, RuntimeError) else 'unexpected_error')
+    return {'stage': stage if stage in DIAGNOSTIC_STAGES else 'operation', 'kind': kind}
+
 
 def _require_json_value(value) -> None:
     """Reject silent JSON coercion of tuples, non-string keys and nonfinite values."""
@@ -425,8 +446,17 @@ def _cloud_export_plan(prepared):
     from warmup_utils import compute_backtest_warmup_minutes
     from suite_runner import build_scenarios, apply_scenario_overrides
 
+    def approved_sources(config):
+        """Reject unresolved external selectors before native source rebinding."""
+        approved = get_side_universe_sources(config, 'approved_coins', {})
+        if any(not isinstance(approved.get(side), list) for side in ('long', 'short')):
+            raise _HelperError('external_reference_rejected')
+        return approved
+
+    approved_sources(prepared)
     configs = [prepared]
     if prepared['backtest'].get('suite_enabled'):
+        from optimization.warmup import refresh_optimizer_source_bindings
         scenarios,_ = build_scenarios(prepared['backtest'], base_exchanges=prepared['backtest']['exchanges'])
         for scenario in scenarios:
             config=copy.deepcopy(prepared)
@@ -439,12 +469,14 @@ def _cloud_export_plan(prepared):
             for key in ('start_date','end_date','exchanges'):
                 value=getattr(scenario,key,None)
                 if value: config['backtest'][key]=value
+            approved_sources(config)
+            # Bind the fully patched disposable config, including its dataset
+            # window, before native optimizer boundaries consume its sources.
+            refresh_optimizer_source_bindings(config)
             configs.append(config)
     plans=[]
     for config in configs:
-        approved = get_side_universe_sources(config, 'approved_coins', {})
-        if any(not isinstance(approved.get(side), list) for side in ('long','short')):
-            raise _HelperError('external_reference_rejected')
+        approved = approved_sources(config)
         plans.append({'backtest':copy.deepcopy(config['backtest']),
             'live':{'approved_coins':copy.deepcopy(approved),
                 'minimum_coin_age_days':max(minimum_coin_age_days(config,side) for side in ('long','short'))},
@@ -558,7 +590,7 @@ def handle(request: dict) -> dict:
             except _HelperError:
                 raise
             except Exception as exc:
-                raise _HelperError("native_metadata_failed") from exc
+                raise _HelperError("native_metadata_failed", stage='metadata') from exc
             return {**result, "config_schema": schema_version, "package_version": package_version,
                     "schema_module_file": schema_file, "version_module_file": version_file}
         if request["operation"] in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config"}:
@@ -568,7 +600,7 @@ def handle(request: dict) -> dict:
             except _HelperError:
                 raise
             except Exception as exc:
-                raise _HelperError("native_validation_failed") from exc
+                raise _HelperError("native_validation_failed", stage='native_import') from exc
             try:
                 authored = request["config"]
                 records_file = None
@@ -592,7 +624,7 @@ def handle(request: dict) -> dict:
             except (ValueError, TypeError, KeyError) as exc:
                 raise _HelperError("native_config_rejected") from exc
             except Exception as exc:
-                raise _HelperError("native_validation_failed") from exc
+                raise _HelperError("native_validation_failed", stage='config_prepare') from exc
             return {**({**_cloud_export_plan(prepared),'config':request['config']} if request["operation"] == "optimize_cloud_plan" else
                        {'effective':_optimizer_effective_config(prepared,schema)} if request['operation']=='optimize_effective' else
                        {'config':authored, 'result_records_module_file':records_file} if request['operation']=='result_config' else {}),
@@ -623,13 +655,17 @@ def main() -> int:
         response = {"ok": True, "result": handle(request)}
     except _HelperError as exc:
         response = {"ok": False, "error_code": str(exc)}
+        diagnostic = _failure_diagnostic(exc, exc.stage)
+        if diagnostic is not None:
+            response['diagnostic'] = diagnostic
     except (UnicodeError, json.JSONDecodeError, RecursionError):
         response = {"ok": False, "error_code": "invalid_request"}
-    except Exception:
+    except Exception as exc:
         # The PBGui owner logs this fixed error code, never native exception data.
         operation = request.get("operation") if isinstance(request, dict) else None
         code = "native_validation_failed" if isinstance(operation, str) and operation in {"validate", "validate_live", "validate_backtest", "validate_optimize", "optimize_cloud_plan", "optimize_effective", "result_config"} else "native_template_failed"
         response = {"ok": False, "error_code": code}
+        response['diagnostic'] = _failure_diagnostic(exc, 'operation')
     try:
         encoded = json.dumps(response, allow_nan=False).encode("utf-8")
         if len(encoded) > MAX_RESPONSE_BYTES:

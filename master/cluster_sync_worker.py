@@ -56,6 +56,8 @@ from master.cluster_state import (
     load_operations,
     normalize_node_sync_mode,
     PB8_OPS,
+    PB9_OPS,
+    PB9_OPERATION_CAPABILITY,
     PB8_OPERATION_CAPABILITY,
     read_materialized_state,
     read_local_identity,
@@ -158,7 +160,7 @@ def _push_config_activation(
         raise ClusterSyncWorkerError("assigned cluster node has no ssh_host")
 
     bundle_operations = [operation]
-    if expected_operation == "UPSERT_PB8_CONFIG":
+    if expected_operation in {"UPSERT_PB8_CONFIG", "UPSERT_PB9_CONFIG"}:
         desired_api_keys = (materialized.get("desired_state") or {}).get("api_keys")
         if isinstance(desired_api_keys, dict):
             for candidate in reversed(load_operations(root, expected_cluster_id=cluster_id)):
@@ -224,6 +226,11 @@ def push_pb8_activation(
         timeout=timeout,
     )
 
+
+
+def push_pb9_activation(cluster_root: Path | str, operation: dict[str, Any], *, timeout: int = 4) -> dict[str, Any]:
+    """Use the shared, bounded activation transport with explicit PB9 ownership."""
+    return _push_config_activation(cluster_root, operation, expected_operation="UPSERT_PB9_CONFIG", runtime="PB9", timeout=timeout)
 
 def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     """Atomically write one JSON status file."""
@@ -507,6 +514,13 @@ class ClusterSyncWorker:
                 pb8_result = pb8_preview
                 if pb8_preview.get("can_apply"):
                     pb8_result = _materialize_pb8_configs(self.cluster_root, write=True)
+            pb9_result = {"status": "not_configured", "counts": {}}
+            native_desired = materialized.get("desired_state") or {}
+            if native_desired.get("pb9_instances") or native_desired.get("pb9_tombstones"):
+                pb9_preview = _materialize_pb8_configs(self.cluster_root, write=False, runtime="pb9")
+                pb9_result = pb9_preview
+                if pb9_preview.get("can_apply"):
+                    pb9_result = _materialize_pb8_configs(self.cluster_root, write=True, runtime="pb9")
             migration_ack = _append_credential_migration_acks(
                 self.cluster_root,
                 scan_allowed=False,
@@ -612,6 +626,7 @@ class ClusterSyncWorker:
                 "mailbox_acked": sum(int(item.get("mailbox_acked") or 0) for item in peer_results),
                 "v7_materialization": _compact_materialization(v7_result),
                 "pb8_materialization": _compact_materialization(pb8_result),
+                "pb9_materialization": _compact_materialization(pb9_result),
                 "api_key_materialization": _compact_materialization(api_result),
                 "credential_materialization": _compact_materialization(credential_result),
                 "credential_migration_ack": migration_ack,
@@ -1027,6 +1042,7 @@ class ClusterSyncWorker:
         result.update({
             "capability_only": True,
             "capability_checked_at": int(time.time()),
+            "pb9_capability": supports_cluster_operation("UPSERT_PB9_CONFIG", capabilities) if isinstance(capabilities, list) else None,
             "pb8_capability": (
                 supports_cluster_operation("UPSERT_PB8_CONFIG", capabilities)
                 if isinstance(capabilities, list) else None
@@ -1059,6 +1075,10 @@ class ClusterSyncWorker:
             "UPSERT_PB8_CONFIG",
             hello.get("capabilities") if isinstance(hello.get("capabilities"), list) else [],
         )
+        peer_pb9_capable = supports_cluster_operation("UPSERT_PB9_CONFIG", hello.get("capabilities") or [])
+        native_desired = local_materialized.get("desired_state") or {}
+        if (native_desired.get("pb9_instances") or native_desired.get("pb9_tombstones")) and not peer_pb9_capable:
+            raise ClusterSyncWorkerError(f"peer lacks required cluster capability: {PB9_OPERATION_CAPABILITY}")
         if _pb8_desired_state_active(local_materialized) and not peer_pb8_capable:
             raise ClusterSyncWorkerError(
                 f"peer lacks required cluster capability: {PB8_OPERATION_CAPABILITY}"
@@ -1128,6 +1148,7 @@ class ClusterSyncWorker:
                         peer,
                         local_node_id,
                         include_pb8=peer_pb8_capable,
+                        include_pb9=peer_pb9_capable,
                     )
             else:
                 pushed_config_blobs = int(fast_result.get("config_blobs") or 0)
@@ -1207,6 +1228,7 @@ class ClusterSyncWorker:
             "deferred_credential_ops": deferred_credential_ops,
             "deferred_pb8_ops": deferred_pb8_ops,
             "pb8_capability": peer_pb8_capable,
+            "pb9_capability": peer_pb9_capable,
             "remaining_push_ops": remaining_push_ops,
             "cluster_ssh_key_updated": key_changed,
             "mailbox_supported": mailbox_counts["supported"],
@@ -1869,6 +1891,7 @@ class ClusterSyncWorker:
         local_node_id: str,
         *,
         include_pb8: bool,
+        include_pb9: bool = False,
     ) -> None:
         """Rebuild and materialize local files on a peer after a successful push."""
 
@@ -1886,6 +1909,10 @@ class ClusterSyncWorker:
             pb8_preview = self.peer_client.run(peer, local_node_id, "materialize-v8-preview")
             if pb8_preview.get("can_apply"):
                 self.peer_client.run(peer, local_node_id, "materialize-v8")
+        if include_pb9:
+            pb9_preview = self.peer_client.run(peer, local_node_id, "materialize-v9-preview")
+            if pb9_preview.get("can_apply"):
+                self.peer_client.run(peer, local_node_id, "materialize-v9")
 
 
 class ClusterSyncWorkerError(RuntimeError):
@@ -2529,8 +2556,8 @@ def _collect_local_blobs_for_operations(
     latest_config_index: dict[tuple[str, str], int] = {}
     for index, operation in enumerate(operations):
         op = str(operation.get("op") or "")
-        if op in {"UPSERT_CONFIG", "UPSERT_PB8_CONFIG"} and str(operation.get("instance") or ""):
-            family = "pb8" if op in PB8_OPS else "v7"
+        if op in {"UPSERT_CONFIG", "UPSERT_PB8_CONFIG", "UPSERT_PB9_CONFIG"} and str(operation.get("instance") or ""):
+            family = "pb9" if op in PB9_OPS else "pb8" if op in PB8_OPS else "v7"
             latest_config_index[(family, str(operation["instance"]))] = index
     for index, operation in enumerate(operations):
         refs = _operation_hash_refs(operation)
@@ -2540,9 +2567,9 @@ def _collect_local_blobs_for_operations(
             except (OSError, ClusterSyncWorkerError):
                 instance = str(operation.get("instance") or "")
                 op = str(operation.get("op") or "")
-                family = "pb8" if op in PB8_OPS else "v7"
+                family = "pb9" if op in PB9_OPS else "pb8" if op in PB8_OPS else "v7"
                 is_superseded = (
-                    op in {"UPSERT_CONFIG", "UPSERT_PB8_CONFIG"}
+                    op in {"UPSERT_CONFIG", "UPSERT_PB8_CONFIG", "UPSERT_PB9_CONFIG"}
                     and latest_config_index.get((family, instance), index) > index
                 )
                 if is_superseded:
@@ -2594,7 +2621,7 @@ def _build_local_config_blobs_from_instance(cluster_root: Path, operation: dict[
     if not instance:
         raise ClusterSyncWorkerError("operation has no instance for config blob rebuild")
     op = str(operation.get("op") or "")
-    run_family = "run_v8" if op in PB8_OPS else "run_v7"
+    run_family = "run_v9" if op in PB9_OPS else "run_v8" if op in PB8_OPS else "run_v7"
     instance_dir = Path(cluster_root).parent / run_family / instance
     manifest = build_config_manifest(instance_dir)
     actual_hash = compute_config_manifest_hash(manifest)

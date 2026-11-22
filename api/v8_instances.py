@@ -717,14 +717,17 @@ def _with_schema_compatibility(capability: dict[str, Any], required_schema: str)
     return result
 
 
-def _remote_runtime_capability(hostname: str) -> dict[str, Any]:
+def _remote_runtime_capability(hostname: str, *, runtime: str = "pb8") -> dict[str, Any]:
     """Return PB8 eligibility from a fresh host-meta pb8ready value."""
 
+    if runtime not in {"pb8", "pb9"}:
+        raise ValueError("Unsupported native runtime")
+    label = runtime.upper()
     unknown = {
-        "pb8_capable": None,
+        runtime + "_capable": None,
         "confirmed": False,
         "source": "host_meta",
-        "reason": "Fresh PB8 runtime metadata has not been reported",
+        "reason": f"Fresh {label} runtime metadata has not been reported",
         "stale": False,
         "runtime_profile": None,
         "setup_status": None,
@@ -742,18 +745,18 @@ def _remote_runtime_capability(hostname: str) -> dict[str, Any]:
     age = time.time() - generated_at if generated_at > 0 else None
     if age is None or age < -300.0 or age > _REMOTE_HOST_META_MAX_AGE_SECONDS:
         unknown["stale"] = generated_at > 0
-        unknown["reason"] = "PB8 runtime metadata is stale" if generated_at > 0 else "PB8 runtime metadata has no valid timestamp"
+        unknown["reason"] = f"{label} runtime metadata is stale" if generated_at > 0 else f"{label} runtime metadata has no valid timestamp"
         return unknown
-    ready = meta.get("pb8ready")
+    ready = meta.get(runtime + "ready")
     if not isinstance(ready, bool):
-        unknown["reason"] = "Fresh host metadata does not include pb8ready"
+        unknown["reason"] = f"Fresh host metadata does not include {runtime}ready"
         return unknown
     return {
         **unknown,
-        "pb8_capable": ready,
+        runtime + "_capable": ready,
         "confirmed": True,
-        "reason": "Fresh host metadata confirms PB8 readiness" if ready else "Fresh host metadata reports PB8 is not ready",
-        "config_schema": str(meta.get("pb8_config_schema") or "").strip() or None,
+        "reason": f"Fresh host metadata confirms {label} readiness" if ready else f"Fresh host metadata reports {label} is not ready",
+        "config_schema": str(meta.get(runtime + "_config_schema") or "").strip() or None,
     }
 
 
@@ -893,11 +896,11 @@ async def _ensure_target_compatible(name: str, enabled_on: str, config_schema: o
     )
 
 
-def _cluster_nodes() -> dict[str, dict[str, Any]]:
+def _cluster_nodes(cluster_root: Path | None = None) -> dict[str, dict[str, Any]]:
     """Return current materialized cluster nodes without trusting malformed values."""
 
     try:
-        materialized = read_materialized_state(_cluster_root())
+        materialized = read_materialized_state(cluster_root if cluster_root is not None else _cluster_root())
     except Exception:
         return {}
     cluster_nodes = materialized.get("cluster_nodes") if isinstance(materialized, dict) else None
@@ -905,11 +908,11 @@ def _cluster_nodes() -> dict[str, dict[str, Any]]:
     return nodes if isinstance(nodes, dict) else {}
 
 
-def _best_node_for_host(hostname: str) -> tuple[str, str] | None:
+def _best_node_for_host(hostname: str, *, cluster_root: Path | None = None) -> tuple[str, str] | None:
     """Find the best existing cluster node for one hostname or pbname."""
 
     candidates: list[tuple[tuple[int, int], str, dict[str, Any]]] = []
-    for node_id, node in _cluster_nodes().items():
+    for node_id, node in (_cluster_nodes(cluster_root) if cluster_root is not None else _cluster_nodes()).items():
         if not isinstance(node, dict):
             continue
         names = {str(node.get("hostname") or "").strip(), str(node.get("pbname") or "").strip()}
@@ -981,13 +984,16 @@ def _assigned_cluster_node(enabled_on: str, identity: dict[str, Any]) -> tuple[s
     return _host_node_mapping(enabled_on), enabled_on, "vps"
 
 
-def _ensure_pb8_cluster_rollout_ready(identity: dict[str, Any]) -> None:
+def _ensure_pb8_cluster_rollout_ready(identity: dict[str, Any], *, runtime: str = "pb8", cluster_root: Path | None = None) -> None:
     """Block PB8 operations until every active remote state replica confirms support."""
 
+    if runtime not in {"pb8", "pb9"}:
+        raise ValueError("Unsupported native runtime")
+    label = runtime.upper()
     local_node_id = str(identity.get("node_id") or "")
     required_nodes = {
         str(node_id): node
-        for node_id, node in _cluster_nodes().items()
+        for node_id, node in (_cluster_nodes(cluster_root) if cluster_root is not None else _cluster_nodes()).items()
         if str(node_id) != local_node_id
         and isinstance(node, dict)
         and node.get("enabled") is not False
@@ -995,7 +1001,7 @@ def _ensure_pb8_cluster_rollout_ready(identity: dict[str, Any]) -> None:
     }
     if not required_nodes:
         return
-    status_path = _cluster_root() / "sync_status.json"
+    status_path = (cluster_root if cluster_root is not None else _cluster_root()) / "sync_status.json"
     try:
         status = json.loads(status_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
@@ -1020,18 +1026,18 @@ def _ensure_pb8_cluster_rollout_ready(identity: dict[str, Any]) -> None:
                             "Wait for the automatic sync; if this persists, check Cluster Sync.")
         elif peer.get("ok") is False or peer.get("status") in {"error", "backoff", "config_error"}:
             blockers.append(f"{host}: the last Cluster sync failed or is waiting to retry. "
-                            "PB8 support could not be verified. Check connectivity and Cluster Sync logs; "
+                            f"{label} support could not be verified. Check connectivity and Cluster Sync logs; "
                             "an update is not necessarily required.")
-        elif peer.get("pb8_capability") is False:
-            blockers.append(f"{host}: the Cluster handshake reports no PB8 support. "
+        elif peer.get(runtime + "_capability") is False:
+            blockers.append(f"{host}: the Cluster handshake reports no {label} support. "
                             "Update PBGui on this replica, then wait for automatic sync.")
-        elif peer.get("pb8_capability") is not True:
-            blockers.append(f"{host}: no PB8 capability confirmation is available yet. "
+        elif peer.get(runtime + "_capability") is not True:
+            blockers.append(f"{host}: no {label} capability confirmation is available yet. "
                             "Wait for the automatic Cluster handshake; if this persists, check Cluster Sync.")
     if blockers:
         raise HTTPException(
             status_code=409,
-            detail="PB8 changes are temporarily blocked because Cluster readiness cannot be confirmed. "
+            detail=f"{label} changes are temporarily blocked because Cluster readiness cannot be confirmed. "
                    + " ".join(blockers),
         )
 

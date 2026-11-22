@@ -86,17 +86,19 @@ def _validate_remote_log_path(value: object) -> str:
     filename = parts[-1] if parts else ""
     valid_root = (
         (len(parts) == 3 and parts[:2] == ("data", "logs"))
-        or (len(parts) == 4 and parts[:2] in {("data", "run_v7"), ("data", "run_v8")}
+        or (len(parts) == 4 and parts[:2] in {("data", "run_v7"), ("data", "run_v8"), ("data", "run_v9")}
             and filename in {"passivbot_err.log", "passivbot_err.log.old"})
         or (len(parts) == 3 and parts[:2] == ("pb7", "logs"))
         or (len(parts) == 3 and parts[:2] == ("pb8", "logs"))
+        or (len(parts) == 3 and parts[:2] == ("pb9", "logs"))
         or (len(parts) == 4 and parts[:3] == ("software", "pb7", "logs"))
         or (len(parts) == 4 and parts[:3] == ("software", "pb8", "logs"))
+        or (len(parts) == 4 and parts[:3] == ("software", "pb9", "logs"))
     )
     valid_filename = bool(_REMOTE_LOG_FILE_RE.fullmatch(filename)) or filename == "passivbot_err.log.old"
     if not valid_root or not valid_filename:
         raise ValueError("Remote log path is not allowed")
-    if parts[:2] in {("data", "run_v7"), ("data", "run_v8")}:
+    if parts[:2] in {("data", "run_v7"), ("data", "run_v8"), ("data", "run_v9")}:
         _validate_remote_log_instance_name(parts[2])
     return "/".join(parts)
 
@@ -109,7 +111,7 @@ def _resolve_log_path(service_or_path: str) -> str:
 def _is_home_relative_log_path(log_path: str) -> bool:
     """Return True for remote paths rooted from HOME, not remote pbgui dir."""
     normalized = str(log_path or "").lstrip("./")
-    return normalized.startswith("software/") or normalized.startswith(("pb7/logs/", "pb8/logs/"))
+    return normalized.startswith("software/") or normalized.startswith(("pb7/logs/", "pb8/logs/", "pb9/logs/"))
 
 
 def _remote_log_follow_command(log_path: str, full_path: str) -> str:
@@ -428,10 +430,10 @@ def resolve_local_log_path(filename: str) -> Optional[Path]:
         if not fp.resolve().is_relative_to(logs_root):
             return None
         return fp
-    if filename.startswith(("pb7/logs/", "software/pb7/logs/", "pb8/logs/", "software/pb8/logs/")):
-        version = "8" if "/pb8/" in f"/{filename}" else "7"
+    if filename.startswith(("pb7/logs/", "software/pb7/logs/", "pb8/logs/", "software/pb8/logs/", "pb9/logs/", "software/pb9/logs/")):
+        version = "9" if "/pb9/" in f"/{filename}" else "8" if "/pb8/" in f"/{filename}" else "7"
         relative_name = Path(filename).name
-        logs_dir = local_pb8_logs_dir() if version == "8" else local_pb7_logs_dir()
+        logs_dir = local_pb9_logs_dir() if version == "9" else local_pb8_logs_dir() if version == "8" else local_pb7_logs_dir()
         fp = logs_dir / relative_name
         if not fp.resolve().is_relative_to(logs_dir.resolve()):
             return None

@@ -1385,7 +1385,7 @@ def test_frontend_and_server_register_the_complete_pb8_live_surface() -> None:
     assert positions == sorted(positions)
     assert (
         '<div class="form-group"></div>\n'
-        '  <div class="form-group" data-v7-only style="grid-column:span 2; justify-content:flex-end">'
+        '  <div class="form-group" data-v7-only data-v9-also style="grid-column:span 2; justify-content:flex-end">'
     ) in edit_source
     assert "websocketPath: isV8 ? '/api/v8/ws/v8'" in list_adapter_source
     assert "runListAdapter.configureUi()" in run_source

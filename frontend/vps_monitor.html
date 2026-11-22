@@ -2013,6 +2013,7 @@ function buildInstanceRows(snapshot, nowSeconds) {
   const allInst = snapshot.instances || {};
   const allV7 = snapshot.v7_instances || {};
   const allV8 = snapshot.v8_instances || {};
+  const nativeMaps = [["8", allV8], ["9", snapshot.v9_instances || {}]];
   const v7map = {};
   for (const [host, list] of Object.entries(allV7)) {
     for (const v of list) {
@@ -2020,9 +2021,9 @@ function buildInstanceRows(snapshot, nowSeconds) {
     }
   }
   const v8map = {};
-  for (const [host, list] of Object.entries(allV8)) {
-    for (const v of list) {
-      v8map[host + '|8|' + v.name] = v;
+  for (const [runtime, hostMap] of nativeMaps) {
+    for (const [host, list] of Object.entries(hostMap)) {
+      for (const v of list) v8map[host + '|' + runtime + '|' + v.name] = v;
     }
   }
 
@@ -2031,7 +2032,7 @@ function buildInstanceRows(snapshot, nowSeconds) {
   for (const [host, instances] of Object.entries(allInst)) {
     for (const inst of instances) {
       const runtime = String(inst.p || '?');
-      const versionMap = {'8': 'V8', '7': 'V7', '6': 'Multi', 's': 'Single'};
+      const versionMap = {'9': 'V9', '8': 'V8', '7': 'V7', '6': 'Multi', 's': 'Single'};
       const version = versionMap[runtime] || runtime;
       const memList = inst.m || [];
       const memMB = memList[0] ? (memList[0] / 1048576).toFixed(1) : '0';
@@ -2042,8 +2043,8 @@ function buildInstanceRows(snapshot, nowSeconds) {
       const name = inst.u || '?';
       const key = host + '|' + runtime + '|' + name;
       seen.add(key);
-      const detail = runtime === '8' ? v8map[key] : (runtime === '7' ? v7map[key] : null);
-      const detailFresh = runtime !== '8' || isFreshV8Observation(detail, nowSeconds);
+      const detail = ['8', '9'].includes(runtime) ? v8map[key] : (runtime === '7' ? v7map[key] : null);
+      const detailFresh = !['8', '9'].includes(runtime) || isFreshV8Observation(detail, nowSeconds);
       const configVer = detail ? detail.cv : null;
       const runningVer = detail ? detail.rv : null;
       const enabledOn = detail ? detail.eo : null;
@@ -2090,13 +2091,14 @@ function buildInstanceRows(snapshot, nowSeconds) {
     }
   }
 
-  for (const [host, list] of Object.entries(allV8)) {
+  for (const [runtime, hostMap] of nativeMaps) {
+  for (const [host, list] of Object.entries(hostMap)) {
     for (const v of list) {
-      const key = host + '|8|' + v.name;
+      const key = host + '|' + runtime + '|' + v.name;
       if (seen.has(key) || v.running !== false || !isFreshV8Observation(v, nowSeconds)) continue;
       rows.push({
-        host, version: 'V8', name: v.name, start: '–',
-        pbVersion: '8',
+        host, version: 'V' + runtime, name: v.name, start: '–',
+        pbVersion: runtime,
         memMB: 0, swapMB: 0, cpu: 0, cpu60s: 0, cpu60sWindow: 0,
         pnlToday: 0, fillsToday: 0,
         pnlHist: 0, fillsHist: 0,
@@ -2107,6 +2109,7 @@ function buildInstanceRows(snapshot, nowSeconds) {
         syncStatus: v.eo === 'disabled' ? 'disabled' : 'stopped',
       });
     }
+  }
   }
   return rows;
 }

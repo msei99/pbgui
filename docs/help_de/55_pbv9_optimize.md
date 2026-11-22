@@ -239,6 +239,8 @@ gespeichertes Label, das in der Suite nicht mehr existiert, erscheint als
 
 ## Kursdaten und Ausführung
 
+Die Suite-Datenvorbereitung berücksichtigt Coin-Auswahl, Zeitraum und Börsen jedes Szenarios. PBGui erneuert nach diesen Overrides die native Optimierungsbindung; die gespeicherte Config und ihre Suchbereiche bleiben unverändert.
+
 PBGui Market Data ist die voreingestellte Kursdatenquelle; neue Entwürfe zeigen den zugehörigen Pfad. Wird diese
 Queue-Einstellung geändert, gilt die Quelle der Config. Kerzendateien werden
 direkt referenziert. Backtest und Optimize verwenden wie PB8 gemeinsam den dauerhaften nativen

@@ -109,7 +109,8 @@ class VPSStoreProxy:
     """Hydrated read-compatible view of the daemon-owned monitor store."""
 
     _DICT_FIELDS = (
-        "instances", "v7_instances", "v8_instances", "host_meta", "services", "streams", "bot_logs"
+        "instances", "v7_instances", "v8_instances", "v9_instances", "v9_snapshot_times",
+        "host_meta", "services", "streams", "bot_logs"
     )
 
     def __init__(self, set_ui_callback: Callable[[str, str], None]) -> None:

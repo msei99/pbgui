@@ -1,5 +1,5 @@
 """Manage local Passivbot V7, V8 and V9 live processes."""
-from contextlib import nullcontext
+from contextlib import ExitStack, nullcontext
 import psutil
 import signal
 import stat
@@ -19,6 +19,7 @@ import pbgui_purefunc
 from logging_helpers import human_log as _log, get_rotate_settings, rotate_logfile_if_oversize
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from passivbot_account_guard import AccountConflictError, account_start_lock
+from file_lock import advisory_file_lock
 
 SERVICE = "PBRun"
 from master.cluster_state import (
@@ -1202,6 +1203,7 @@ class RunV8:
         self._retry_config_version = None
         self._block_log_key = None
         self._block_log_ts = 0.0
+        self._loaded_launch_signature = None
 
     @property
     def source_dir(self):
@@ -1265,6 +1267,7 @@ class RunV8:
         """Load and validate PBGui metadata plus API-key user presence."""
 
         try:
+            signature = self._launch_file_signature()
             pbgui, live_user = self._read_launch_metadata()
             raw_version = pbgui.get("version")
             if str(pbgui.get("runtime") or "").strip().lower() != self.runtime_generation:
@@ -1283,6 +1286,8 @@ class RunV8:
             api_keys = _read_json_file(api_keys_path)
             if live_user not in api_keys:
                 raise ValueError(f"{self.account_field} is absent from {self.runtime_label} api-keys.json")
+            if signature != self._launch_file_signature():
+                raise ValueError("Live bundle changed while loading")
 
             self.version = int(raw_version)
             if self._retry_config_version is not None and self._retry_config_version != self.version:
@@ -1293,8 +1298,10 @@ class RunV8:
                      f"{self._retry_config_version} -> {self.version}; cleared restart backoff")
             self._retry_config_version = self.version
             self.live_user = live_user
+            self._loaded_launch_signature = signature
             return True
         except Exception as exc:
+            self._loaded_launch_signature = None
             self.version = None
             self.live_user = None
             if not (self.quiet_unassigned and isinstance(exc, _NotAssignedError)):
@@ -1327,16 +1334,40 @@ class RunV8:
         return None, {}
 
     def _cluster_gate_result(self) -> dict:
-        """Apply V7-equivalent checks only when PB8 desired state is present."""
+        """Apply the shared native gate to this runner's generation only."""
+
+        return self._native_cluster_gate_result()
+
+    def _native_cluster_gate_result(self) -> dict:
+        """Require the exact assignment, version and complete native manifest."""
 
         cluster_root = default_cluster_root(Path(self.pbgdir or Path.cwd()))
         desired_path = cluster_root / "desired_state.json"
+        managed_pb9 = False
+        if self.runtime_generation == "pb9":
+            try:
+                managed_pb9 = _read_regular_json_object(Path(self.path) / "pbgui.json", "pbgui.json").get("cluster_managed") is True
+            except (OSError, ValueError) as exc:
+                return {"ok": False, "status": "invalid_metadata", "reason": f"Invalid PB9 metadata: {exc}"}
         if not _cluster_gate_is_configured(cluster_root) or not desired_path.is_file():
+            if managed_pb9:
+                return {"ok": False, "status": "missing_desired_state", "reason": "PB9 Cluster desired state is missing"}
             return {"ok": True, "status": "not_configured", "reason": "PB8 desired state is not configured"}
         try:
             desired = _read_json_file(desired_path)
-            instances, tombstones = self._pb8_desired_instances(desired)
+            if self.runtime_generation == "pb9":
+                instances = desired.get("pb9_instances")
+                tombstones = desired.get("pb9_tombstones") or {}
+                if "pb9_instances" in desired or "pb9_tombstones" in desired:
+                    if not isinstance(instances, dict) or not isinstance(tombstones, dict):
+                        raise ValueError("Invalid PB9 desired-state maps")
+                else:
+                    instances = None
+            else:
+                instances, tombstones = self._pb8_desired_instances(desired)
             if instances is None:
+                if managed_pb9:
+                    return {"ok": False, "status": "missing_instance", "reason": "PB9 Cluster desired state is missing"}
                 return {"ok": True, "status": "not_configured", "reason": "PB8 desired state is not configured"}
             identity = read_local_identity(cluster_root)
         except Exception as exc:
@@ -1349,6 +1380,8 @@ class RunV8:
             return {"ok": False, "status": "tombstoned", "reason": "PB8 desired state tombstoned this instance"}
         item = instances.get(instance_name)
         if not isinstance(item, dict):
+            if self.runtime_generation == "pb9" and not managed_pb9:
+                return {"ok": True, "status": "not_configured", "reason": "Legacy local PB9 instance has not been adopted by Cluster"}
             return {"ok": False, "status": "missing_instance", "reason": "Instance is missing from PB8 desired state"}
         if item.get("conflicted") is True:
             return {"ok": False, "status": "conflicted", "reason": "PB8 desired state marks this instance as conflicted"}
@@ -1428,6 +1461,18 @@ class RunV8:
         """Return the files whose modification restarts a running process."""
 
         return (self.config_path,)
+
+    def _launch_file_signature(self) -> tuple:
+        """Bind validation to regular bundle files without following symlinks."""
+        if Path(self.path).is_symlink():
+            raise ValueError("Live instance must not be a symlink")
+        result = []
+        for path in self._launch_files():
+            info = path.lstat()
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("Live launch files must be regular files")
+            result.append((info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns))
+        return tuple(result)
 
     def _launch_env(self) -> dict:
         """Return the child environment bound to this generation's virtualenv."""
@@ -1655,21 +1700,41 @@ class RunV8:
         runtime_lease = None
         try:
             runtime_lease = acquire_master_runtime_lock(Path(self.pbgdir))
-            if self.is_running() or not self._runtime_ready() or not self._config_ready():
+            signature = self._loaded_launch_signature
+            try:
+                unchanged = signature is not None and signature == self._launch_file_signature()
+            except (OSError, ValueError):
+                unchanged = False
+            if not unchanged or self.is_running() or not self._runtime_ready() or not self._config_ready():
                 return False
-            # Hold the shared account lock through process creation so another
-            # generation cannot start or be enabled on this account meanwhile.
-            with account_start_lock(Path(self.pbgdir), self.live_user, self.runtime_generation, Path(self.path)):
-                proc = subprocess.Popen(
-                    self.command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    cwd=str(Path(self.source_dir).resolve()),
-                    text=True,
-                    env=env,
-                    start_new_session=platform.system() != "Windows",
-                    creationflags=(subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW) if platform.system() == "Windows" else 0,
-                )
+            # Match API/Cluster lock order: bundle writer, then account. Slow
+            # native validation stays outside this short publication section.
+            with ExitStack() as launch_locks:
+                try:
+                    launch_locks.enter_context(advisory_file_lock(Path(self.path).parent / ".write", blocking=False))
+                except BlockingIOError:
+                    self._log_block("live_bundle_busy", "Live configuration is being changed; retrying on the next watch cycle")
+                    return False
+                if not self.load() or signature != self._loaded_launch_signature or self.is_running():
+                    return False
+                gate = self._cluster_gate_result()
+                self.cluster_gate = str(gate.get("status") or "")
+                self.cluster_blocked = not bool(gate.get("ok"))
+                self.cluster_blocked_reason = "" if gate.get("ok") else str(gate.get("reason") or "")
+                if not gate.get("ok"):
+                    self._log_block("launch_assignment_changed", str(gate.get("reason") or "Live assignment changed"))
+                    return False
+                with account_start_lock(Path(self.pbgdir), self.live_user, self.runtime_generation, Path(self.path)):
+                    proc = subprocess.Popen(
+                        self.command,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        cwd=str(Path(self.source_dir).resolve()),
+                        text=True,
+                        env=env,
+                        start_new_session=platform.system() != "Windows",
+                        creationflags=(subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW) if platform.system() == "Windows" else 0,
+                    )
         except MasterUpdateBusyError:
             self._log_block("runtime_update_busy", f"{self.runtime_label} is being installed or updated")
             return False
@@ -1751,9 +1816,9 @@ class RunV9(RunV8):
     """Supervise one local native PB9 live config through the RunV8 lifecycle.
 
     ``config.json`` is the pure native config (``live.account.user``); PBGui
-    metadata lives in the ``pbgui.json`` sidecar. PB9 has no Cluster desired
-    state: only an instance whose sidecar assigns this host runs, and remote
-    targets are never started. Readiness checks are read-only and never prune
+    metadata lives in the ``pbgui.json`` sidecar. PB9 uses its own signed
+    Cluster desired state and the shared native version/manifest gate.
+    Readiness checks are read-only and never prune
     or compile the Rust extension; the CLI's ``--fail-on-stale-rust`` remains
     the final gate. Structural validation is not full launch acceptance.
     """
@@ -1794,9 +1859,10 @@ class RunV9(RunV8):
         return pbgui, user.strip() if isinstance(user, str) else ""
 
     def _cluster_gate_result(self) -> dict:
-        """PB9 is local-only; the PB8 desired-state map never applies to it."""
+        """Use the shared native gate without applying any PB8 state to PB9."""
 
-        return {"ok": True, "status": "not_configured", "reason": "PB9 runs on the local host only"}
+        result = self._native_cluster_gate_result()
+        return {**result, "reason": str(result.get("reason") or "").replace("PB8", "PB9")}
 
     def _launch_env(self) -> dict:
         """Reuse the native launch environment without inherited Python import overrides."""
@@ -1873,7 +1939,8 @@ class RunV9(RunV8):
             return False
         try:
             info = (Path(self.path) / "config.json").stat()
-            signature = (info.st_mtime_ns, info.st_size, str(self.pb9dir), str(self.pb9venv))
+            signature = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns, info.st_size,
+                         str(self.pb9dir), str(self.pb9venv))
         except OSError:
             return False
         cached_signature, cached_valid, cached_until = self._validation_cache
@@ -2327,7 +2394,7 @@ class PBRun():
         run_root = Path(self.v9_path)
         if not run_root.is_dir():
             return ((str(run_root), None, None),)
-        signature: list[tuple] = []
+        signature: list[tuple] = [self._file_signature(default_cluster_root(Path(self.pbgdir)) / "desired_state.json")]
         for instance_dir in sorted(run_root.iterdir(), key=lambda item: item.name):
             if not instance_dir.is_dir() or instance_dir.name.startswith("."):
                 continue

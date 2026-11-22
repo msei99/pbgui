@@ -23,6 +23,8 @@ from master.cluster_state import (
     CLUSTER_POLICY_OPS,
     MEMBERSHIP_OPS,
     PB8_OPS,
+    PB9_OPS,
+    _pb9_as_pb8,
     V2_CREDENTIAL_OPS,
     V7_OPS,
     ClusterPaths,
@@ -2251,6 +2253,15 @@ def materialize_checkpoint_tail(
     membership_changes = 0
     generated_at = int(desired.get("generated_at") or 0)
     api_keys = deepcopy(desired.get("api_keys")) if isinstance(desired.get("api_keys"), dict) else None
+    pb9_instances = deepcopy(desired.get("pb9_instances") or {})
+    pb9_tombstones = deepcopy(desired.get("pb9_tombstones") or {})
+    pb9_parent_changes = {}
+    for instance, record in pb9_instances.items():
+        for conflict in record.get("conflicts") or []:
+            parent = str(conflict.get("parent_version") or "")
+            if parent:
+                pb9_parent_changes.setdefault((str(instance), parent), []).append(dict(conflict))
+    pb9_tail_seen = "pb9_instances" in desired or "pb9_tombstones" in desired
     pb8_tail_seen = False
 
     for operation in operations:
@@ -2284,6 +2295,9 @@ def materialize_checkpoint_tail(
         elif str(operation["op"]) in PB8_OPS:
             _apply_pb8(pb8_instances, pb8_tombstones, pb8_parent_changes, operation)
             pb8_tail_seen = True
+        elif str(operation["op"]) in PB9_OPS:
+            _apply_pb8(pb9_instances, pb9_tombstones, pb9_parent_changes, _pb9_as_pb8(operation))
+            pb9_tail_seen = True
         elif str(operation["op"]) in API_KEY_OPS:
             api_keys = {
                 "serial": int(operation["api_serial"]),
@@ -2302,6 +2316,7 @@ def materialize_checkpoint_tail(
 
     _mark_conflicts(instances, parent_changes)
     _mark_conflicts(pb8_instances, pb8_parent_changes)
+    _mark_conflicts(pb9_instances, pb9_parent_changes)
     reducer = active["reducer_state"]
     v2_operations = [
         *(_json_copy(item) for item in reducer.get("v2_basis_operations") or []),
@@ -2322,6 +2337,9 @@ def materialize_checkpoint_tail(
         desired["pb8_tombstones"] = {
             key: pb8_tombstones[key] for key in sorted(pb8_tombstones)
         }
+    if pb9_tail_seen:
+        desired["pb9_instances"] = {key: pb9_instances[key] for key in sorted(pb9_instances)}
+        desired["pb9_tombstones"] = {key: pb9_tombstones[key] for key in sorted(pb9_tombstones)}
     desired["generated_at"] = generated_at
     if api_keys is None:
         desired.pop("api_keys", None)

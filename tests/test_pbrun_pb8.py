@@ -178,7 +178,7 @@ def test_runv8_launches_exact_cli_with_isolated_virtualenv(
     events: list[str] = []
     thread_calls = []
     stdout_pipe = iter(())
-    running = iter((False, False, True))
+    running = iter((False, False, False, True))
 
     class Lease:
         """Record release of the shared PB8 launch boundary."""
@@ -739,13 +739,13 @@ def test_pb8_only_setup_enables_pbrun_and_unit_allows_managed_shutdown() -> None
     assert "KillSignal=SIGTERM" in systemd_setup
     assert 'write_unit "pbgui-pbrun.service" "PBGui PBRun Service" "PBRun.py" "" "process"' in systemd_setup
     assert "TimeoutStopSec=30" in systemd_setup
-    assert "Detect PB8-only support in installed PBRun" in pb8_update
-    assert "Disable incompatible PBRun on PB8-only hosts" in pb8_update
-    assert pb8_update.index("Mark PB8 runtime unavailable") < pb8_update.index(
-        "Wait for already-starting PB8 runners to cross the launch boundary"
+    assert "Detect {{ passivbot_label }}-only support in installed PBRun" in pb8_update
+    assert "Disable incompatible PBRun on {{ passivbot_label }}-only hosts" in pb8_update
+    assert pb8_update.index("Mark {{ passivbot_label }} runtime unavailable") < pb8_update.index(
+        "Wait for already-starting {{ passivbot_label }} runners to cross the launch boundary"
     )
-    assert pb8_update.index("Wait for already-starting PB8 runners to cross the launch boundary") < pb8_update.index(
-        "Checkout verified official Passivbot v8 commit"
+    assert pb8_update.index("Wait for already-starting {{ passivbot_label }} runners to cross the launch boundary") < pb8_update.index(
+        "Checkout verified official Passivbot v{{ passivbot_major }} commit"
     )
 
 

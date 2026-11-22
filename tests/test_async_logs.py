@@ -1276,7 +1276,8 @@ def test_kill_instance_uses_only_parsed_numeric_pid():
     assert pool.commands == ["ps -eo pid=,args=", "kill -- 123"]
 
 
-def test_kill_pb8_instance_uses_one_exact_pidfd_capable_remote_helper():
+@pytest.mark.parametrize("runtime", ["8", "9"])
+def test_kill_pb8_instance_uses_one_exact_pidfd_capable_remote_helper(runtime):
     """Remote PB8 stop validates identity and escalates until the process exits."""
 
     class PB8Pool(FakeMonitorPool):
@@ -1284,7 +1285,7 @@ def test_kill_pb8_instance_uses_one_exact_pidfd_capable_remote_helper():
 
         def get_connection(self, hostname: str):
             del hostname
-            return SimpleNamespace(data={"pb8dir": "/srv/pb8", "pb8venv": "/srv/venv_pb8/bin/python"})
+            return SimpleNamespace(data={f"pb{runtime}dir": f"/srv/pb{runtime}", f"pb{runtime}venv": f"/srv/venv_pb{runtime}/bin/python"})
 
         async def run(self, hostname: str, command: str, timeout: int = 15):
             del hostname, timeout
@@ -1294,16 +1295,16 @@ def test_kill_pb8_instance_uses_one_exact_pidfd_capable_remote_helper():
     pool = PB8Pool()
     monitor = SimpleNamespace(pool=pool)
 
-    result = asyncio.run(VPSMonitor.kill_instance(monitor, "host", "same", "8"))
+    result = asyncio.run(VPSMonitor.kill_instance(monitor, "host", "same", runtime))
 
     assert result == {"success": True, "pid": "321"}
     assert len(pool.commands) == 1
     arguments = shlex.split(pool.commands[0])
     assert arguments[:2] == ["python3", "-c"]
     assert arguments[3:] == [
-        "/home/pbgui/software/pbgui/data/run_v8/same/config.json",
-        "/srv/pb8",
-        "/srv/venv_pb8/bin/python",
+        f"/home/pbgui/software/pbgui/data/run_v{runtime}/same/config.json",
+        f"/srv/pb{runtime}",
+        f"/srv/venv_pb{runtime}/bin/python",
     ]
     assert "pidfd_open" in arguments[2]
     assert "pidfd_send_signal" in arguments[2]
@@ -1367,10 +1368,11 @@ def test_kill_pb8_instance_shell_quotes_validated_arguments():
     assert arguments[4:] == ["/srv/pb 8", "/srv/venv pb8/bin/python"]
 
 
-def test_local_kill_pb8_delegates_to_runv8_stop(tmp_path, monkeypatch):
+@pytest.mark.parametrize("runtime", ["8", "9"])
+def test_local_kill_pb8_delegates_to_runv8_stop(tmp_path, monkeypatch, runtime):
     """Local PB8 restart requests use the supervisor's graceful stop method."""
 
-    instance_dir = tmp_path / "data" / "run_v8" / "same"
+    instance_dir = tmp_path / "data" / f"run_v{runtime}" / "same"
     instance_dir.mkdir(parents=True)
     (instance_dir / "config.json").write_text("{}", encoding="utf-8")
     events = []
@@ -1380,12 +1382,15 @@ def test_local_kill_pb8_delegates_to_runv8_stop(tmp_path, monkeypatch):
 
         v7_path = str(tmp_path / "data" / "run_v7")
         v8_path = str(tmp_path / "data" / "run_v8")
+        v9_path = str(tmp_path / "data" / "run_v9")
         name = "node-a"
         pbgdir = tmp_path
         pb7dir = str(tmp_path / "pb7")
         pb7venv = str(tmp_path / "venv_pb7" / "bin" / "python")
-        pb8dir = str(tmp_path / "pb8")
-        pb8venv = str(tmp_path / "venv_pb8" / "bin" / "python")
+        pb8dir = str(tmp_path / f"pb{runtime}")
+        pb8venv = str(tmp_path / f"venv_pb{runtime}" / "bin" / "python")
+        pb9dir = str(tmp_path / "pb9")
+        pb9venv = str(tmp_path / "venv_pb9" / "bin" / "python")
 
     class FakeRunV8:
         """Record the runtime-aware stop delegation."""
@@ -1397,20 +1402,21 @@ def test_local_kill_pb8_delegates_to_runv8_stop(tmp_path, monkeypatch):
             return SimpleNamespace(pid=4321)
 
         def stop(self):
-            events.append((self.user, self.path, self.pb8dir, self.pb8venv))
+            events.append((self.user, self.path, getattr(self, f"pb{runtime}dir"), getattr(self, f"pb{runtime}venv")))
 
     monkeypatch.setattr(pbrun_module, "PBRun", FakePBRun)
     monkeypatch.setattr(pbrun_module, "RunV8", FakeRunV8)
+    monkeypatch.setattr(pbrun_module, "RunV9", FakeRunV8)
 
-    result = asyncio.run(vps_api._local_kill_instance("same", "8"))
+    result = asyncio.run(vps_api._local_kill_instance("same", runtime))
 
     assert result["success"] is True
     assert result["pid"] == 4321
     assert events == [(
         "same",
         str(instance_dir),
-        str(tmp_path / "pb8"),
-        str(tmp_path / "venv_pb8" / "bin" / "python"),
+        str(tmp_path / f"pb{runtime}"),
+        str(tmp_path / f"venv_pb{runtime}" / "bin" / "python"),
     )]
 
 
@@ -1487,3 +1493,21 @@ def test_shared_ws_client_closes_only_after_last_owner_releases(monkeypatch):
     assert Exchange._shared_ws_owners == {}
     assert Exchange._shared_ws_markets_loaded == set()
     assert Exchange._shared_ws_locks == {}
+
+
+def test_pb9_log_paths_and_tail_never_fall_back_to_pb7(tmp_path, monkeypatch):
+    """Logical PB9 files and smart tails retain native generation identity."""
+    monkeypatch.setattr(async_logs, 'local_pb9_logs_dir', lambda: tmp_path / 'pb9/logs')
+    assert async_logs.resolve_local_log_path('pb9/logs/same.log') == tmp_path / 'pb9/logs/same.log'
+    assert async_logs.resolve_bot_log_path('same', '9') == 'software/pb9/logs/same.log'
+    observed = []
+    class Streamer:
+        """Capture validated log requests without a remote connection."""
+        async def get_recent_log_files(self, host, paths, lines):
+            """Return a native log marker through the real smart-tail handler."""
+            observed.append((host, paths, lines)); return 'native9'
+    monkeypatch.setattr(vps_api, '_streamer', Streamer())
+    monkeypatch.setattr(vps_api, '_monitor', SimpleNamespace(store=SimpleNamespace(bot_logs={
+        'host': {'8:same': ['pb8/logs/same.log'], '9:same': ['pb9/logs/same.log']}})))
+    assert asyncio.run(vps_api.get_bot_log_tail('host', 'same', pb_version='9', lines=50)) == 'native9'
+    assert observed == [('host', ['pb9/logs/same.log'], 50)]

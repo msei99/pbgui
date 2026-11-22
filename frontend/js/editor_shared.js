@@ -2588,6 +2588,78 @@
 
   function createJsonSyncController(opts) {
     opts = opts || {};
+    var tracked = null;
+    function tracksChanges() {
+      return typeof opts.trackChanges === 'function' ? opts.trackChanges() : !!opts.trackChanges;
+    }
+    function copyJson(value) { return JSON.parse(JSON.stringify(value)); }
+    function collectTracked(base) {
+      var previous = isStructuredSyncing();
+      setStructuredSyncing(true);
+      try { return opts.collectConfig(copyJson(base)); }
+      finally { setStructuredSyncing(previous); }
+    }
+    function resetTracked(config) {
+      if (!tracksChanges()) { tracked = null; return; }
+      tracked = {config: copyJson(config), raw: copyJson(config), rawText: JSON.stringify(config, null, 2),
+        form: collectTracked(config), needsRender: false};
+    }
+    function recordRawChange() {
+      var raw = getRawElement();
+      if (!raw || !tracked) return false;
+      var validation = validateRaw(raw.value || '');
+      setRawValidationError(validation.error);
+      if (validation.error || !validation.parsed) return false;
+      if (raw.value !== tracked.rawText) {
+        applyConfigDelta(tracked.config, tracked.raw, validation.parsed, []);
+        tracked.raw = copyJson(validation.parsed);
+        tracked.rawText = raw.value;
+        tracked.needsRender = true;
+      }
+      return true;
+    }
+    function recordStructuredChange() {
+      if (!tracked) return;
+      var current = collectTracked(tracked.form);
+      applyConfigDelta(tracked.config, tracked.form, current, []);
+      tracked.form = copyJson(current);
+    }
+    function flushTracked() {
+      if (!recordRawChange()) return;
+      recordStructuredChange();
+      var raw = getRawElement(), config = copyJson(tracked.config);
+      var render = tracked.needsRender;
+      var active = document.activeElement;
+      var focus = active && active.id ? {id: active.id, start: active.selectionStart, end: active.selectionEnd} : null;
+      var scrollTop = raw.scrollTop;
+      // Keep the exact editing text and caret (e.g. 1.0 on the way to 1.05)
+      // when no form delta needs to be merged into the Raw document.
+      if (JSON.stringify(config) !== JSON.stringify(tracked.raw)) raw.value = JSON.stringify(config, null, 2);
+      tracked.rawText = raw.value;
+      tracked.raw = copyJson(config);
+      setRawLastApplied(raw.value);
+      if (render && typeof opts.applyParsed === 'function') {
+        // Tracked consumers populate synchronously; network lookups remain owned
+        // by the page and cannot replay the previous document into this state.
+        var wasSyncing = isRawSyncing();
+        setRawSyncing(true);
+        try { opts.applyParsed(config, raw.value); }
+        finally { setRawSyncing(wasSyncing); }
+        tracked.needsRender = false;
+        tracked.rawText = raw.value;
+        tracked.raw = copyJson(config);
+        if (focus) {
+          var next = document.getElementById(focus.id);
+          if (next && next !== document.activeElement) next.focus({preventScroll: true});
+          if (next && focus.start != null && typeof next.setSelectionRange === 'function') {
+            try { next.setSelectionRange(focus.start, focus.end); } catch (_) { /* Numeric inputs have no text selection. */ }
+          }
+        }
+      }
+      raw.scrollTop = scrollTop;
+      autoResizeRaw(raw);
+      return config;
+    }
 
     function getRawElement() {
       return resolveElement(opts.rawTextarea || 'cfg-raw-json');
@@ -2639,7 +2711,10 @@
     var api = {
       scheduleRaw: null,
       scheduleStructured: null,
+      reset: resetTracked,
+      flush: function() { return tracksChanges() ? flushTracked() : api.applyStructured(); },
       applyRaw: async function() {
+        if (tracksChanges()) return flushTracked();
         if (isRawSyncing()) return;
         var rawEl = getRawElement();
         if (!rawEl) return;
@@ -2664,6 +2739,7 @@
         }
       },
       applyStructured: function() {
+        if (tracksChanges()) return flushTracked();
         if (isRawSyncing() || isStructuredSyncing()) return;
         var rawEl = getRawElement();
         if (!rawEl) return;
@@ -2719,10 +2795,12 @@
 
     api.scheduleRaw = function() {
       if (isRawSyncing()) return;
+      if (tracksChanges()) recordRawChange();
       rawRunner();
     };
     api.scheduleStructured = function() {
       if (isRawSyncing() || isStructuredSyncing()) return;
+      if (tracksChanges()) recordStructuredChange();
       structuredRunner();
     };
 

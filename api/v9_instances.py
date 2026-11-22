@@ -1,4 +1,4 @@
-"""Thin authenticated local-only PB9 live-instance API on the shared live bundle store.
+"""Authenticated native PB9 live-instance API on the shared live bundle store.
 
 A PB9 live bundle is ``data/run_v9/<name>/config.json`` (pure authored native
 source) plus the private ``pbgui.json`` sidecar. PBGui metadata is merged into
@@ -230,6 +230,7 @@ def _checked_sidecar(raw: Any) -> dict[str, Any]:
     except HTTPException:
         raise _BundleError("pbgui.json has an invalid enabled_on target") from None
     return {"runtime": "pb9", "version": version, "enabled_on": enabled_on, "note": note,
+            **({"cluster_managed": True} if raw.get("cluster_managed") is True else {}),
             **_filter_preferences(raw)}
 
 
@@ -476,13 +477,8 @@ def _runner(name: str, paths: dict[str, str] | None = None, master: str | None =
 
 def _config_referenced(config_path: str) -> bool:
     """Return whether any process names this exact config file in its arguments."""
-    for process in psutil.process_iter():
-        try:
-            if config_path in process.cmdline():
-                return True
-        except (psutil.NoSuchProcess, psutil.ZombieProcess):
-            continue
-    return False
+    from native_live_process import config_is_referenced
+    return config_is_referenced(config_path)
 
 
 def _assert_stopped(name: str, target: Path) -> None:
@@ -496,6 +492,14 @@ def _assert_stopped(name: str, target: Path) -> None:
                 status_code=409,
                 detail=f"A process references PB9 instance '{name}' but its runtime identity is unverified",
             )
+        observed = _remote_rows(name)
+        active_host = str(_last_active_host(name).get("host") or "")
+        remote_hosts = set(observed)
+        if active_host and active_host != _master_hostname():
+            remote_hosts.add(active_host)
+        for host in remote_hosts:
+            if not _remote_snapshot_fresh(host) or observed.get(host, {}).get("running") is not False:
+                raise HTTPException(409, f"PB9 stopped state on '{host}' is not freshly confirmed; nothing was removed")
     except HTTPException:
         raise
     except Exception as exc:
@@ -698,6 +702,37 @@ def _exposure_summary(native: dict[str, Any]) -> str:
     return " | ".join(parts)
 
 
+def _remote_store():
+    """Use the existing API-owned monitor; no second client or controller is created."""
+    from api import v8_instances as shared
+    monitor = shared._monitor
+    return monitor, getattr(monitor, "store", None)
+
+
+def _remote_rows(name: str) -> dict[str, dict]:
+    """Read generation-isolated monitor rows for one exact PB9 account."""
+    _monitor, store = _remote_store()
+    result = {}
+    for host, rows in list((getattr(store, "v9_instances", {}) or {}).items()):
+        for row in rows:
+            if isinstance(row, dict) and row.get("name") == name:
+                result[str(host)] = row
+    return result
+
+
+def _remote_snapshot_fresh(host: str) -> bool:
+    """Only a freshly validated PB9-aware snapshot can authorize stopped-state actions."""
+    _monitor, store = _remote_store()
+    stamps = (getattr(store, "v9_snapshot_times", {}) or {}).get(host)
+    if not isinstance(stamps, (tuple, list)) or len(stamps) != 2:
+        return False
+    try:
+        ages = [time.time() - float(value) for value in stamps]
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return all(math.isfinite(age) and -5 <= age <= 90 for age in ages)
+
+
 def _instance_row(directory: Path, master: str, paths: dict[str, str], exchanges: dict[str, str]) -> dict[str, Any]:
     """Build one row from bounded files and the exact local process identity."""
     name = directory.name
@@ -733,11 +768,8 @@ def _instance_row(directory: Path, master: str, paths: dict[str, str], exchanges
     elif enabled_on == "disabled":
         status = "stop_needed" if running else "disabled"
     elif enabled_on != master:
-        status = "blocked"
-        blocked_reason = (
-            f"PB9 runs only on this PBGui host; the instance targets '{enabled_on}'"
-            if master else "The local PBGui host identity is unavailable"
-        )
+        status = "collecting"
+        blocked_reason = "Waiting for a fresh PB9 instance snapshot from the assigned host"
     elif running is None:
         status = "blocked"
         blocked_reason = "The local PB9 runtime paths or the PB9 runner are not available; the process state is unknown"
@@ -754,7 +786,7 @@ def _instance_row(directory: Path, master: str, paths: dict[str, str], exchanges
     user = user if isinstance(user, str) else ""
     modes = {side: _nested(native, "live", "modes", side) for side in ("long", "short")}
     local = enabled_on == master and bool(master)
-    return {
+    row = {
         "name": name,
         "user": user,
         "exchange": str(exchanges.get(user, "") or ""),
@@ -780,6 +812,24 @@ def _instance_row(directory: Path, master: str, paths: dict[str, str], exchanges
         "blocked_on": [enabled_on] if status == "blocked" else [],
         "blocked_reason": blocked_reason,
     }
+
+
+    remote = _remote_rows(name)
+    running_hosts = [host for host, item in remote.items() if item.get("running") is True]
+    row["running_on"] = sorted(set(row["running_on"] + running_hosts))
+    if enabled_on not in {"disabled", master} and not load_error:
+        observed = remote.get(enabled_on)
+        row["assigned_hostname"] = enabled_on
+        row["desired_status"] = "cluster"
+        row["running_version"] = _coerce_version((observed or {}).get("rv"))
+        row["config_version_remote"] = _coerce_version((observed or {}).get("cv"))
+        if _remote_snapshot_fresh(enabled_on) and observed:
+            row["blocked_reason"] = str(observed.get("blocked_reason") or "")
+            row["blocked_on"] = [enabled_on] if observed.get("blocked") else []
+            row["status"] = ("blocked" if observed.get("blocked") else
+                             "activate_needed" if not observed.get("running") else
+                             "synced" if row["running_version"] == version else "outdated")
+    return row
 
 
 def _scan_instances() -> list[dict[str, Any]]:
@@ -860,6 +910,78 @@ def _carry_running_marker(target: Path, stage: Path) -> None:
         atomic_write_private_text(stage / _RUNNING_MARKER, str(version))
 
 
+def _cluster_root() -> Path:
+    """Return the shared Cluster root for this PBGui installation."""
+    from master.cluster_state import default_cluster_root
+    return default_cluster_root(Path(PBGDIR))
+
+
+def _cluster_context(enabled_on: str, schema: str) -> tuple[dict, str] | None:
+    """Require fresh native eligibility and all-replica protocol support before writes."""
+    from api import v8_instances as shared
+    from master.cluster_state import read_local_identity
+
+    root = _cluster_root()
+    master = _master_hostname()
+    if not (root / "node_id").exists() or not (root / "cluster_id").exists():
+        if enabled_on not in {"disabled", master}:
+            raise HTTPException(409, "PB9 remote placement requires a configured Cluster")
+        return None
+    identity = read_local_identity(root)
+    if enabled_on != "disabled":
+        shared._ensure_pb8_cluster_rollout_ready(identity, runtime="pb9", cluster_root=root)
+    else:
+        from master.cluster_state import read_materialized_state
+        desired = read_materialized_state(root).get("desired_state") or {}
+        if not (desired.get("pb9_instances") or desired.get("pb9_tombstones")):
+            try:
+                shared._ensure_pb8_cluster_rollout_ready(identity, runtime="pb9", cluster_root=root)
+            except HTTPException:
+                # An unadopted disabled local bundle needs no new protocol operation.
+                return None
+    assigned = str(identity["node_id"])
+    if enabled_on not in {"disabled", master}:
+        candidate = shared._best_node_for_host(enabled_on, cluster_root=root)
+        node = shared._cluster_nodes(root).get(candidate[0], {}) if candidate else {}
+        if (not candidate or node.get("enabled") is False or node.get("state_replica") is False
+                or node.get("sync_mode") != "reachable"):
+            raise HTTPException(409, "PB9 target must be a joined, reachable Cluster node")
+        capability = shared._remote_runtime_capability(enabled_on, runtime="pb9")
+        supported = str(capability.get("config_schema") or "")
+        if (capability.get("pb9_capable") is not True or not supported.startswith("v9.")
+                or shared._host_supports_config_schema(schema, supported) is not True):
+            raise HTTPException(409, f"PB9 runtime/schema support is not freshly confirmed on '{enabled_on}'")
+        assigned = candidate[0]
+    return identity, assigned
+
+
+def _publish_cluster_bundle(name: str, target: Path, sidecar: dict, context: tuple | None,
+                            parent_version: int, is_new: bool, parent_manifest_hash: str = "") -> None:
+    """Publish immutable native files, then append one signed PB9 operation."""
+    if context is None:
+        return
+    from master.cluster_state import append_operation, persist_config_manifest_blobs, rebuild_materialized_state
+    _identity, assigned = context
+    root = _cluster_root()
+    if sidecar["enabled_on"] == "disabled":
+        from master.cluster_state import read_materialized_state
+        previous = (read_materialized_state(root).get("desired_state") or {}).get("pb9_instances", {}).get(name, {})
+        # Keep a disabled config on its old target until stopped-state telemetry arrives.
+        assigned = str(previous.get("assigned_host") or assigned)
+    manifest = persist_config_manifest_blobs(root, target)
+    operation = append_operation(root, "UPSERT_PB9_CONFIG", {
+        "instance": name, "version": str(sidecar["version"]), "parent_version": str(parent_version),
+        "assigned_host": assigned, "config_manifest_hash": manifest,
+        "desired_state": "stopped" if sidecar["enabled_on"] == "disabled" else "running",
+        "enabled_on": sidecar["enabled_on"], "allow_tombstone_recreate": is_new,
+        "parent_manifest_hash": parent_manifest_hash,
+    })
+    try:
+        rebuild_materialized_state(root)
+    except Exception as exc:
+        _log(SERVICE, f"PB9 desired-state rebuild deferred after {operation['op_id']}: {type(exc).__name__}", level="WARNING")
+
+
 def _save(
     name: str,
     config: Any,
@@ -885,11 +1007,7 @@ def _save(
         raise HTTPException(status_code=422, detail="Invalid PB9 editor filter preferences") from None
     if expected_version is None:
         expected_version = _coerce_version(pbgui.get("version"))
-    if enabled_on != "disabled" and enabled_on != _master_hostname():
-        raise HTTPException(
-            status_code=409,
-            detail=f"Cannot target '{enabled_on}': PB9 instances run only on this PBGui host",
-        )
+    cluster = _cluster_context(enabled_on, str(native.get("config_version") or ""))
     try:
         known_users = {item["name"] for item in _available_users()}
     except Exception as exc:
@@ -906,6 +1024,10 @@ def _save(
         if target.is_symlink() or config_path.is_symlink() or (target.exists() and not target.is_dir()):
             raise HTTPException(status_code=409, detail="PB9 instance path must be a safe directory")
         existed = config_path.is_file()
+        previous_target = _read_bundle(target)[1]["enabled_on"] if existed else "disabled"
+        moving = existed and enabled_on != "disabled" and previous_target != enabled_on
+        if moving and previous_target != "disabled":
+            raise HTTPException(409, "Disable the PB9 instance and wait for its confirmed stop before moving it")
         if existed and create_only:
             raise HTTPException(status_code=409, detail=f"PB9 instance '{name}' already exists")
         if require_stopped:
@@ -913,6 +1035,14 @@ def _save(
                 raise HTTPException(status_code=404, detail=f"PB9 instance '{name}' not found")
             _assert_stopped(name, target)
         current = _current_version(name) if existed else 0
+        cluster_version = 0
+        if cluster is not None:
+            from master.cluster_state import read_materialized_state
+            desired = read_materialized_state(_cluster_root()).get("desired_state") or {}
+            known = (desired.get("pb9_instances") or {}).get(name) or (desired.get("pb9_tombstones") or {}).get(name) or {}
+            cluster_version = _coerce_version(known.get("version"))
+            if existed and cluster_version > current:
+                raise HTTPException(409, "A newer PB9 Cluster version exists; wait for automatic reconciliation")
         if expected_version != current:
             raise HTTPException(
                 status_code=409,
@@ -923,12 +1053,18 @@ def _save(
             )
         sidecar = {
             "runtime": "pb9",
-            "version": max(current, _highest_backup_version(name)) + 1,
+            "version": max(current, cluster_version, _highest_backup_version(name)) + 1,
             "enabled_on": enabled_on,
             "note": note,
             **preferences,
         }
+        if cluster is not None:
+            sidecar["cluster_managed"] = True
         stage = root / f"{_STAGE_PREFIX}{uuid.uuid4().hex}"
+        parent_manifest_hash = ""
+        if cluster is not None and existed:
+            from master.cluster_state import persist_config_manifest_blobs
+            parent_manifest_hash = persist_config_manifest_blobs(_cluster_root(), target)
         backup_id = None
         published = False
         try:
@@ -939,13 +1075,26 @@ def _save(
             )
             atomic_write_private_text(stage / _SIDECAR, json.dumps(sidecar, indent=4) + "\n")
             _carry_running_marker(target, stage)
+            # Preserve the inode of logs which a still-running local process owns.
+            for filename in _LOG_FILES:
+                source = target / filename
+                if source.exists():
+                    if source.is_symlink() or not source.is_file():
+                        raise HTTPException(409, "PB9 runtime log path is unsafe")
+                    os.link(source, stage / filename, follow_symlinks=False)
             with ExitStack() as stack:
                 if enabled_on != "disabled":
                     _hold_account_guard(stack, name, target)
+                    if moving:
+                        _assert_stopped(name, target)
                 _check_cancel(cancel_event)
                 if existed:
                     backup_id = _snapshot(name, target)
-                live_bundle_store.publish_staged_bundle(stage, target, generation_prefix=".pbgui-v9", label="PB9")
+                live_bundle_store.publish_staged_bundle(
+                    stage, target, generation_prefix=".pbgui-v9", label="PB9",
+                    on_publish=lambda: _publish_cluster_bundle(name, target, sidecar, cluster, current, not existed,
+                                                              parent_manifest_hash=parent_manifest_hash),
+                )
                 published = True
         except (HTTPException, PB9ConfigError):
             raise
@@ -967,7 +1116,8 @@ def _save(
         "config": {**native, "pbgui": sidecar},
         "overrides": [],
         "backup_id": backup_id,
-        "sync": {"ok": True, "pending": False, "direct": False, "status": "local"},
+        "sync": {"ok": True, "pending": cluster is not None, "direct": False,
+                 "status": "pending" if cluster is not None else "local"},
     }
 
 
@@ -1142,6 +1292,10 @@ def _op_delete(args, body, cancel_event) -> dict[str, Any]:
         if target.is_symlink() or not target.is_dir() or config_path.is_symlink() or not config_path.is_file():
             raise HTTPException(status_code=404, detail=f"PB9 instance '{name}' not found")
         _assert_stopped(name, target)
+        _native, sidecar = _read_bundle(target)
+        if sidecar.get("enabled_on") != "disabled":
+            raise HTTPException(409, "Disable the PB9 instance before deleting it")
+        context = _cluster_context("disabled", str(_native.get("config_version") or ""))
         _check_cancel(cancel_event)
         try:
             backup_id = _snapshot(name, target)
@@ -1151,6 +1305,15 @@ def _op_delete(args, body, cancel_event) -> dict[str, Any]:
             _log(SERVICE, f"Backing up PB9 instance '{name}' before delete failed: {type(exc).__name__}", level="ERROR")
             raise HTTPException(status_code=500, detail="PB9 instance was not deleted because its backup failed") from None
         try:
+            if context is not None:
+                from master.cluster_state import append_operation, rebuild_materialized_state
+                append_operation(_cluster_root(), "DELETE_PB9_INSTANCE", {
+                    "instance": name, "version": str(sidecar["version"]),
+                })
+                try:
+                    rebuild_materialized_state(_cluster_root())
+                except Exception as exc:
+                    _log(SERVICE, f"PB9 tombstone rebuild deferred for '{name}': {type(exc).__name__}", level="WARNING")
             shutil.rmtree(target)
         except OSError as exc:
             _log(SERVICE, f"Removing PB9 instance '{name}' failed: {type(exc).__name__}", level="ERROR")
@@ -1158,6 +1321,17 @@ def _op_delete(args, body, cancel_event) -> dict[str, Any]:
     _invalidate_instance_list()
     _log(SERVICE, f"Deleted PB9 live instance '{name}'", level="INFO")
     return {"ok": True, "name": name, "backup_id": backup_id}
+
+
+def _op_restart_target(args, body, cancel_event) -> dict[str, Any]:
+    """Resolve a stored, enabled assignment without changing it or contacting a host."""
+    name = _validate_name(args["name"])
+    with _read_lock():
+        _directory, _native, sidecar = _load_instance(name)
+    target = sidecar["enabled_on"]
+    if target == "disabled":
+        raise HTTPException(409, f"PB9 instance '{name}' is disabled")
+    return {"name": name, "host": target, "master": _master_hostname()}
 
 
 def _op_restart(args, body, cancel_event) -> dict[str, Any]:
@@ -1292,11 +1466,34 @@ def _op_hosts(args, body, cancel_event) -> dict[str, Any]:
     hosts = ["disabled"]
     if capability["pb9_capable"] is True and compatible is not False:
         hosts.append(master)
+    capabilities = {master: capability}
+    from api import v8_instances as shared
+    for node in shared._cluster_nodes(_cluster_root()).values():
+        host = str(node.get("pbname") or node.get("hostname") or "") if isinstance(node, dict) else ""
+        if not host or host == master:
+            continue
+        try:
+            _validate_target(host)
+            candidate = shared._remote_runtime_capability(host, runtime="pb9")
+            supported = str(candidate.get("config_schema") or "")
+            candidate["schema_compatible"] = (shared._host_supports_config_schema(required, supported)
+                                               if required else supported.startswith("v9."))
+            candidate["name"] = host
+            candidate["schema_reason"] = "PB9 schema support requires fresh host metadata"
+            capabilities[host] = candidate
+            if (candidate.get("pb9_capable") is True and candidate["schema_compatible"] is True
+                    and supported.startswith("v9.") and node.get("enabled") is not False
+                    and node.get("state_replica") is not False and node.get("sync_mode") == "reachable"):
+                _cluster_context(host, required or supported)
+                hosts.append(host)
+        except HTTPException as exc:
+            if host in capabilities:
+                capabilities[host]["reason"] = str(exc.detail)
     return {
         "request_id": str(args.get("request_id") or ""),
         "generated_at": time.time(),
         "hosts": hosts,
-        "host_capabilities": {master: capability},
+        "host_capabilities": capabilities,
     }
 
 
@@ -1449,6 +1646,7 @@ _OPERATIONS = {
     "run_copy": _op_copy,
     "run_delete": _op_delete,
     "run_restart": _op_restart,
+    "run_restart_target": _op_restart_target,
     "run_last_active_host": _op_last_active_host,
     "run_log": _op_log,
     "run_users": _op_users,
@@ -1527,6 +1725,19 @@ async def _run(request: Request, operation: str, args: dict[str, Any] | None = N
     return await pb9_api._execute(request, operation, _encode_payload(args, body))
 
 
+async def _run_json(request: Request, operation: str, args: dict, **kwargs) -> dict:
+    """Decode an owned worker response for a subsequent async transport step."""
+    response = await _run(request, operation, args, **kwargs)
+    if isinstance(response, dict):
+        return response
+    value = json.loads(response.body)
+    if response.status_code != 200:
+        raise HTTPException(response.status_code, value.get("detail", "PB9 operation failed"))
+    if not isinstance(value, dict):
+        raise HTTPException(502, "PB9 operation returned an invalid response")
+    return value
+
+
 @router.get("/instances")
 async def get_v9_instances(request: Request, session: SessionToken = Depends(require_auth)):
     """List PB9 live instances and their local process state."""
@@ -1584,8 +1795,23 @@ async def save_v9_instance_config(
 
 @router.post("/instances/{name}/restart")
 async def restart_v9_instance(name: str, request: Request, session: SessionToken = Depends(require_auth)):
-    """Stop one locally assigned PB9 instance so PBRun relaunches it."""
-    return await _run(request, "run_restart", {"name": _validate_name(name)})
+    """Use the shared exact native stop transport for an explicit Restart action."""
+    name = _validate_name(name)
+    target = await _run_json(request, "run_restart_target", {"name": name})
+    if target["host"] == target["master"]:
+        return await _run(request, "run_restart", {"name": name})
+    monitor, _store = _remote_store()
+    if monitor is None or not _remote_snapshot_fresh(target["host"]):
+        raise HTTPException(409, "A fresh PB9 snapshot from the assigned host is required before restart")
+    observed = _remote_rows(name).get(target["host"], {})
+    if observed.get("running") is not True or observed.get("blocked") is True:
+        raise HTTPException(409, "PB9 restart requires an observed running instance without a blocked launch gate")
+    result = await monitor.kill_instance(target["host"], name, "9")
+    if not result.get("success"):
+        _log(SERVICE, f"PB9 restart was not confirmed for '{name}' on {target['host']}", level="WARNING")
+        raise HTTPException(409, "The exact PB9 process could not be stopped")
+    _invalidate_instance_list()
+    return {**result, "name": name, "host": target["host"]}
 
 
 @router.post("/instances/{name}/forced-mode")
@@ -1625,8 +1851,20 @@ async def get_v9_instance_log_smart(
     lines: int = Query(500, ge=1, le=10000),
     session: SessionToken = Depends(require_auth),
 ):
-    """Read the bounded local PB9 error log or the newest backed-up one."""
-    return await _run(request, "run_log", {"name": _validate_name(name), "lines": lines},
+    """Reuse the shared remote-log transport, retaining local and backup fallback."""
+    name = _validate_name(name)
+    _check_query(request, frozenset({"lines"}))
+    host_info = await _run_json(request, "run_last_active_host", {"name": name}, query=frozenset({"lines"}))
+    host = str(host_info.get("host") or "")
+    if host and host != host_info.get("master"):
+        from api.vps import get_bot_log_tail
+        try:
+            log = await get_bot_log_tail(host, name, pb_version="9", lines=lines)
+            if log:
+                return {**host_info, "log": log, "source": "remote", "source_label": f"last active ({host})"}
+        except Exception as exc:
+            _log(SERVICE, f"Remote PB9 log lookup failed for '{name}': {type(exc).__name__}", level="WARNING")
+    return await _run(request, "run_log", {"name": name, "lines": lines},
                       query=frozenset({"lines"}))
 
 

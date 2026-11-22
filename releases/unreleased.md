@@ -2,6 +2,37 @@
 
 ## Development
 
+- Fix PB9 Suite queue/Vast data preparation by renewing native optimizer source
+  bindings after scenario overrides, dates and exchanges on disposable configs.
+  Preserve authored configs and bounds; keep non-Suite exports independent of
+  the Suite rebinding API. Ignore private atomic-save stages/backups in shared
+  PB8/PB9 config listings and use the owning generation in optimizer diagnostics.
+
+- Fix reviewed PB9 launch/editor races: serialize native starts with bundle writers,
+  recheck assignment and validated files before launch, merge pending Raw JSON/form
+  edits in input order, and scope inactive-strategy caches to one Run document.
+  Preserve same-document strategy switches. Reject blank filter tags, deduplicate
+  padded tags, retain safe helper failure categories, and guide missing-runtime
+  errors to Welcome Setup. No bot-source or remote-host changes.
+
+- Extend PB9 Run/VPS through PB8's shared native runner, signed Cluster transport,
+  manifest reconciliation, checkpoint replay, monitoring and remote log/stop paths.
+  Keep PB9 desired state and account identities separate; require fresh runtime,
+  schema and replica capability evidence before placement. Publish complete private
+  bundles with rollback, explicit legacy adoption and protected backups. Preserve
+  open local log inodes; refuse deletion without fresh stopped proof. Existing
+  managed instances can still publish deactivation while a peer is unavailable.
+  Show native PB9 rows in the shared VPS Monitor. Covered by isolated protocol,
+  API, collector and browser tests; no real remote deployment or trading test.
+
+- Complete PB9 support in Storage using the shared registry, Review selection and
+  cleanup worker: list native optimizer results plus GUI/native backtests, preserve
+  recent output and block deletion while PB9 simulations run (rechecked per item).
+  Keep candle/config/environment protection and PB7/PB8 behavior unchanged. Show
+  the configured PB9 Python version in System and update both Storage guides.
+  Invalidate pre-PB9 category snapshots so the existing scheduler rescans them
+  automatically instead of requiring a manual refresh.
+
 - Complete Welcome's optional PB9 runtime display and setup panel using the existing
   authenticated PB9 inspection and atomic path writer. Show source/schema, Python,
   CLI/Rust, commit and incomplete-update state; update automatically without

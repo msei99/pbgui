@@ -493,3 +493,28 @@ def test_guides_have_parallel_agent_operations_content() -> None:
     assert "SSH may remain" in english
     assert "SSH kann verbunden bleiben" in german
     assert len(re.findall(r"^## ", english, re.MULTILINE)) == len(re.findall(r"^## ", german, re.MULTILINE))
+
+
+def test_pb9_rows_keep_native_generation_and_stale_state_separate() -> None:
+    """The production monitor table handles identical PB8/PB9 names independently."""
+    source = HTML_PATH.read_text(encoding='utf-8')
+    functions = '\n\n'.join(_extract_function(source, name) for name in ('isFreshV8Observation', 'buildInstanceRows'))
+    script = textwrap.dedent(f'''
+        const assert = browserAssert;
+        const MONITOR_AGENT_COLLECTOR_STALE_SECONDS = 30;
+        {functions}
+        const fresh = {{snapshot_generated_at: 95, snapshot_checked_at: 96}};
+        const rows = buildInstanceRows({{
+            instances: {{host: [{{u:'same', p:'8'}}, {{u:'same', p:'9'}}]}},
+            v8_instances: {{host:[{{name:'same', running:true, cv:8, rv:8, ...fresh}}]}},
+            v9_instances: {{host:[{{name:'same', running:true, cv:9, rv:9, ...fresh}},
+                {{name:'idle9', running:false, cv:1, rv:0, eo:'host', ...fresh}},
+                {{name:'stale9', running:false, snapshot_generated_at:1, snapshot_checked_at:1}}]}}
+        }}, 100);
+        assert.deepEqual(rows.filter(r => r.name === 'same').map(r => [r.version,r.pbVersion,r.configVer]),
+            [['V8','8',8],['V9','9',9]]);
+        assert.equal(rows.find(r => r.name === 'idle9').pbVersion, '9');
+        assert.equal(rows.some(r => r.name === 'stale9'), false);
+    ''')
+    result = run_javascript(['-e', script], cwd=ROOT, capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr or result.stdout

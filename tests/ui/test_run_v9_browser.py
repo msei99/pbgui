@@ -61,13 +61,16 @@ def editor():
                 route.fulfill(json={**metadata, 'runtime': {'detected': True}})
             elif path == '/api/v9/instances/new-config':
                 route.fulfill(json={'config': copy.deepcopy(state.config), 'param_status': {}, 'override_configs': {}})
+            elif path == '/api/v9/draft':
+                state.drafts['imported'] = copy.deepcopy(route.request.post_data_json['config'])
+                route.fulfill(json={'draft_id': 'imported'})
             elif path.startswith('/api/v9/draft/'):
                 route.fulfill(json={'config': copy.deepcopy(state.drafts[path.rsplit('/', 1)[1]]),
                                     'param_status': {}, 'override_configs': {}})
             elif path == '/api/v9/users':
                 route.fulfill(json={'users': [{'name': 'fixture', 'exchange': 'bybit'}]})
             elif path == '/api/v9/hosts':
-                route.fulfill(json={'hosts': ['disabled', 'fixture-host'], 'host_capabilities': {'fixture-host': {'pb9_capable': True}}})
+                route.fulfill(json={**getattr(state, 'hosts_payload', {'hosts': ['disabled', 'fixture-host'], 'host_capabilities': {'fixture-host': {'pb9_capable': True}}}), 'request_id': parse_qs(url.query).get('request_id', [''])[0]})
             elif path.endswith('/next-version'):
                 route.fulfill(json={'next_version': 1, 'version': 1})
             elif path.endswith('/config') and route.request.method == 'PUT':
@@ -359,6 +362,38 @@ def test_side_json_and_fixed_controls_remain_consistent_across_strategy_change(e
     assert editor.errors == []
 
 
+@pytest.mark.parametrize('replacement', ['import', 'raw', 'none', 'raw_note'])
+def test_strategy_cache_belongs_to_one_document(editor, replacement):
+    """Replace a document without resurrecting an inactive strategy from its predecessor."""
+    page = editor.page
+    expect(page.locator('#f-user')).to_have_value('fixture')
+    page.evaluate("cfg.bot.global.strategy.trailing_martingale.entry.initial_qty_fraction=0.12345; populateForm()")
+    page.locator('#f-strategy-kind').select_option('ema_anchor')
+    page.wait_for_function("cfg.bot.portfolio.strategy_kind === 'ema_anchor'")
+    if replacement == 'raw_note':
+        page.evaluate("const raw=document.getElementById('cfg-raw-json');const next=JSON.parse(raw.value);next.pbgui.note='Raw note';raw.value=JSON.stringify(next);raw.dispatchEvent(new Event('input',{bubbles:true}));")
+        page.evaluate('applyRawJsonEditorSync()')
+    elif replacement != 'none':
+        config = page.evaluate("JSON.parse(JSON.stringify(cfg))")
+        for scope in ('global', 'long', 'short'):
+            config['bot'][scope]['strategy'] = {'ema_anchor': {}}
+        if replacement == 'raw':
+            page.evaluate("config => { const raw=document.getElementById('cfg-raw-json');raw.value=JSON.stringify(config);raw.dispatchEvent(new Event('input',{bubbles:true})); }", config)
+            page.wait_for_function("JSON.parse(document.getElementById('cfg-raw-json').value).bot.global.strategy.ema_anchor !== undefined")
+            page.evaluate("applyRawJsonEditorSync()")
+        else:
+            page.evaluate('openImportModal()')
+            page.locator('#import-user').fill('fixture')
+            page.locator('#import-json').fill(json.dumps(config))
+            page.evaluate('void doImport()')
+            page.get_by_role('button', name='Replace and Import', exact=True).click()
+            page.wait_for_function("!document.getElementById('import-modal').classList.contains('open')")
+    page.locator('#f-strategy-kind').select_option('trailing_martingale')
+    value = page.evaluate("cfg.bot.global.strategy && cfg.bot.global.strategy.trailing_martingale && cfg.bot.global.strategy.trailing_martingale.entry && cfg.bot.global.strategy.trailing_martingale.entry.initial_qty_fraction")
+    assert (value == 0.12345) is (replacement in ('none', 'raw_note'))
+    assert editor.errors == []
+
+
 def test_pb9_editor_guide_sidebar_and_responsive_layout(editor):
     """Real navigation, Guide and shared sidebar work with the expanded native form."""
     page = editor.page
@@ -382,3 +417,23 @@ def test_pb9_editor_guide_sidebar_and_responsive_layout(editor):
         assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
         assert page.locator('#main-content').evaluate('(el) => el.scrollWidth <= el.clientWidth')
     assert editor.errors == []
+
+
+def test_joined_remote_target_uses_existing_host_control_and_save(editor):
+    """A confirmed PB9 remote host is selected and saved through the shared PB8 form."""
+    page = editor.page
+    editor.hosts_payload = {
+        'hosts': ['disabled', 'fixture-host', 'remote'],
+        'host_capabilities': {'remote': {'pb9_capable': True, 'confirmed': True,
+                                       'schema_compatible': True, 'config_schema': 'v9.0.0'}},
+    }
+    page.reload()
+    expect(page.locator('#f-enabled-on option[value="remote"]')).to_have_count(1)
+    page.locator('#f-enabled-on').select_option('remote')
+    page.locator('#btn-save').click()
+    page.wait_for_function('document.querySelector("#f-enabled-on").value === "remote"')
+    deadline = time.monotonic() + 3
+    while not editor.saved and time.monotonic() < deadline:
+        page.wait_for_timeout(25)
+    assert editor.saved and editor.saved[-1]['config']['pbgui']['enabled_on'] == 'remote'
+    assert not editor.errors and not editor.unexpected

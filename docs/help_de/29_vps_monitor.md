@@ -1,5 +1,8 @@
 # VPS Monitor
 
+PB9 nutzt dieselbe Instanztabelle, Prozessmessung und native Log-Auswertung wie PB8. Gleiche Kontonamen bleiben nach Generation getrennt. Alte Agenten bleiben lesbar; PB9-Remote-Steuerung und Löschen benötigen jedoch einen frischen PB9-fähigen Instanz-Snapshot. Ein nach einem API-Neustart wiederhergestellter Cache erlaubt keinen Stopp-Nachweis.
+
+
 
 Die globale Alarmanzeige in der Navigation aktualisiert sich automatisch, solange der Browsertab sichtbar ist. Alarmabfragen pausieren in Hintergrundtabs und starten beim Zurückkehren sofort wieder, ohne überlappende Anfragen.
 

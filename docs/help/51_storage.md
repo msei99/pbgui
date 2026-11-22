@@ -1,10 +1,10 @@
 # Storage
 
-**System -> Storage** shows how much disk space PBGui, PB7, PB8 and their Python environments use, what can be cleaned up, how usage develops over time and the main system values of this host.
+**System -> Storage** shows how much disk space PBGui, PB7, PB8, PB9 and their Python environments use, what can be cleaned up, how usage develops over time and the main system values of this host.
 
 ## Background scan
 
-The folder sizes come from a background scan. It walks the PBGui folder, the configured PB7 and PB8 folders and the PB/PBGui virtual environments next to PBGui. The scan:
+The folder sizes come from a background scan. It walks the PBGui folder, the configured PB7, PB8 and PB9 folders and the PB/PBGui virtual environments next to PBGui. The scan:
 
 - runs in its own low-priority process, so the API and running bots are not slowed down
 - repeats automatically at the configured interval (default 6 hours, see **Retention**)
@@ -15,7 +15,7 @@ The header shows when the last scan finished. Disk usage per filesystem is alway
 
 ## Overview
 
-- **Disk**: used and free space per filesystem, plus a bar that splits the used space into PBGui, PB7, PB8, Python environments and everything else on the disk.
+- **Disk**: used and free space per filesystem, plus a bar that splits the used space into PBGui, PB7, PB8, PB9, Python environments and everything else on the disk.
 - **Reclaimable**: totals per tier with the default filters. **Preview safe cleanup** and **Preview optional cleanup** collect every category of that tier using your current filters and open a preview. Each tile lists its categories with their size; click a category to open its entries.
 - **Largest folders**: an expandable tree of the biggest folders, up to four levels deep.
 - After a cleanup, the result (deleted entries, freed space, errors) is shown below the tiers.
@@ -26,7 +26,7 @@ The header shows when the last scan finished. Disk usage per filesystem is alway
 | --- | --- |
 | **Safe** | No useful data is lost. Rotated logs, old job logs, old run logs, database backups beyond the newest ones and leftovers of finished repairs. Can be cleaned automatically. |
 | **Optional** | Recreated when needed or of low value, such as PB7's prepared backtest datasets or cancelled and failed cloud jobs. Never selected unless you choose it. |
-| **Review** | Your own results and possible leftovers: PB7/PB8 optimize results and backtests, completed cloud jobs, PB7 legacy data, release worktrees, manual copies and unused Python environments. You select each entry yourself. |
+| **Review** | Your own results and possible leftovers: PB7/PB8/PB9 optimize results and backtests, completed cloud jobs, PB7 legacy data, release worktrees, manual copies and unused Python environments. You select each entry yourself. |
 | **Protected** | Market data, the database, credentials, API keys and configurations. Shown for information only; Storage never deletes them. |
 
 ## Category views
@@ -37,12 +37,14 @@ The header shows when the last scan finished. Disk usage per filesystem is alway
 - **Keep newest** always keeps this number of the newest entries (database backups).
 - Filters are remembered in this browser.
 - **Show entries** / **Choose entries** opens the entry list. Click a row to select it, drag over rows or Shift-click to select a range, and use Space or Enter on the keyboard. **Select matching** selects every entry that matches the filter.
-- Greyed-out entries are in use and cannot be selected, for example logs of running jobs, folders changed within the last 24 hours, Python environments used by PBGui, PB7, PB8, a running process or a systemd service, and cloud jobs that are still active.
+- Greyed-out entries are in use and cannot be selected, for example logs of running jobs, folders changed within the last 24 hours, Python environments used by PBGui, PB7, PB8, PB9, a running process or a systemd service, and cloud jobs that are still active.
 
 ### Notes on single categories
 
 - **PB7 legacy historical data**: PB7 copied `historical_data/` into `caches/ohlcv/` and leaves the old folder for manual deletion. The category is only available after PB7 has marked the migration as finished (`caches/ohlcv/.migration_done`).
 - **PB7 prepared backtest data** is blocked while a PB7 backtest or optimize is running.
+- **PB9 optimize results** lists `pb9/optimize_results/<run>`. **PB9 backtests** includes PBGui-managed `data/bt_v9_results/<config>` and native/optimizer-generated `pb9/backtests/<group>/<config>`. The `managed/` and `native/` prefixes distinguish equal names. Selecting a configuration folder includes all results inside it. Both categories require manual Review selection and never participate in automatic cleanup. Recent folders are kept for 24 hours; while a PB9 backtest or optimization is running, both categories are blocked. The running-process check is repeated before each deletion.
+- PB9 candle stores, Run configs and its configured Python environment remain protected. Result cleanup never includes candle stores, source code or configuration roots.
 - **Cloud jobs** are deleted through the Vast queue's own purge, together with their retry attempts. Lineages with a completed attempt are listed under **Completed cloud jobs**.
 - **Release worktrees** are removed with `git worktree remove`.
 - **Market data** (PBGui archive, PB7 OHLCV cache and store) is managed in **Information -> Market Data**.
@@ -61,8 +63,8 @@ Only one scan or cleanup runs at a time. A preview expires after 30 minutes.
 
 ## History
 
-One data point per day is kept (up to about two years): used disk space and the size of PBGui, PB7, PB8, the Python environments and their largest folders. The table shows the growth over the last 7 and 30 days.
+One data point per day is kept (up to about two years): used disk space and the size of PBGui, PB7, PB8, PB9, the Python environments and their largest folders. The table shows the growth over the last 7 and 30 days.
 
 ## System
 
-CPU model, cores, usage and load, memory, swap, uptime, operating system, the Python versions of PBGui, PB7 and PB8, NVIDIA GPUs (when `nvidia-smi` is available), disk usage and the list of PBGui processes with memory and CPU usage. The values update every few seconds while the view is open.
+CPU model, cores, usage and load, memory, swap, uptime, operating system, the Python versions of PBGui, PB7, PB8 and PB9, NVIDIA GPUs (when `nvidia-smi` is available), disk usage and the list of PBGui processes with memory and CPU usage. The values update every few seconds while the view is open.

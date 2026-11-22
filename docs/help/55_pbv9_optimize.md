@@ -223,6 +223,8 @@ the Suite is marked `(not in Suite)` and must be unchecked before saving.
 
 ## Candles and execution
 
+Suite data preparation uses each scenario's coin policy, dates and exchanges. PBGui renews native optimizer bindings after applying those overrides; it does not rewrite the saved config or its search ranges.
+
 PBGui Market Data is the default candle source and its path is shown in new drafts. Changing that queue setting
 allows the config's own source. Candle files are referenced directly. Backtest and Optimize use the same persistent native cache under the configured
 PB9 installation (`caches/`), like PB8. Downloads, coverage facts and prepared

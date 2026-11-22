@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
 <script src="/app/js/backtest_editor_adapter.js?v=21"></script>
-<script src="/app/js/backtest_v9_editor.js?v=20"></script>
+<script src="/app/js/backtest_v9_editor.js?v=21"></script>
 <script src="/app/js/backtest_v9_migration.js?v=2" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
@@ -1100,7 +1100,7 @@ textarea.json-invalid:focus {
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=31"></script>
+<script src="/app/js/editor_shared.js?v=32"></script>
 <script src="/app/js/pb8_hsl_report.js?v=1"></script>
 <script src="/app/js/json_panel.js?v=1"></script>
 <script src="/app/js/optimize_preset_builder.js?v=4"></script>
@@ -4211,6 +4211,11 @@ function ensureRawJsonValidForSave() {
   var validation = validateRawJson(rawEl ? rawEl.value : '');
   setRawJsonValidationError(validation.error);
   if (!validation.error) {
+    if (backtestEditorAdapter.metadataDriven && _btJsonSync) {
+      if (_btJsonSync.flush() !== undefined) return true;
+      toast('Editor synchronization is unavailable. Reopen this config before saving.', 'err');
+      return false;
+    }
     var raw = rawEl ? rawEl.value : '';
     if (validation.parsed && raw !== _rawEditorLastApplied) {
       var nameEl = document.getElementById('cfg-name');
@@ -4382,6 +4387,7 @@ function cfgSyncEditorFromParsed(name, cfg) {
 }
 
 _btJsonSync = window.PBGuiEditorShared.createJsonSyncController({
+  trackChanges: function() { return backtestEditorAdapter.metadataDriven; },
   rawTextarea: 'cfg-raw-json',
   rawDelay: 250,
   structuredDelay: 150,
@@ -4393,8 +4399,8 @@ _btJsonSync = window.PBGuiEditorShared.createJsonSyncController({
   setStructuredSyncing: function(value) { _structuredEditorSyncing = value; },
   validateRaw: validateRawJson,
   setRawValidationError: setRawJsonValidationError,
-  collectConfig: function() {
-    var nextCfg = collectConfig();
+  collectConfig: function(base) {
+    var nextCfg = backtestEditorAdapter.metadataDriven && base ? window.PBGuiBacktestV9.collect(base) : collectConfig();
     _cfgEditorCfg = nextCfg;
     return nextCfg;
   },

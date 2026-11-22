@@ -294,6 +294,7 @@
     window.coinOvLoad(source); window.suiteLoad(source,{preserveEdit:false});
     componentShown = components(); componentDirty = new Set();
     syncAdditional(source);
+    if (window._btJsonSync) window._btJsonSync.reset(source);
   }
 
   function editorHtml(name, config) {
@@ -388,8 +389,8 @@
     } catch (error) { window.toast('PB9 editor: ' + error.message, 'err'); }
   }
 
-  function collect() {
-    var raw = document.getElementById('cfg-raw-json'), config = JSON.parse(raw.value);
+  function collect(base) {
+    var raw = document.getElementById('cfg-raw-json'), config = base ? copy(base) : JSON.parse(raw.value);
     Object.keys(basic).forEach(function(id) {
       var input = document.getElementById(id);
       var value = input.type === 'number' ? Number(input.value) : input.value;

@@ -200,10 +200,12 @@ def snapshot_bundle_unlocked(
     return str(version)
 
 
-def publish_staged_bundle(stage_dir: Path, target_dir: Path, *, generation_prefix: str, label: str) -> None:
+def publish_staged_bundle(stage_dir: Path, target_dir: Path, *, generation_prefix: str, label: str,
+                          on_publish=None) -> None:
     """Atomically replace one complete live bundle, restoring on placement failure."""
     previous_dir = target_dir.parent / f"{generation_prefix}-old-{uuid.uuid4().hex}"
     moved_previous = False
+    placed = False
     try:
         if target_dir.exists():
             if target_dir.is_symlink() or not target_dir.is_dir():
@@ -211,7 +213,12 @@ def publish_staged_bundle(stage_dir: Path, target_dir: Path, *, generation_prefi
             os.replace(target_dir, previous_dir)
             moved_previous = True
         os.replace(stage_dir, target_dir)
-    except OSError:
+        placed = True
+        if on_publish is not None:
+            on_publish()
+    except Exception:
+        if placed:
+            shutil.rmtree(target_dir)
         if moved_previous and previous_dir.is_dir() and not target_dir.exists():
             os.replace(previous_dir, target_dir)
         raise

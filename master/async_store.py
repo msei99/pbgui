@@ -122,7 +122,9 @@ class VPSStore:
         self.system: dict[str, SystemMetrics] = {}
         self.instances: dict[str, list[dict]] = {}
         self.v7_instances: dict[str, list[dict]] = {}  # v7 config details per host
-        self.v8_instances: dict[str, list[dict]] = {}  # v8 config details per host
+        self.v8_instances: dict[str, list[dict]] = {}
+        self.v9_instances: dict[str, list[dict]] = {}
+        self.v9_snapshot_times: dict[str, tuple[float, float]] = {}
         self.host_meta: dict[str, dict] = {}
         self.services: dict[str, dict] = {}
         self.streams: dict[str, dict] = {}  # stream diagnostics per host
@@ -213,6 +215,22 @@ class VPSStore:
                             snapshot_generated_at: float | None = None,
                             snapshot_checked_at: float | None = None):
         """Publish copied PB8 rows with freshness bound to this exact collection."""
+        self._update_native_instances("8", hostname, data, snapshot_generated_at=snapshot_generated_at,
+                                      snapshot_checked_at=snapshot_checked_at)
+
+    def update_v9_instances(self, hostname: str, data: list[dict], *,
+                            snapshot_generated_at: float | None = None,
+                            snapshot_checked_at: float | None = None):
+        """Publish native PB9 rows through the same freshness contract as PB8."""
+        self._update_native_instances("9", hostname, data, snapshot_generated_at=snapshot_generated_at,
+                                      snapshot_checked_at=snapshot_checked_at)
+        self.v9_snapshot_times.pop(hostname, None)
+        if snapshot_generated_at is not None and snapshot_checked_at is not None:
+            self.v9_snapshot_times[hostname] = (snapshot_generated_at, snapshot_checked_at)
+
+    def _update_native_instances(self, version: str, hostname: str, data: list[dict], *,
+                                 snapshot_generated_at=None, snapshot_checked_at=None):
+        """Copy and stamp a validated snapshot without trusting agent-provided row stamps."""
         rows = copy.deepcopy(data)
         for row in rows:
             # Never trust stamp fields supplied by an agent or preserve them on invalidation.
@@ -221,7 +239,7 @@ class VPSStore:
             if snapshot_generated_at is not None and snapshot_checked_at is not None:
                 row["snapshot_generated_at"] = snapshot_generated_at
                 row["snapshot_checked_at"] = snapshot_checked_at
-        self.v8_instances[hostname] = rows
+        getattr(self, "v" + version + "_instances")[hostname] = rows
         self.changed.set()
 
     def update_bot_logs(self, hostname: str, data: dict[str, Any]):
@@ -276,6 +294,8 @@ class VPSStore:
         self.instances.pop(hostname, None)
         self.v7_instances.pop(hostname, None)
         self.v8_instances.pop(hostname, None)
+        self.v9_instances.pop(hostname, None)
+        self.v9_snapshot_times.pop(hostname, None)
         self.host_meta.pop(hostname, None)
         self.streams.pop(hostname, None)
         # Don't clear services — they're host-keyed inside the dict
@@ -320,6 +340,8 @@ class VPSStore:
             "instances": self.instances,
             "v7_instances": self.v7_instances,
             "v8_instances": self.v8_instances,
+            "v9_instances": self.v9_instances,
+            "v9_snapshot_times": dict(self.v9_snapshot_times),
             "host_meta": self.host_meta,
             "streams": self.streams,
             "services": self.services,

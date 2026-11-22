@@ -13,6 +13,8 @@ real master or VPS. No host is updated merely by publishing this branch.
 
 ## Included in this snapshot
 
+- Current local worktree: PB9 Run/VPS placement, signed operation family, complete-bundle materialization, runner gate, native monitoring and remote log/restart paths reuse PB8 components. Protocol, API and browser paths are tested with isolated fixtures. An actual remote live-trading migration has NOT been performed or accepted; this remains unfinished development. Local services have not been restarted for this work.
+
 - Existing PB9 Run, Backtest, Optimize and Pareto integration, using shared PB8
   components where supported. This is not a claim of complete PB8 feature parity.
 - Explicit PB9 Install/Update actions in the standalone local Master Installer

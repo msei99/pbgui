@@ -22,6 +22,43 @@ ROOT = Path(__file__).resolve().parents[1]
 DAY = 86400
 
 
+def test_system_python_versions_include_pb9(monkeypatch):
+    """System uses the configured PB9 interpreter through the same producer as PB8."""
+    from api import storage
+
+    calls = []
+    monkeypatch.setattr(storage, "load_ini", lambda section, key: "/fixtures/" + key + "/bin/python")
+    monkeypatch.setattr(storage.system_stats, "python_version", lambda path: calls.append(path) or "Python fixture")
+    versions = storage._python_versions()
+    assert versions["PB9"] == versions["PB8"] == "Python fixture"
+    assert calls == ["/fixtures/pb7venv/bin/python", "/fixtures/pb8venv/bin/python", "/fixtures/pb9venv/bin/python"]
+
+
+def test_old_snapshot_is_automatically_rescanned(tmp_path, monkeypatch):
+    """An installation with the pre-PB9 registry does not wait for a manual refresh."""
+    controller = StorageController(tmp_path / "pbgui")
+    controller.state_dir.mkdir(parents=True)
+    (controller.state_dir / "snapshot.json").write_text(json.dumps({
+        "version": registry.SNAPSHOT_VERSION - 1, "finished_at": time.time(), "categories": {}}))
+    requested = []
+
+    async def request_scan(**kwargs):
+        """Record scan admission without starting a worker or touching runtime data."""
+        requested.append(kwargs)
+        return True
+
+    monkeypatch.setattr(controller, "request_scan", request_scan)
+
+    async def check():
+        """Load the old snapshot and execute the existing scheduler decision once."""
+        await controller.ensure_loaded()
+        assert controller._snapshot is None
+        await controller._tick()
+
+    asyncio.run(check())
+    assert requested == [{}]
+
+
 def _file(path: Path, size: int = 4096, age_days: float = 0) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"x" * size)

@@ -49,6 +49,8 @@ _PATH_KEYS = ("pb9dir", "pb9venv", "pb7dir", "pb7venv", "pb8dir", "pb8venv")
 
 def _error(status: int, code: str, detail: str, *, busy: bool = False) -> HTTPException:
     """Build a fixed, uncached API error without native diagnostics or paths."""
+    if code == 'runtime_not_detected':
+        detail = 'PB9 runtime is unavailable. Open System > Welcome > Setup to check the PB9 source and Python environment.'
     headers = {"Cache-Control": "no-store", "X-PBGUI-Error-Codes": code}
     if busy:
         headers["Retry-After"] = "1"

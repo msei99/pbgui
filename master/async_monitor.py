@@ -334,40 +334,41 @@ def _read_hl_inventory_json(root: Path, path: Path, label: str) -> Any:
 def _load_hl_cluster_families(pbgui_root: Path) -> dict[str, tuple[dict[str, Any], dict[str, Any]] | bool | None]:
     """Load valid per-runtime Cluster desired maps, using False for uncertainty."""
 
-    families: dict[str, tuple[dict[str, Any], dict[str, Any]] | bool | None] = {"7": None, "8": None}
+    families: dict[str, tuple[dict[str, Any], dict[str, Any]] | bool | None] = {"7": None, "8": None, "9": None}
     cluster_root = pbgui_root / "data" / "cluster"
     desired_path = cluster_root / "desired_state.json"
     if not desired_path.exists() and not desired_path.is_symlink():
         return families
     if not _hl_inventory_root_is_safe(pbgui_root, cluster_root):
         _log(SERVICE, "[alerts] Unsafe Cluster desired state root", level="WARNING")
-        return {"7": False, "8": False}
+        return {"7": False, "8": False, "9": False}
     try:
         desired = _read_hl_inventory_json(cluster_root, desired_path, "Cluster desired state")
     except Exception:
-        return {"7": False, "8": False}
+        return {"7": False, "8": False, "9": False}
     if not isinstance(desired, dict):
         _log(SERVICE, "[alerts] Cluster desired state is not an object", level="WARNING")
-        return {"7": False, "8": False}
+        return {"7": False, "8": False, "9": False}
 
     cluster_id_path = cluster_root / "cluster_id"
     if cluster_id_path.is_symlink():
         _log(SERVICE, "[alerts] Cluster identity path is an unsafe symlink", level="WARNING")
-        return {"7": False, "8": False}
+        return {"7": False, "8": False, "9": False}
     if cluster_id_path.is_file() and not cluster_id_path.is_symlink():
         try:
             local_cluster_id = cluster_id_path.read_text(encoding="utf-8").strip()
         except Exception as exc:
             _log(SERVICE, f"[alerts] Failed to validate Cluster desired state identity: {type(exc).__name__}", level="WARNING")
-            return {"7": False, "8": False}
+            return {"7": False, "8": False, "9": False}
         desired_cluster_id = desired.get("cluster_id")
         if local_cluster_id and desired_cluster_id != local_cluster_id:
             _log(SERVICE, "[alerts] Cluster desired state identity does not match the local cluster", level="WARNING")
-            return {"7": False, "8": False}
+            return {"7": False, "8": False, "9": False}
 
     for runtime, instance_key, tombstone_key in (
         ("7", "instances", "tombstones"),
         ("8", "pb8_instances", "pb8_tombstones"),
+        ("9", "pb9_instances", "pb9_tombstones"),
     ):
         has_instances = instance_key in desired
         has_tombstones = tombstone_key in desired
@@ -436,12 +437,12 @@ def _hl_actual_runtime_observations(store: Any) -> tuple[set[tuple[str, str]], s
                     continue
                 runtime = str(item.get("p") or "")
                 name = item.get("u") or item.get("name")
-                if runtime not in {"7", "8"} or not isinstance(name, str) or not name:
+                if runtime not in {"7", "8", "9"} or not isinstance(name, str) or not name:
                     uncertain_mapping = True
                     continue
                 running.add((runtime, name))
 
-    for runtime, attribute in (("7", "v7_instances"), ("8", "v8_instances")):
+    for runtime, attribute in (("7", "v7_instances"), ("8", "v8_instances"), ("9", "v9_instances")):
         host_map = getattr(store, attribute, {})
         if not isinstance(host_map, dict):
             uncertain_mapping = True
@@ -473,7 +474,7 @@ def _build_hl_live_config_inventory(pbgui_root: Path, store: Any) -> HLLiveConfi
     actual_running, actual_uncertain, uncertain_user_mapping = _hl_actual_runtime_observations(store)
     warning_users: set[str] = set()
 
-    for runtime, root_name in (("7", "run_v7"), ("8", "run_v8")):
+    for runtime, root_name in (("7", "run_v7"), ("8", "run_v8"), ("9", "run_v9")):
         run_root = pbgui_root / "data" / root_name
         if not run_root.exists() and not run_root.is_symlink():
             continue
@@ -510,11 +511,20 @@ def _build_hl_live_config_inventory(pbgui_root: Path, store: Any) -> HLLiveConfi
                 uncertain_user_mapping = True
                 continue
             live = config.get("live")
+            if runtime == "9":
+                live = live.get("account") if isinstance(live, dict) else None
             user_name = live.get("user") if isinstance(live, dict) else None
             if not isinstance(user_name, str) or not user_name:
                 uncertain_user_mapping = True
                 continue
-            pbgui = config.get("pbgui")
+            if runtime == "9":
+                try:
+                    pbgui = _read_hl_inventory_json(run_root, entry / "pbgui.json", "PB9 sidecar")
+                except Exception:
+                    warning_users.add(user_name)
+                    continue
+            else:
+                pbgui = config.get("pbgui")
             if not isinstance(pbgui, dict):
                 warning_users.add(user_name)
                 continue
@@ -788,7 +798,9 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
         _monitor_agent_require(payload, ("monitors", "v7", "cache", "bot_logs"))
         if "v8" not in payload:
             payload["v8"] = []
-        for field in ("monitors", "v7", "v8"):
+        payload["_pb9_supported"] = "v9" in payload
+        payload.setdefault("v9", [])
+        for field in ("monitors", "v7", "v8", "v9"):
             values = _monitor_agent_require_type(payload, field, list)
             if any(not isinstance(value, dict) for value in values):
                 raise MonitorAgentPayloadError(f"invalid entries for {field}")
@@ -804,7 +816,7 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
                 raise MonitorAgentPayloadError("bot history is too large")
             for history_name, entry in history.items():
                 if (not isinstance(history_name, str) or len(history_name) > 258
-                        or history_name[:2] not in {"7:", "8:"}
+                        or history_name[:2] not in {"7:", "8:", "9:"}
                         or not history_name[2:] or history_name[2:] in {".", ".."}
                         or "/" in history_name or "\\" in history_name or "\x00" in history_name
                         or any(ord(char) < 32 or ord(char) == 127 for char in history_name)):
@@ -1998,6 +2010,8 @@ def _runtime_setting(key, default):
 
 PB8DIR = _runtime_setting('pb8dir', 'software/pb8')
 PB8VENV = _runtime_setting('pb8venv', 'software/venv_pb8/bin/python')
+PB9DIR = _runtime_setting('pb9dir', 'software/pb9')
+PB9VENV = _runtime_setting('pb9venv', 'software/venv_pb9/bin/python')
 SERVICE = 'VPSMonitor'
 LOG_PATH = os.path.join(PBGDIR, 'data', 'logs', 'VPSMonitor.log')
 LOG_MAX_BYTES = 1024 * 1024
@@ -2155,6 +2169,9 @@ def _load_cluster_context():
         'tombstones': tombstones,
         'pb8_instances': pb8_instances,
         'pb8_tombstones': pb8_tombstones,
+        'pb9_instances': desired.get('pb9_instances', {}),
+        'pb9_tombstones': desired.get('pb9_tombstones', {}),
+        'pb9_configured': 'pb9_instances' in desired or 'pb9_tombstones' in desired,
     }
 
 def _config_meta(config_dir):
@@ -2162,6 +2179,10 @@ def _config_meta(config_dir):
     cfg = _read_json(cfg_path)
     pbgui = cfg.get('pbgui', {}) if isinstance(cfg, dict) else {}
     live = cfg.get('live', {}) if isinstance(cfg, dict) else {}
+    if isinstance(cfg, dict) and str(cfg.get('config_version') or '').startswith('v9.'):
+        pbgui = _read_json(os.path.join(config_dir, 'pbgui.json'))
+        pbgui = pbgui if isinstance(pbgui, dict) else {}
+        live = live.get('account', {}) if isinstance(live, dict) else {}
     return {
         'version': pbgui.get('version', 0),
         'enabled_on': pbgui.get('enabled_on', 'disabled'),
@@ -2169,10 +2190,11 @@ def _config_meta(config_dir):
         'user': str(live.get('user') or '') if isinstance(live, dict) else '',
     }
 
-def _is_pb8_config(config_dir):
+def _is_pb8_config(config_dir, runtime='8'):
     cfg = _read_json(os.path.join(config_dir, 'config.json'))
-    pbgui = cfg.get('pbgui') if isinstance(cfg, dict) else None
-    return isinstance(pbgui, dict) and str(pbgui.get('runtime') or '').strip().lower() == 'pb8'
+    pbgui = (_read_json(os.path.join(config_dir, 'pbgui.json')) if runtime == '9'
+             else cfg.get('pbgui') if isinstance(cfg, dict) else None)
+    return isinstance(pbgui, dict) and str(pbgui.get('runtime') or '').strip().lower() == 'pb' + runtime
 
 def _config_manifest_hash(config_dir):
     files = {}
@@ -2196,6 +2218,8 @@ def _config_manifest_hash(config_dir):
     return 'sha256:' + hashlib.sha256(manifest).hexdigest()
 
 def _cluster_gate_status(name, config_dir, version, cluster, instances_key='instances', tombstones_key='tombstones'):
+    if instances_key == 'pb9_instances' and not cluster.get('pb9_configured'):
+        return {'blocked': False, 'cluster_gate': 'not_configured', 'blocked_reason': ''}
     if not cluster.get('configured'):
         return {'blocked': False, 'cluster_gate': 'not_configured', 'blocked_reason': ''}
     if not cluster.get('desired_loaded'):
@@ -2229,8 +2253,11 @@ def _cluster_gate_status(name, config_dir, version, cluster, instances_key='inst
     return {'blocked': False, 'cluster_gate': 'allowed', 'blocked_reason': ''}
 
 def _pb8_rust_stamp_error():
+    return _native_rust_stamp_error(PB8DIR, PB8VENV)
+
+def _native_rust_stamp_error(source_dir, python_path):
     src_candidates = []
-    src_root = os.path.join(PB8DIR, 'src')
+    src_root = os.path.join(source_dir, 'src')
     try:
         src_candidates = [
             os.path.join(src_root, name)
@@ -2241,7 +2268,7 @@ def _pb8_rust_stamp_error():
     except Exception:
         src_candidates = []
     installed_candidates = []
-    venv_root = os.path.dirname(os.path.dirname(PB8VENV))
+    venv_root = os.path.dirname(os.path.dirname(python_path))
     site_roots = [os.path.join(venv_root, 'Lib', 'site-packages')]
     lib_root = os.path.join(venv_root, 'lib')
     try:
@@ -2321,10 +2348,10 @@ def _count_hourly_files(files, needle, from_hour, to_hour):
             _log(SERVICE, f'[monitor-history] Failed to read {fp}: {exc}', level='WARNING')
     return buckets
 
-def _pb8_archive_log_matches(filename, name):
+def _pb8_archive_log_matches(filename, name, runtime='8'):
     # Match exact instance names, current run IDs and numbered log rotations.
     base = os.path.basename(filename)
-    suffix = '_run_v8_' + name + '_config.json'
+    suffix = '_run_v' + runtime + '_' + name + '_config.json'
     prefix, separator, ending = base.rpartition(suffix)
     if not separator or not prefix:
         return False
@@ -2555,6 +2582,8 @@ if host_cache_version != EXPECTED_CACHE_VERSION:
 # Find only the exact process identities launched by PBRun.
 running = {}
 running_v8 = {}
+running_v9 = {}
+native_profiles = [('8', PB8DIR, PB8VENV, running_v8), ('9', PB9DIR, PB9VENV, running_v9)]
 try:
     run_v7_root_real = os.path.realpath(os.path.join(PBGDIR, 'data', 'run_v7'))
     run_v8_root_real = os.path.realpath(os.path.join(PBGDIR, 'data', 'run_v8'))
@@ -2582,17 +2611,20 @@ try:
             continue
         config_path = os.path.realpath(config_args[0])
         cfg_dir = os.path.dirname(config_path)
-        if os.path.dirname(cfg_dir) != run_v8_root_real or config_path != os.path.join(cfg_dir, 'config.json'):
-            continue
-        expected = [pb8_cli, 'live', config_path, '--fail-on-stale-rust']
-        normalized_argv = [os.path.realpath(argv[0]), *argv[1:]] if argv else []
-        command_matches = normalized_argv == expected or normalized_argv == [pb8_python, *expected]
-        try:
-            cwd_matches = os.path.realpath(os.readlink(os.path.join(proc_root, 'cwd'))) == pb8_cwd
-        except Exception:
-            cwd_matches = False
-        if command_matches and cwd_matches:
-            running_v8[os.path.basename(cfg_dir)] = {'dir': cfg_dir, 'pid': int(proc_name)}
+        for runtime, source_dir, python_path, runtime_running in native_profiles:
+            run_root = os.path.realpath(os.path.join(PBGDIR, 'data', 'run_v' + runtime))
+            if os.path.dirname(cfg_dir) != run_root or config_path != os.path.join(cfg_dir, 'config.json'):
+                continue
+            cli = os.path.realpath(os.path.join(os.path.dirname(python_path), 'passivbot'))
+            expected = [cli, 'live', config_path, '--fail-on-stale-rust']
+            normalized_argv = [os.path.realpath(argv[0]), *argv[1:]] if argv else []
+            command_matches = normalized_argv == expected or normalized_argv == [os.path.realpath(python_path), *expected]
+            try:
+                cwd_matches = os.path.realpath(os.readlink(os.path.join(proc_root, 'cwd'))) == os.path.realpath(source_dir)
+            except Exception:
+                cwd_matches = False
+            if command_matches and cwd_matches:
+                runtime_running[os.path.basename(cfg_dir)] = {'dir': cfg_dir, 'pid': int(proc_name)}
 except Exception as exc:
     _log(SERVICE, f'[monitor-process] Failed to inspect running bot processes: {exc}', level='WARNING')
 
@@ -3040,161 +3072,6 @@ for name, cfg_dir in sorted(running.items()):
         'log_off': bc['log_off'], 'err_off': bc['err_off'], 'log_fp': bc['log_fp'], 'log_sig': bc['log_sig'], 'err_sig': bc['err_sig'],
     }
 
-# The collector is also launched from SSH, whose cwd need not be PBGDIR.
-sys.path.insert(0, PBGDIR)
-from monitor_log_cache import LogHistoryCache
-history_cache = LogHistoryCache(
-    os.path.join(PBGDIR, 'data', 'monitor_agent', 'log_history.sqlite3'),
-    [os.path.join(PB8DIR, 'logs'), os.path.join(PBGDIR, 'data', 'run_v8')],
-)
-
-for name, process_info in sorted(running_v8.items()):
-    cfg_dir = process_info['dir']
-    if not _is_pb8_config(cfg_dir):
-        continue
-    cache_key = '8:' + name
-    meta = _config_meta(cfg_dir)
-    version = meta.get('version', 0)
-    gate = _cluster_gate_status(
-        name, cfg_dir, version, cluster_context, 'pb8_instances', 'pb8_tombstones'
-    )
-    v8.append({
-        'name': name,
-        'running': True,
-        'user': meta.get('user', ''),
-        'cv': version,
-        'eo': meta.get('enabled_on', 'disabled'),
-        'rv': version,
-        'di': False,
-        'blocked': bool(gate.get('blocked', False)),
-        'blocked_reason': str(gate.get('blocked_reason', '') or ''),
-        'cluster_gate': str(gate.get('cluster_gate', '') or ''),
-    })
-
-    native_log = os.path.join(PB8DIR, 'logs', f'{name}.log')
-    old_native_logs = []
-    try:
-        import glob as _glob8
-        log_real = os.path.realpath(native_log) if os.path.isfile(native_log) else ''
-        for fp in sorted(
-            _glob8.glob(os.path.join(PB8DIR, 'logs', '*.log*')),
-            key=os.path.getmtime, reverse=True,
-        ):
-            if not os.path.isfile(fp) or os.path.islink(fp):
-                continue
-            if not _pb8_archive_log_matches(fp, name):
-                continue
-            if log_real and os.path.realpath(fp) == log_real:
-                continue
-            old_native_logs.append(fp)
-    except Exception as exc:
-        _log(SERVICE, f'[monitor-logs] Failed to collect old PB8 logs for {name}: {exc}', level='WARNING')
-
-    err_log = os.path.join(cfg_dir, 'passivbot_err.log')
-    old_err = os.path.join(cfg_dir, 'passivbot_err.log.old')
-    bot_entry = bot_logs.setdefault(cache_key, {'errors': [], 'tracebacks': [], 'sidebar': []})
-    bot_entry['errors'] = list(old_native_logs)
-    if os.path.isfile(native_log):
-        bot_entry['errors'].append(native_log)
-    bot_entry['tracebacks'] = [fp for fp in (old_err, err_log) if os.path.isfile(fp)]
-    for fp in old_native_logs:
-        bot_entry['sidebar'].append('pb8/logs/' + os.path.basename(fp))
-    if os.path.isfile(native_log):
-        bot_entry['sidebar'].append(f'pb8/logs/{name}.log')
-    for err_name in ('passivbot_err.log.old', 'passivbot_err.log'):
-        if os.path.isfile(os.path.join(cfg_dir, err_name)):
-            bot_entry['sidebar'].append(f'data/run_v8/{name}/{err_name}')
-
-    history_to_hour = int(time.time() // 3600)
-    history_from_hour = history_to_hour - HISTORY_WINDOW_HOURS + 1
-    native_history_files = list(old_native_logs)
-    if os.path.isfile(native_log):
-        native_history_files.append(native_log)
-    traceback_history_files = [fp for fp in (old_err, err_log) if os.path.isfile(fp)]
-    try:
-        bot_history[cache_key] = history_cache.collect(
-            cache_key, native_history_files, traceback_history_files,
-            history_from_hour, history_to_hour,
-        )
-    except Exception as exc:
-        _log(SERVICE, f'[monitor-history] Incremental log cache failed for {name}: {exc}', level='ERROR')
-        raise
-
-    bc = dict(host_cache.get(cache_key, {}))
-    bc.setdefault('today', TODAY)
-    for key, default in (('et', 0), ('tt', 0), ('ct', 0), ('pt', 0.0), ('log_off', 0), ('err_off', 0)):
-        bc.setdefault(key, default)
-    for key in ('log_fp', 'log_sig', 'err_sig'):
-        bc.setdefault(key, '')
-    pnl_cache_current = bc.get('pnl_cache_version') == PB8_PNL_CACHE_VERSION
-    if not pnl_cache_current:
-        bc.update({
-            'today': TODAY, 'et': 0, 'tt': 0, 'ct': 0, 'pt': 0.0,
-            'log_off': 0, 'err_off': 0, 'log_fp': '', 'log_sig': '', 'err_sig': '',
-        })
-    if bc['today'] != TODAY:
-        bc.update({'today': TODAY, 'et': 0, 'tt': 0, 'ct': 0, 'pt': 0.0})
-
-    first_run = cache_key not in host_cache or not pnl_cache_current
-    if first_run:
-        for fp in old_native_logs:
-            earliest = _read_pb7_file(
-                fp, 'count', TODAY_START, YESTERDAY_START, bc=bc,
-                fill_event_dates=True,
-            )
-            if earliest is not None and earliest < YESTERDAY_START:
-                break
-        if os.path.isfile(native_log):
-            _read_pb7_file(
-                native_log, 'count', TODAY_START, YESTERDAY_START, bc=bc,
-                fill_event_dates=True,
-            )
-        for fp in (old_err, err_log):
-            if os.path.isfile(fp):
-                _read_err_file(fp, 'count', TODAY_START, YESTERDAY_START, bc=bc)
-        bc['log_off'] = os.path.getsize(native_log) if os.path.isfile(native_log) else 0
-        bc['log_fp'] = os.path.realpath(native_log) if os.path.isfile(native_log) else ''
-        bc['log_sig'] = _file_start_sig(native_log) if os.path.isfile(native_log) else ''
-        bc['err_off'] = os.path.getsize(err_log) if os.path.isfile(err_log) else 0
-        bc['err_sig'] = _file_start_sig(err_log) if os.path.isfile(err_log) else ''
-    else:
-        if os.path.isfile(native_log):
-            current_fp = os.path.realpath(native_log)
-            current_sig = _file_start_sig(native_log)
-            offset = bc['log_off']
-            if (bc.get('log_fp') and bc['log_fp'] != current_fp) or offset > os.path.getsize(native_log) or (offset and bc.get('log_sig') and bc['log_sig'] != current_sig):
-                offset = 0
-            bc['log_off'] = _read_pb7_tail(
-                native_log, offset, TODAY_START, YESTERDAY_START, bc,
-                fill_event_dates=True,
-            )
-            bc['log_fp'] = current_fp
-            bc['log_sig'] = current_sig
-        if os.path.isfile(err_log):
-            offset = bc['err_off']
-            current_sig = _file_start_sig(err_log)
-            if offset > os.path.getsize(err_log) or (offset and bc.get('err_sig') and bc['err_sig'] != current_sig):
-                offset = 0
-            bc['err_off'] = _read_err_tail(err_log, offset, TODAY_START, YESTERDAY_START, bc)
-            bc['err_sig'] = current_sig
-
-    try:
-        start_ts = os.stat('/proc/' + str(process_info['pid'])).st_ctime
-    except Exception:
-        start_ts = 0.0
-    monitors.append({
-        'u': name, 'p': '8', 'v': version, 'st': start_ts,
-        'm': [0] * 10, 'c': 0.0,
-        'i': '', 'it': 0, 'iy': 0, 'e': '', 't': '',
-        'et': bc['et'], 'tt': bc['tt'], 'pt': bc['pt'], 'ct': bc['ct'],
-    })
-    new_cache[cache_key] = {
-        'today': bc['today'], 'et': bc['et'], 'tt': bc['tt'],
-        'ct': bc['ct'], 'pt': bc['pt'], 'log_off': bc['log_off'],
-        'err_off': bc['err_off'], 'log_fp': bc['log_fp'],
-        'log_sig': bc['log_sig'], 'err_sig': bc['err_sig'],
-        'pnl_cache_version': PB8_PNL_CACHE_VERSION,
-    }
 
 candidate_names = set()
 run_v7_root = os.path.join(PBGDIR, 'data', 'run_v7')
@@ -3229,57 +3106,220 @@ for name in sorted(candidate_names):
         'cluster_gate': str(gate.get('cluster_gate', '') or ''),
     })
 
-run_v8_root = os.path.join(PBGDIR, 'data', 'run_v8')
-candidate_v8_names = set()
-try:
-    if os.path.isdir(run_v8_root):
-        for item in os.listdir(run_v8_root):
-            cfg_dir = os.path.join(run_v8_root, item)
-            if os.path.isfile(os.path.join(cfg_dir, 'config.json')) and _is_pb8_config(cfg_dir):
-                candidate_v8_names.add(item)
-except Exception as exc:
-    _log(SERVICE, f'[monitor-candidates] Failed to scan run_v8 candidates: {exc}', level='WARNING')
-if cluster_context.get('configured'):
-    node_id = str(cluster_context.get('node_id') or '')
-    for name, item in (cluster_context.get('pb8_instances') or {}).items():
-        if isinstance(item, dict) and str(item.get('assigned_host') or '') == node_id:
-            candidate_v8_names.add(str(name))
-
-pb8_runtime_error = _pb8_rust_stamp_error()
-for name in sorted(candidate_v8_names):
-    if name in running_v8:
-        continue
-    cfg_dir = os.path.join(run_v8_root, name)
-    meta = _config_meta(cfg_dir)
-    gate = _cluster_gate_status(
-        name, cfg_dir, meta.get('version', 0), cluster_context, 'pb8_instances', 'pb8_tombstones'
+def _collect_native(runtime, source_dir, python_path, runtime_running):
+    rows = []
+    # The collector is also launched from SSH, whose cwd need not be PBGDIR.
+    sys.path.insert(0, PBGDIR)
+    from monitor_log_cache import LogHistoryCache
+    history_cache = LogHistoryCache(
+        os.path.join(PBGDIR, 'data', 'monitor_agent', 'log_history.sqlite3'),
+        [os.path.join(source_dir, 'logs'), os.path.join(PBGDIR, 'data', 'run_v' + runtime)],
     )
-    blocked = bool(gate.get('blocked', False))
-    blocked_reason = str(gate.get('blocked_reason', '') or '')
-    cluster_gate = str(gate.get('cluster_gate', '') or '')
-    if not blocked and pb8_runtime_error:
-        blocked = True
-        blocked_reason = pb8_runtime_error
-        cluster_gate = 'runtime_not_ready'
-    if not blocked:
-        last_error = _pb8_last_error(cfg_dir)
-        if last_error:
-            blocked = True
-            blocked_reason = 'PB8 exits on start: ' + last_error
-            cluster_gate = 'runtime_exit'
-    v8.append({
-        'name': name,
-        'running': False,
-        'cv': meta.get('version', 0),
-        'eo': meta.get('enabled_on', 'disabled'),
-        'rv': 0,
-        'di': False,
-        'blocked': blocked,
-        'blocked_reason': blocked_reason,
-        'cluster_gate': cluster_gate,
-    })
 
-print(json.dumps({'monitors': monitors, 'v7': v7, 'v8': v8, 'cache': new_cache,
+    for name, process_info in sorted(runtime_running.items()):
+        cfg_dir = process_info['dir']
+        if not _is_pb8_config(cfg_dir, runtime):
+            continue
+        cache_key = runtime + ':' + name
+        meta = _config_meta(cfg_dir)
+        version = meta.get('version', 0)
+        gate = _cluster_gate_status(
+            name, cfg_dir, version, cluster_context, 'pb' + runtime + '_instances', 'pb' + runtime + '_tombstones'
+        )
+        rows.append({
+            'name': name,
+            'running': True,
+            'user': meta.get('user', ''),
+            'cv': version,
+            'eo': meta.get('enabled_on', 'disabled'),
+            'rv': version,
+            'di': False,
+            'blocked': bool(gate.get('blocked', False)),
+            'blocked_reason': str(gate.get('blocked_reason', '') or ''),
+            'cluster_gate': str(gate.get('cluster_gate', '') or ''),
+        })
+
+        native_log = os.path.join(source_dir, 'logs', f'{name}.log')
+        old_native_logs = []
+        try:
+            import glob as _glob8
+            log_real = os.path.realpath(native_log) if os.path.isfile(native_log) else ''
+            for fp in sorted(
+                _glob8.glob(os.path.join(source_dir, 'logs', '*.log*')),
+                key=os.path.getmtime, reverse=True,
+            ):
+                if not os.path.isfile(fp) or os.path.islink(fp):
+                    continue
+                if not _pb8_archive_log_matches(fp, name, runtime):
+                    continue
+                if log_real and os.path.realpath(fp) == log_real:
+                    continue
+                old_native_logs.append(fp)
+        except Exception as exc:
+            _log(SERVICE, f'[monitor-logs] Failed to collect old PB8 logs for {name}: {exc}', level='WARNING')
+
+        err_log = os.path.join(cfg_dir, 'passivbot_err.log')
+        old_err = os.path.join(cfg_dir, 'passivbot_err.log.old')
+        bot_entry = bot_logs.setdefault(cache_key, {'errors': [], 'tracebacks': [], 'sidebar': []})
+        bot_entry['errors'] = list(old_native_logs)
+        if os.path.isfile(native_log):
+            bot_entry['errors'].append(native_log)
+        bot_entry['tracebacks'] = [fp for fp in (old_err, err_log) if os.path.isfile(fp)]
+        for fp in old_native_logs:
+            bot_entry['sidebar'].append('pb' + runtime + '/logs/' + os.path.basename(fp))
+        if os.path.isfile(native_log):
+            bot_entry['sidebar'].append(f'pb{runtime}/logs/{name}.log')
+        for err_name in ('passivbot_err.log.old', 'passivbot_err.log'):
+            if os.path.isfile(os.path.join(cfg_dir, err_name)):
+                bot_entry['sidebar'].append(f'data/run_v{runtime}/{name}/{err_name}')
+
+        history_to_hour = int(time.time() // 3600)
+        history_from_hour = history_to_hour - HISTORY_WINDOW_HOURS + 1
+        native_history_files = list(old_native_logs)
+        if os.path.isfile(native_log):
+            native_history_files.append(native_log)
+        traceback_history_files = [fp for fp in (old_err, err_log) if os.path.isfile(fp)]
+        try:
+            bot_history[cache_key] = history_cache.collect(
+                cache_key, native_history_files, traceback_history_files,
+                history_from_hour, history_to_hour,
+            )
+        except Exception as exc:
+            _log(SERVICE, f'[monitor-history] Incremental log cache failed for {name}: {exc}', level='ERROR')
+            raise
+
+        bc = dict(host_cache.get(cache_key, {}))
+        bc.setdefault('today', TODAY)
+        for key, default in (('et', 0), ('tt', 0), ('ct', 0), ('pt', 0.0), ('log_off', 0), ('err_off', 0)):
+            bc.setdefault(key, default)
+        for key in ('log_fp', 'log_sig', 'err_sig'):
+            bc.setdefault(key, '')
+        pnl_cache_current = bc.get('pnl_cache_version') == PB8_PNL_CACHE_VERSION
+        if not pnl_cache_current:
+            bc.update({
+                'today': TODAY, 'et': 0, 'tt': 0, 'ct': 0, 'pt': 0.0,
+                'log_off': 0, 'err_off': 0, 'log_fp': '', 'log_sig': '', 'err_sig': '',
+            })
+        if bc['today'] != TODAY:
+            bc.update({'today': TODAY, 'et': 0, 'tt': 0, 'ct': 0, 'pt': 0.0})
+
+        first_run = cache_key not in host_cache or not pnl_cache_current
+        if first_run:
+            for fp in old_native_logs:
+                earliest = _read_pb7_file(
+                    fp, 'count', TODAY_START, YESTERDAY_START, bc=bc,
+                    fill_event_dates=True,
+                )
+                if earliest is not None and earliest < YESTERDAY_START:
+                    break
+            if os.path.isfile(native_log):
+                _read_pb7_file(
+                    native_log, 'count', TODAY_START, YESTERDAY_START, bc=bc,
+                    fill_event_dates=True,
+                )
+            for fp in (old_err, err_log):
+                if os.path.isfile(fp):
+                    _read_err_file(fp, 'count', TODAY_START, YESTERDAY_START, bc=bc)
+            bc['log_off'] = os.path.getsize(native_log) if os.path.isfile(native_log) else 0
+            bc['log_fp'] = os.path.realpath(native_log) if os.path.isfile(native_log) else ''
+            bc['log_sig'] = _file_start_sig(native_log) if os.path.isfile(native_log) else ''
+            bc['err_off'] = os.path.getsize(err_log) if os.path.isfile(err_log) else 0
+            bc['err_sig'] = _file_start_sig(err_log) if os.path.isfile(err_log) else ''
+        else:
+            if os.path.isfile(native_log):
+                current_fp = os.path.realpath(native_log)
+                current_sig = _file_start_sig(native_log)
+                offset = bc['log_off']
+                if (bc.get('log_fp') and bc['log_fp'] != current_fp) or offset > os.path.getsize(native_log) or (offset and bc.get('log_sig') and bc['log_sig'] != current_sig):
+                    offset = 0
+                bc['log_off'] = _read_pb7_tail(
+                    native_log, offset, TODAY_START, YESTERDAY_START, bc,
+                    fill_event_dates=True,
+                )
+                bc['log_fp'] = current_fp
+                bc['log_sig'] = current_sig
+            if os.path.isfile(err_log):
+                offset = bc['err_off']
+                current_sig = _file_start_sig(err_log)
+                if offset > os.path.getsize(err_log) or (offset and bc.get('err_sig') and bc['err_sig'] != current_sig):
+                    offset = 0
+                bc['err_off'] = _read_err_tail(err_log, offset, TODAY_START, YESTERDAY_START, bc)
+                bc['err_sig'] = current_sig
+
+        try:
+            start_ts = os.stat('/proc/' + str(process_info['pid'])).st_ctime
+        except Exception:
+            start_ts = 0.0
+        monitors.append({
+            'u': name, 'p': runtime, 'v': version, 'st': start_ts,
+            'm': [0] * 10, 'c': 0.0,
+            'i': '', 'it': 0, 'iy': 0, 'e': '', 't': '',
+            'et': bc['et'], 'tt': bc['tt'], 'pt': bc['pt'], 'ct': bc['ct'],
+        })
+        new_cache[cache_key] = {
+            'today': bc['today'], 'et': bc['et'], 'tt': bc['tt'],
+            'ct': bc['ct'], 'pt': bc['pt'], 'log_off': bc['log_off'],
+            'err_off': bc['err_off'], 'log_fp': bc['log_fp'],
+            'log_sig': bc['log_sig'], 'err_sig': bc['err_sig'],
+            'pnl_cache_version': PB8_PNL_CACHE_VERSION,
+        }
+
+    run_v8_root = os.path.join(PBGDIR, 'data', 'run_v' + runtime)
+    candidate_v8_names = set()
+    try:
+        if os.path.isdir(run_v8_root):
+            for item in os.listdir(run_v8_root):
+                cfg_dir = os.path.join(run_v8_root, item)
+                if os.path.isfile(os.path.join(cfg_dir, 'config.json')) and _is_pb8_config(cfg_dir, runtime):
+                    candidate_v8_names.add(item)
+    except Exception as exc:
+        _log(SERVICE, f'[monitor-candidates] Failed to scan run_v8 candidates: {exc}', level='WARNING')
+    if cluster_context.get('configured'):
+        node_id = str(cluster_context.get('node_id') or '')
+        for name, item in (cluster_context.get('pb' + runtime + '_instances') or {}).items():
+            if isinstance(item, dict) and str(item.get('assigned_host') or '') == node_id:
+                candidate_v8_names.add(str(name))
+
+    pb8_runtime_error = _native_rust_stamp_error(source_dir, python_path).replace('PB8', 'PB' + runtime)
+    for name in sorted(candidate_v8_names):
+        if name in runtime_running:
+            continue
+        cfg_dir = os.path.join(run_v8_root, name)
+        meta = _config_meta(cfg_dir)
+        gate = _cluster_gate_status(
+            name, cfg_dir, meta.get('version', 0), cluster_context, 'pb' + runtime + '_instances', 'pb' + runtime + '_tombstones'
+        )
+        blocked = bool(gate.get('blocked', False))
+        blocked_reason = str(gate.get('blocked_reason', '') or '')
+        cluster_gate = str(gate.get('cluster_gate', '') or '')
+        if not blocked and pb8_runtime_error:
+            blocked = True
+            blocked_reason = pb8_runtime_error
+            cluster_gate = 'runtime_not_ready'
+        if not blocked:
+            last_error = _pb8_last_error(cfg_dir)
+            if last_error:
+                blocked = True
+                blocked_reason = 'PB' + runtime + ' exits on start: ' + last_error
+                cluster_gate = 'runtime_exit'
+        rows.append({
+            'name': name,
+            'running': False,
+            'cv': meta.get('version', 0),
+            'eo': meta.get('enabled_on', 'disabled'),
+            'rv': 0,
+            'di': False,
+            'blocked': blocked,
+            'blocked_reason': blocked_reason,
+            'cluster_gate': cluster_gate,
+        })
+
+    return rows
+
+v8 = _collect_native('8', PB8DIR, PB8VENV, running_v8)
+v9 = _collect_native('9', PB9DIR, PB9VENV, running_v9)
+
+print(json.dumps({'monitors': monitors, 'v7': v7, 'v8': v8, 'v9': v9, 'cache': new_cache,
     'bot_logs': bot_logs, 'history': bot_history}))
 "'''
 
@@ -3719,7 +3759,7 @@ def pbrun_required_for_host(pbgui_dir, pbname):
     target = str(pbname or '').strip()
     if not target:
         return False
-    for runtime, run_root in (('pb7', Path(pbgui_dir) / 'data' / 'run_v7'), ('pb8', Path(pbgui_dir) / 'data' / 'run_v8')):
+    for runtime, run_root in (('pb7', Path(pbgui_dir) / 'data' / 'run_v7'), ('pb8', Path(pbgui_dir) / 'data' / 'run_v8'), ('pb9', Path(pbgui_dir) / 'data' / 'run_v9')):
         if not run_root.is_dir():
             continue
         for cfg_path in run_root.glob('*/config.json'):
@@ -3728,6 +3768,13 @@ def pbrun_required_for_host(pbgui_dir, pbname):
             except Exception:
                 continue
             pbgui = payload.get('pbgui') if isinstance(payload, dict) else None
+            if runtime == 'pb9':
+                try:
+                    pbgui = json.loads(cfg_path.with_name('pbgui.json').read_text(encoding='utf-8'))
+                except Exception:
+                    continue
+            if not isinstance(pbgui, dict):
+                continue
             enabled_on = str((pbgui or {}).get('enabled_on') or '').strip()
             configured_runtime = str((pbgui or {}).get('runtime') or runtime).strip().lower()
             if enabled_on == target and configured_runtime == runtime:
@@ -6312,6 +6359,8 @@ class VPSMonitor:
         # Retain visible data, but revoke its delete-authorizing freshness first.
         if hostname in self.store.v8_instances:
             self.store.update_v8_instances(hostname, self.store.v8_instances[hostname])
+        if hostname in self.store.v9_instances:
+            self.store.update_v9_instances(hostname, self.store.v9_instances[hostname])
         snapshot_checked_at = time.time()
         parsed = await self._read_monitor_agent_json(
             hostname,
@@ -6324,6 +6373,7 @@ class VPSMonitor:
         monitors = parsed.get('monitors', [])
         v7_list = parsed.get('v7', [])
         v8_list = parsed.get('v8', [])
+        v9_list = parsed.get('v9', [])
         bot_logs = parsed.get('bot_logs', {})
         self._import_agent_bot_history(hostname, parsed.get('history'))
         if isinstance(monitors, list) and isinstance(v7_list, list) and isinstance(v8_list, list):
@@ -6345,6 +6395,11 @@ class VPSMonitor:
                 hostname, v8_list,
                 snapshot_generated_at=parsed.get('generated_at'),
                 snapshot_checked_at=snapshot_checked_at,
+            )
+            self.store.update_v9_instances(
+                hostname, v9_list,
+                snapshot_generated_at=parsed.get('generated_at') if parsed.get('_pb9_supported') else None,
+                snapshot_checked_at=snapshot_checked_at if parsed.get('_pb9_supported') else None,
             )
             self.store.update_bot_logs(hostname, bot_logs if isinstance(bot_logs, dict) else {})
             self._cache_host_snapshot(hostname)
@@ -6401,6 +6456,10 @@ class VPSMonitor:
             if isinstance(v8_instances, list):
                 self.store.v8_instances[hostname] = v8_instances
                 changed = True
+            v9_instances = host_cache.get('v9_instances')
+            if isinstance(v9_instances, list):
+                self.store.update_v9_instances(hostname, v9_instances)
+                changed = True
             host_meta = host_cache.get('host_meta')
             if isinstance(host_meta, dict):
                 self.store.host_meta[hostname] = host_meta
@@ -6434,6 +6493,8 @@ class VPSMonitor:
             payload['v7_instances'] = self.store.v7_instances.get(host) or []
         if host in self.store.v8_instances:
             payload['v8_instances'] = self.store.v8_instances.get(host) or []
+        if host in self.store.v9_instances:
+            payload['v9_instances'] = self.store.v9_instances.get(host) or []
         if host in self.store.host_meta:
             payload['host_meta'] = self.store.host_meta.get(host) or {}
         if host in self.store.streams:
@@ -6992,22 +7053,22 @@ class VPSMonitor:
             return {"success": False, "pid": ""}
 
         raw_version = str(pb_version or "7").strip().lower()
-        versions = {"7": "7", "v7": "7", "pb7": "7", "8": "8", "v8": "8", "pb8": "8"}
+        versions = {"7": "7", "v7": "7", "pb7": "7", "8": "8", "v8": "8", "pb8": "8", "9": "9", "v9": "9", "pb9": "9"}
         version = versions.get(raw_version)
         if not version:
             return {"success": False, "pid": ""}
 
-        if version == "8":
+        if version in {"8", "9"}:
             entry = self.pool.get_connection(hostname)
             data = (entry.data or {}) if entry else {}
             ini = data.get("ini")
-            pb8_dir = str(data.get("pb8dir") or "").strip()
-            pb8_python = str(data.get("pb8venv") or "").strip()
+            pb8_dir = str(data.get(f"pb{version}dir") or "").strip()
+            pb8_python = str(data.get(f"pb{version}venv") or "").strip()
             if ini is not None:
-                pb8_dir = pb8_dir or str(ini.get("main", "pb8dir", fallback="") or "").strip()
-                pb8_python = pb8_python or str(ini.get("main", "pb8venv", fallback="") or "").strip()
+                pb8_dir = pb8_dir or str(ini.get("main", f"pb{version}dir", fallback="") or "").strip()
+                pb8_python = pb8_python or str(ini.get("main", f"pb{version}venv", fallback="") or "").strip()
             remote_pbgui_dir = str(self.pool.get_remote_pbgui_dir(hostname) or "").strip()
-            config_path = remote_path_join(remote_pbgui_dir, "data", "run_v8", name, "config.json")
+            config_path = remote_path_join(remote_pbgui_dir, "data", f"run_v{version}", name, "config.json")
             arguments = (config_path, pb8_dir, pb8_python)
             if any(
                 not value or len(value) > 4096 or "\x00" in value
@@ -7028,7 +7089,7 @@ class VPSMonitor:
             success = bool(killed_pid)
             _log(
                 SERVICE,
-                f"[cmd] Stop PB8 instance {name} on {hostname}: "
+                f"[cmd] Stop PB{version} instance {name} on {hostname}: "
                 f"{'OK pid=' + killed_pid if success else 'not found'}",
                 level="INFO" if success else "WARNING",
             )

@@ -1,5 +1,7 @@
 # PB9 Backtest
 
+Raw JSON and form edits are merged in input order, including when saving immediately. An incomplete JSON document blocks Save without discarding pending form edits.
+
 Coin selection and Apply Filters reuse PB8's catalog and filter logic with the
 native PB9 resolver. Normal coins appear once by name; exact IDs remain for
 ambiguous markets and existing exact selections. Only existing local public

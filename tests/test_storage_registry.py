@@ -373,3 +373,72 @@ def test_pb9_installation_cache_and_environment_are_accounted_and_protected(layo
     assert any(item['label']=='PB9 OHLCV store' and item['blocked'] for item in protected)
     roots={root['id'] for root in registry.scan(layout)['roots']}
     assert 'pb9' in roots
+
+
+@pytest.mark.parametrize("category,relative", [
+    ("pb9_optimize_results", "pb9/optimize_results/old_run/pareto.json"),
+    ("pb9_backtests", "pbgui/data/bt_v9_results/config/job/combined/run/analysis.json"),
+    ("pb9_backtests", "pb9/backtests/pbgui/config/combined/run/analysis.json"),
+])
+def test_pb9_results_review_listing_and_scoped_deletion(layout, tmp_path, category, relative):
+    """Only explicitly selected old PB9 output is removed; unrelated data stays intact."""
+    layout.pb9 = layout.pbgui.parent / "pb9"
+    output = _file(layout.pbgui.parent / relative)
+    _age_dir(output.parents[0], 60)
+    # Age the whole configuration/run folder, including structural directory mtimes.
+    root = layout.pb9 / "optimize_results" if category == "pb9_optimize_results" else (
+        layout.data / "bt_v9_results" if relative.startswith("pbgui/") else layout.pb9 / "backtests/pbgui")
+    _age_dir(root, 60)
+    candle = _file(layout.pb9 / "caches/ohlcvs/bybit/HYPE.npy")
+    config = _file(layout.data / "bt_v9/config.json")
+    other = _file(layout.pb8 / "optimize_results/keep/pareto.json")
+    listing = _listing(layout, category)
+    assert listing["available"] and not listing["blocked"]
+    assert len(listing["items"]) == 1
+    item = listing["items"][0]
+    assert not item["blocked"]
+    definition = registry.CATEGORY_BY_ID[category]
+    assert definition.tier == "review" and not definition.auto_allowed
+    registry.delete_item(layout, definition, item, registry.TrashRegistry(tmp_path / "trash-state"))
+    assert not output.exists()
+    assert candle.exists() and config.exists() and other.exists()
+
+
+def test_pb9_managed_and_native_results_have_distinct_ids(layout):
+    """Identically named native and managed backtests remain independently selectable."""
+    layout.pb9 = layout.pbgui.parent / "pb9"
+    _file(layout.data / "bt_v9_results/config/job/analysis.json")
+    _file(layout.pb9 / "backtests/pbgui/config/run/analysis.json")
+    listing = _listing(layout, "pb9_backtests")
+    assert _ids(listing) == {"managed/config", "native/pbgui/config"}
+    assert all(item["blocked"] == "Changed within the last 24 hours" for item in listing["items"])
+
+
+@pytest.mark.parametrize("category", ["pb9_optimize_results", "pb9_backtests"])
+def test_pb9_result_deletion_rechecks_running_processes(layout, tmp_path, monkeypatch, category):
+    """A native job starting after preview prevents deletion before moving any output."""
+    layout.pb9 = layout.pbgui.parent / "pb9"
+    folder = layout.pb9 / "optimize_results/old" if category == "pb9_optimize_results" else layout.data / "bt_v9_results/old"
+    output = _file(folder / "result.json")
+    _age_dir(folder, 60)
+    item = _listing(layout, category)["items"][0]
+    monkeypatch.setattr(registry, "_pb_running", lambda ctx, base, scripts: base == layout.pb9)
+    assert _listing(layout, category)["blocked"] == "A PB9 backtest or optimize is running"
+    with pytest.raises(registry.ItemBlocked, match="PB9"):
+        registry.delete_item(layout, registry.CATEGORY_BY_ID[category], item,
+                             registry.TrashRegistry(tmp_path / "trash-state"))
+    assert output.exists()
+
+
+def test_pb9_results_cannot_follow_external_symlinks(layout, tmp_path):
+    """A native result link cannot turn a PB9 cleanup into deletion outside its root."""
+    layout.pb9 = layout.pbgui.parent / "pb9"
+    outside = _file(tmp_path / "outside/keep.json")
+    result = layout.pb9 / "optimize_results/external"
+    result.parent.mkdir(parents=True)
+    result.symlink_to(outside.parent, target_is_directory=True)
+    item = _listing(layout, "pb9_optimize_results")["items"][0]
+    registry.delete_item(layout, registry.CATEGORY_BY_ID["pb9_optimize_results"], item,
+                         registry.TrashRegistry(tmp_path / "trash-state"))
+    assert not result.is_symlink()
+    assert outside.exists()

@@ -16,7 +16,7 @@ import time
 
 from logging_helpers import human_log as _log
 from pb9_runtime import inspect_pb9_runtime
-from pb9_config_helper import MAX_VALIDATION_BYTES, _HelperError, _require_json_value, check_inline_config, check_migration_input
+from pb9_config_helper import DIAGNOSTIC_KINDS, DIAGNOSTIC_STAGES, MAX_VALIDATION_BYTES, _HelperError, _require_json_value, check_inline_config, check_migration_input
 
 
 SERVICE = "PB9Config"
@@ -38,6 +38,7 @@ class PB9ConfigError(RuntimeError):
     def __init__(self, code: str):
         """Keep codes available for later authenticated API error mapping."""
         self.error_codes = (code,)
+        self.diagnostic = {}
         super().__init__("PB9 config request failed: " + code)
 
 
@@ -195,7 +196,13 @@ def _checked_response(raw: bytes, status: dict, *, operation: str = "template") 
         raise PB9ConfigError("invalid_response")
     if not response["ok"]:
         code = response.get("error_code")
-        raise PB9ConfigError(code if isinstance(code, str) and code in _HELPER_CODES else "helper_failed")
+        error = PB9ConfigError(code if isinstance(code, str) and code in _HELPER_CODES else "helper_failed")
+        diagnostic = response.get('diagnostic')
+        if isinstance(diagnostic, dict):
+            stage, kind = diagnostic.get('stage'), diagnostic.get('kind')
+            if isinstance(stage, str) and stage in DIAGNOSTIC_STAGES and isinstance(kind, str) and kind in DIAGNOSTIC_KINDS:
+                error.diagnostic = {'stage': stage, 'kind': kind}
+        raise error
     result = response.get("result")
     if not isinstance(result, dict):
         raise PB9ConfigError("invalid_response")
@@ -487,7 +494,7 @@ def _config_operation(operation: str, pb9dir, pb9venv, other_slots, *, timeout: 
         error = (exc if isinstance(exc, PB9ConfigError) else
                  PB9ConfigError(str(exc) if isinstance(exc, _HelperError) and str(exc) in _HELPER_CODES else "helper_failed"))
         _log(SERVICE, "PB9 config request failed", level="ERROR",
-             meta={"operation": operation, "error_codes": list(error.error_codes)})
+             meta={"operation": operation, "error_codes": list(error.error_codes), **error.diagnostic})
         if error is exc:
             raise
         raise error from exc

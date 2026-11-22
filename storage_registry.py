@@ -31,7 +31,7 @@ TREE_DEPTH = 4
 TREE_CHILDREN = 30
 TREE_MIN_BYTES = 1024 * 1024
 TRASH_PREFIX = ".pbgui-storage-trash-"
-SNAPSHOT_VERSION = 1
+SNAPSHOT_VERSION = 2
 
 TIERS = ("safe", "optional", "review", "protected")
 GROUPS = {
@@ -513,6 +513,31 @@ def _pb7_backtest_running(ctx: StorageContext, item: dict[str, Any] | None = Non
     return None
 
 
+def _pb9_simulation_running(ctx: StorageContext, item: dict[str, Any] | None = None) -> str | None:
+    """Protect native results during PB9 execution, including PBGui runner processes."""
+    if _pb_running(ctx, ctx.pb9, ("backtest.py", "optimize.py", "pb9_backtest_runner.py", "pb9_optimize_runner.py")):
+        return "A PB9 backtest or optimize is running"
+    return None
+
+
+def _pb9_result_roots(ctx: StorageContext) -> list[Path]:
+    """Include GUI backtests and native/optimizer-generated backtests without aliases."""
+    return [ctx.data / "bt_v9_results", *_pb("pb9", "backtests")(ctx)]
+
+
+def _list_pb9_results(ctx: StorageContext, *, optimize: bool = False) -> Listing:
+    """Reuse existing result listing and age guards for PB9's actual output layouts."""
+    if optimize:
+        listing = _children_items(ctx, _sub(ctx.pb9, "optimize_results"), guard_active=True)
+    else:
+        managed = _children_items(ctx, ctx.data / "bt_v9_results", guard_active=True, id_prefix="managed/")
+        native = _children_items(ctx, _sub(ctx.pb9, "backtests"), depth=2, guard_active=True, id_prefix="native/")
+        listing = Listing(items=managed.items + native.items, available=managed.available or native.available)
+    if listing.available:
+        listing.blocked = _pb9_simulation_running(ctx)
+    return listing
+
+
 def _list_pb7_hlcvs(ctx: StorageContext) -> Listing:
     listing = _children_items(ctx, _sub(ctx.pb7, "caches", "hlcvs_data"), files=False)
     if listing.available:
@@ -723,7 +748,7 @@ CATEGORIES: tuple[Category, ...] = (
              _list_job_logs, _r("logs", "jobs"), default_days=30, auto_allowed=True,
              runtime_check=_job_log_in_use),
     Category("logs_runs", "logs", "safe", "Backtest & optimize run logs",
-             "Run logs in data/logs/optimizes, optimizes_v8, backtests and backtests_v8.",
+             "Run logs for PB7, PB8 and PB9 backtests and optimizations under data/logs.",
              _list_run_logs, lambda ctx: [ctx.data / "logs" / name for name in _RUN_LOG_DIRS],
              default_days=60, auto_allowed=True),
     Category("vast_inactive", "results", "optional", "Cancelled & failed cloud jobs",
@@ -748,6 +773,13 @@ CATEGORIES: tuple[Category, ...] = (
              "Backtest folders in pb8/backtests/<group>/<config>.",
              lambda ctx: _children_items(ctx, _sub(ctx.pb8, "backtests"), depth=2, guard_active=True),
              _pb("pb8", "backtests")),
+    Category("pb9_optimize_results", "results", "review", "PB9 optimize results",
+             "Result folders in pb9/optimize_results. Changed within 24 hours or running PB9 jobs are kept.",
+             lambda ctx: _list_pb9_results(ctx, optimize=True), _pb("pb9", "optimize_results"),
+             runtime_check=_pb9_simulation_running),
+    Category("pb9_backtests", "results", "review", "PB9 backtests",
+             "PBGui data/bt_v9_results/<config> and pb9/backtests/<group>/<config>. Recent or running results are kept.",
+             _list_pb9_results, _pb9_result_roots, runtime_check=_pb9_simulation_running),
     Category("pb7_hlcvs", "caches", "optional", "PB7 prepared backtest data",
              "pb7/caches/hlcvs_data. PB7 rebuilds a dataset when a backtest needs it again.",
              _list_pb7_hlcvs, _pb("pb7", "caches", "hlcvs_data"), default_days=7, auto_allowed=True,

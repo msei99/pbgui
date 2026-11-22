@@ -1,5 +1,8 @@
 # VPS Monitor
 
+PB9 uses the same instance table, process metrics and native log collector as PB8. Identical account names remain separated by generation. Old agents remain readable, but only a fresh PB9-aware instance snapshot authorizes PB9 remote control or deletion. A cached snapshot restored after an API restart carries no stopped-state authorization.
+
+
 
 The global navigation alert badge updates automatically while its browser tab is visible. Alert polling pauses in background tabs and resumes immediately when you return, without overlapping requests.
 

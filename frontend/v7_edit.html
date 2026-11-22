@@ -1259,9 +1259,9 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 <div id="cov-tooltip"></div>
 <div id="data-tip-tooltip"></div>
 
-<script src="/app/js/editor_shared.js?v=31"></script>
+<script src="/app/js/editor_shared.js?v=32"></script>
 <script src="/app/js/pbgui_dialogs.js?v=12"></script>
-<script src="/app/js/run_editor_adapter.js?v=17"></script>
+<script src="/app/js/run_editor_adapter.js?v=18"></script>
 <script src="/app/js/log_viewer_panel.js?v=50"></script>
 <script src="/app/js/coin_overrides_editor.js?v=28"></script>
 <script>
@@ -1279,6 +1279,10 @@ var runEditorAdapter = window.PBGuiRunEditorAdapter.create(RUN_VERSION, { apiBas
 
 /* ─── State ────────────────────────────────────────────────── */
 var cfg = {};            // full config object
+function replaceRunEditorConfig(document) {
+  if (typeof runEditorAdapter.resetDocumentState === 'function') runEditorAdapter.resetDocumentState();
+  cfg = document;
+}
 var _fromBacktestConfig = '';  // set when navigating from backtest "Add to Run"
 var paramStatus = {};    // { long: {param: 'neutralized'|'pb_default'}, short: {...} }
 var allSymbols = [];     // available symbols for current exchange
@@ -1909,7 +1913,11 @@ async function init() {
     var metadataPromise = null;
     if (runEditorAdapter.isV8 || runEditorAdapter.metadataDriven) {
       metadataPromise = apiFetch('/editor/metadata').then(function(response) {
-        if (!response.ok) throw new Error((runEditorAdapter.metadataDriven ? runEditorAdapter.label : 'PB8') + ' editor metadata: HTTP ' + response.status);
+        if (!response.ok) {
+          var hint = response.headers.get('X-PBGUI-Error-Codes') === 'runtime_not_detected'
+            ? '. Open System > Welcome > Setup to check the PB9 runtime.' : '';
+          throw new Error((runEditorAdapter.metadataDriven ? runEditorAdapter.label : 'PB8') + ' editor metadata: HTTP ' + response.status + hint);
+        }
         return response.json();
       });
     }
@@ -1918,7 +1926,7 @@ async function init() {
     // A handoff draft is already canonical. Render it before slow PB8 runtime metadata arrives.
     var draftResp = draftPromise ? await draftPromise : null;
     if (draftResp && draftResp.config) {
-      cfg = draftResp.config;
+      replaceRunEditorConfig(draftResp.config);
       paramStatus = draftResp.param_status || {};
       draftOverrideConfigs = draftResp.override_configs || {};
       _fromBacktestConfig = (cfg.pbgui || {}).from_backtest_config || '';
@@ -1990,7 +1998,7 @@ async function init() {
     if (runEditorAdapter.isV8 && draftResp && draftResp.config) {
       queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
     } else if (draftResp && draftResp.config) {
-      cfg = draftResp.config;
+      replaceRunEditorConfig(draftResp.config);
       paramStatus = draftResp.param_status || {};
       draftOverrideConfigs = draftResp.override_configs || {};
       _fromBacktestConfig = (cfg.pbgui || {}).from_backtest_config || '';
@@ -2014,7 +2022,7 @@ async function init() {
       if (DRAFT_ID) {
         toast('Draft config not found or expired, using defaults', 'warn');
       }
-        cfg = await fetchTemplateConfig(allUsers.length > 0 ? allUsers[0].name : '');
+        replaceRunEditorConfig(await fetchTemplateConfig(allUsers.length > 0 ? allUsers[0].name : ''));
         paramStatus = {};
       var configuredHost = String(((cfg.pbgui || {}).enabled_on) || '').trim();
       allHosts = ['disabled'];
@@ -2042,7 +2050,7 @@ async function init() {
         throw new Error('Could not load config: invalid or empty configuration response.');
       }
 
-      cfg = cfgResp.config;
+      replaceRunEditorConfig(cfgResp.config);
       paramStatus = cfgResp.param_status || {};
       draftOverrideConfigs = cfgResp.override_configs || {};
       var configuredHost = String(((cfg.pbgui || {}).enabled_on) || '').trim();
@@ -2947,6 +2955,7 @@ function restoreRawEditorAnchor(anchor) {
 
 async function syncEditorFromParsed(parsed) {
   var anchor = captureRawEditorAnchor();
+  if (typeof runEditorAdapter.applyRawDocumentState === 'function') runEditorAdapter.applyRawDocumentState(cfg, parsed || {});
   cfg = parsed || {};
   populateForm({ skipRawUpdate: true });
   await queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
@@ -3679,7 +3688,7 @@ async function doImport() {
     return;
   }
 
-  cfg = prepared.config;
+  replaceRunEditorConfig(prepared.config);
   paramStatus = prepared.param_status || {};
   populateForm();
   queueSymbolsAndTagsLoad(cfg, { preferConfigValues: true });
@@ -4454,7 +4463,7 @@ _editorInitPromise = init();
       if (!alive || dirty || cfg !== snapshot || !result.config) return;
       if (JSON.stringify(result.config) !== JSON.stringify(cfg)) {
         saveView();
-        cfg = result.config;
+        replaceRunEditorConfig(result.config);
         populateForm();
         restoreView();
       }

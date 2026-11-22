@@ -329,8 +329,9 @@ def _bot_service_parts(service: str) -> tuple[str, str]:
     """Return a bot name and runtime from the allowlisted service identifier."""
     raw = str(service or "").strip()
     name, separator, version = raw.rpartition(":")
-    if separator and version.lower() in {"7", "v7", "pb7", "8", "v8", "pb8"}:
-        normalized = "8" if version.lower() in {"8", "v8", "pb8"} else "7"
+    if separator and version.lower() in {"7", "v7", "pb7", "8", "v8", "pb8", "9", "v9", "pb9"}:
+        from master.async_logs import _normalize_pb_version
+        normalized = _normalize_pb_version(version)
         return name, normalized
     return raw, "7"
 
@@ -354,7 +355,8 @@ async def get_bot_log_matches(hostname: str, bot_name: str, *, pb_version: str |
         target_date -= timedelta(days=1)
     target_prefix = target_date.strftime("%Y-%m-%d")
 
-    version = "8" if str(pb_version or "7").strip().lower() in {"8", "v8", "pb8"} else "7"
+    from master.async_logs import _normalize_pb_version
+    version = _normalize_pb_version(pb_version or "7")
     discovered = []
     if _monitor:
         host_logs = _monitor.store.bot_logs.get(hostname) or {}
@@ -419,7 +421,8 @@ async def get_bot_log_tail(hostname: str, bot_name: str, *, pb_version: str = "7
 
     if not _streamer or not hostname or not bot_name:
         return ""
-    version = "8" if str(pb_version).strip().lower() in {"8", "v8", "pb8"} else "7"
+    from master.async_logs import _normalize_pb_version
+    version = _normalize_pb_version(pb_version)
     line_limit = max(1, min(int(lines or 500), 10_000))
     discovered: list[str] = []
     if _monitor:
@@ -450,6 +453,7 @@ def get_monitor_state_snapshot() -> dict:
             "instances": {},
             "v7_instances": {},
             "v8_instances": {},
+            "v9_instances": {},
             "host_meta": {},
             "streams": {},
             "services": {},
@@ -955,7 +959,7 @@ async def _local_kill_instance(name: str, pb_version: str) -> dict:
     try:
         from pathlib import Path
 
-        from PBRun import PBRun, RunV7, RunV8
+        from PBRun import PBRun, RunV7, RunV8, RunV9
         name = str(name or "").strip()
         if (not name or len(name) > 255 or name in {".", ".."}
                 or "/" in name or "\\" in name or "\x00" in name
@@ -963,22 +967,20 @@ async def _local_kill_instance(name: str, pb_version: str) -> dict:
             return {"type": "result", "cmd": "kill_instance",
                     "host": "local", "name": name, "success": False, "pid": None}
         raw_version = str(pb_version or "7").strip().lower()
-        if raw_version not in {"7", "v7", "pb7", "8", "v8", "pb8"}:
+        if raw_version not in {"7", "v7", "pb7", "8", "v8", "pb8", "9", "v9", "pb9"}:
             return {"type": "result", "cmd": "kill_instance",
                     "host": "local", "name": name, "success": False, "pid": None}
-        version = "8" if raw_version in {"8", "v8", "pb8"} else "7"
+        from master.async_logs import _normalize_pb_version
+        version = _normalize_pb_version(raw_version)
         pbrun = PBRun()
-        runner = RunV8() if version == "8" else RunV7()
-        runner.path = str(Path(pbrun.v8_path if version == "8" else pbrun.v7_path) / name)
+        runner = {"7": RunV7, "8": RunV8, "9": RunV9}[version]()
+        runner.path = str(Path(getattr(pbrun, f"v{version}_path")) / name)
         runner.user = name
         runner.name = pbrun.name
         runner.pbgdir = pbrun.pbgdir
-        if version == "8":
-            runner.pb8dir = pbrun.pb8dir
-            runner.pb8venv = pbrun.pb8venv
-        else:
-            runner.pb7dir = pbrun.pb7dir
-            runner.pb7venv = pbrun.pb7venv
+        for suffix in ("dir", "venv"):
+            key = f"pb{version}{suffix}"
+            setattr(runner, key, getattr(pbrun, key))
 
         # Stopping must also work when the config no longer permits a start.
         process = runner.pid()

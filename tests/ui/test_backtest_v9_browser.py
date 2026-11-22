@@ -311,6 +311,102 @@ def test_raw_json_adds_and_removes_fallback_controls(backtest):
     assert backtest.errors==[], '\n'.join(backtest.errors)
 
 
+@pytest.mark.parametrize('order', ['raw_first', 'form_first'])
+@pytest.mark.parametrize('immediate_save', [False, True])
+def test_raw_and_form_edits_merge_without_waiting(backtest, order, immediate_save):
+    """Actual input events preserve both views even before their debounce timers."""
+    page = backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.evaluate("""order => {
+      const raw = document.getElementById('cfg-raw-json');
+      const rawEdit = () => {
+        const config = JSON.parse(raw.value);
+        config.backtest.starting_balance = 98765;
+        raw.value = JSON.stringify(config);
+        raw.dispatchEvent(new Event('input', {bubbles:true}));
+      };
+      const formEdit = () => {
+        const input = document.getElementById('cfg-start-date');
+        input.value = '2025-03-01';
+        input.dispatchEvent(new Event('input', {bubbles:true}));
+      };
+      if (order === 'raw_first') { rawEdit(); formEdit(); }
+      else { formEdit(); rawEdit(); }
+    }""", order)
+    if not immediate_save:
+        page.wait_for_function("JSON.parse(document.getElementById('cfg-raw-json').value).backtest.start_date === '2025-03-01' && document.getElementById('cfg-starting-balance').value === '98765'")
+        # A later ordinary edit must not replay the original form balance.
+        page.locator('#cfg-start-date').fill('2025-03-02')
+    page.locator('#sidebar-editor button[onclick="saveEditor()"]' ).click()
+    page.wait_for_function("document.getElementById('cfg-starting-balance').value === '98765'")
+    assert backtest.saved[-1]['config']['backtest']['starting_balance'] == 98765
+    assert backtest.saved[-1]['config']['backtest']['start_date'] == ('2025-03-01' if immediate_save else '2025-03-02')
+    assert backtest.errors == []
+
+
+@pytest.mark.parametrize('raw_last', [False, True])
+def test_same_field_edits_follow_input_order(backtest, raw_last):
+    """Timers cannot reverse the user's last edit of the same primary field."""
+    page = backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.evaluate("""rawLast => {
+      const raw=document.getElementById('cfg-raw-json'), input=document.getElementById('cfg-start-date');
+      function rawEdit() {const config=JSON.parse(raw.value);config.backtest.start_date='2025-02-01';raw.value=JSON.stringify(config);raw.dispatchEvent(new Event('input',{bubbles:true}));}
+      function formEdit() {input.value='2025-03-01';input.dispatchEvent(new Event('input',{bubbles:true}));}
+      if (rawLast) {formEdit();rawEdit();} else {rawEdit();formEdit();}
+    }""", raw_last)
+    page.locator('#sidebar-editor button[onclick="saveEditor()"]' ).click()
+    assert backtest.saved[-1]['config']['backtest']['start_date'] == ('2025-02-01' if raw_last else '2025-03-01')
+
+
+def test_invalid_raw_preserves_pending_form_edit(backtest):
+    """An incomplete raw document blocks Save, retaining valid form changes for repair."""
+    page = backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.evaluate("""() => {
+      window.reviewRaw=document.getElementById('cfg-raw-json').value;
+      const raw=document.getElementById('cfg-raw-json');raw.value='{';raw.dispatchEvent(new Event('input',{bubbles:true}));
+      const input=document.getElementById('cfg-start-date');input.value='2025-03-01';input.dispatchEvent(new Event('input',{bubbles:true}));
+    }""")
+    page.locator('#sidebar-editor button[onclick="saveEditor()"]' ).click()
+    assert backtest.saved == []
+    page.evaluate("""() => {
+      const raw=document.getElementById('cfg-raw-json');const config=JSON.parse(reviewRaw);config.backtest.starting_balance=98765;
+      raw.value=JSON.stringify(config);raw.dispatchEvent(new Event('input',{bubbles:true}));
+    }""")
+    page.locator('#sidebar-editor button[onclick="saveEditor()"]' ).click()
+    assert backtest.saved[-1]['config']['backtest']['start_date'] == '2025-03-01'
+    assert backtest.saved[-1]['config']['backtest']['starting_balance'] == 98765
+    assert backtest.errors == []
+
+
+def test_raw_sync_preserves_exact_text_and_caret(backtest):
+    """A valid intermediate numeric spelling remains editable after form synchronization."""
+    page = backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.locator('#exp-raw > .expander-header').click()
+    before = page.evaluate("""() => {
+      const raw=document.getElementById('cfg-raw-json'), config=JSON.parse(raw.value);
+      config.backtest.starting_balance=1234;
+      raw.value=JSON.stringify(config,null,2).replace('"starting_balance": 1234','"starting_balance": 1234.0');
+      raw.focus();const position=raw.value.indexOf('1234.0')+6;raw.setSelectionRange(position,position);
+      raw.dispatchEvent(new Event('input',{bubbles:true}));return {text:raw.value,position};
+    }""")
+    page.wait_for_function("document.getElementById('cfg-starting-balance').value === '1234'")
+    after = page.evaluate("const raw=document.getElementById('cfg-raw-json');({text:raw.value,position:raw.selectionStart,focused:document.activeElement===raw})")
+    assert after == {**before, 'focused': True}
+    assert backtest.errors == []
+
+
+def test_save_blocks_when_sync_owner_is_not_initialized(backtest):
+    """An unavailable editor snapshot cannot silently fall through to a stale save."""
+    page = backtest.page
+    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page.evaluate("window._btJsonSync=PBGuiEditorShared.createJsonSyncController({trackChanges:true,validateRaw:validateRawJson})")
+    page.locator('#sidebar-editor button[onclick="saveEditor()"]' ).click()
+    assert backtest.saved == []
+
+
 def test_future_market_setting_survives_changes_to_known_rows(backtest):
     """A newly discovered root field is not overwritten by the shared row editor."""
     page=backtest.page

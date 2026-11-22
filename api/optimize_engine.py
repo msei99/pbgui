@@ -771,7 +771,7 @@ class OptimizeEngine:
         try:
             self.validate_pb8_optimizer_overrides(config, base_config_path=base_config_path)
         except self.PB8ConfigurationError as exc:
-            raise self._configuration_error('Validating PB8 optimizer overrides', exc) from exc
+            raise self._configuration_error(f'Validating {self.label} optimizer overrides', exc) from exc
 
     def _effective_optimize_value(self,config,key,default=None):
         """Retain legacy defaults; native profiles resolve omitted values without saving them."""
@@ -786,7 +786,7 @@ class OptimizeEngine:
         try:
             return self.validate_pb8_optimize_preflight(config, base_config_path=base_config_path)
         except self.PB8ConfigurationError as exc:
-            raise self._configuration_error('Validating PB8 optimize backend', exc) from exc
+            raise self._configuration_error(f'Validating {self.label} optimize backend', exc) from exc
 
     def _normalize_config(self, config: dict, name: str, *, preserve_hsl_runtime_overrides: bool=False) -> dict:
         candidate = self.copy.deepcopy(config)
@@ -3331,10 +3331,10 @@ class OptimizeEngine:
         except self.PB8ConfigurationError as exc:
             detail = str(exc)
             if 'optimize bound ' in detail and ' does not map to bot.' in detail:
-                detail = 'PB8 optimizer metadata is incompatible with the installed Rust extension. Run Update PB8 to rebuild the PB8 runtime.'
-                self._log(self.SERVICE, f'Loading PB8 optimize metadata failed: {exc}', level='WARNING')
+                detail = f'{self.label} optimizer metadata is incompatible with the installed Rust extension. Run Update {self.label} to rebuild the {self.label} runtime.'
+                self._log(self.SERVICE, f'Loading {self.label} optimize metadata failed: {exc}', level='WARNING')
                 raise self.HTTPException(status_code=503, detail=detail) from exc
-            raise self._configuration_error('Loading PB8 optimize metadata', exc, 503) from exc
+            raise self._configuration_error(f'Loading {self.label} optimize metadata', exc, 503) from exc
 
     def get_metadata(self, session: SessionToken=Depends(require_auth)) -> dict:
         return self._load_optimizer_metadata()
@@ -3348,7 +3348,7 @@ class OptimizeEngine:
         try:
             return self.generate_scenario_template(body)
         except self.ScenarioTemplateError as exc:
-            self._log(self.SERVICE, f'Rejected PB8 scenario template preview: {exc}', level='WARNING')
+            self._log(self.SERVICE, f'Rejected {self.label} scenario template preview: {exc}', level='WARNING')
             raise self.HTTPException(status_code=422, detail=str(exc)) from exc
 
     def scenario_chart_sources(self, exchange: str, session: SessionToken=Depends(require_auth)) -> dict:
@@ -3477,7 +3477,7 @@ class OptimizeEngine:
         try:
             return {'config': self.prepare_pb8_config(config), 'param_status': {}}
         except self.PB8ConfigurationError as exc:
-            raise self._configuration_error('Preparing PB8 optimize config', exc) from exc
+            raise self._configuration_error(f'Preparing {self.label} optimize config', exc) from exc
 
     def list_configs(self, session: SessionToken=Depends(require_auth), include_result_summary: bool=True, include_backtest_counts: bool=True) -> dict:
         """Preserve default callers; the UI explicitly requests scan-free summaries."""
@@ -3493,7 +3493,7 @@ class OptimizeEngine:
         count_root = self._COUNT_ROOT_UNSET
         if root.is_dir() and (not root.is_symlink()):
             for directory in sorted(root.iterdir()):
-                if not directory.is_dir() or directory.is_symlink():
+                if directory.name.startswith('.') or not directory.is_dir() or directory.is_symlink():
                     continue
                 try:
                     name = self._validate_name(directory.name)
@@ -3515,7 +3515,7 @@ class OptimizeEngine:
                     summary.update(backtest_count=count, backtest_count_status=('known' if count is not None else 'unknown') if include_backtest_counts else 'pending', result_mode=result_summary.get('mode', 'unknown'), scenario_count=result_summary.get('scenario_count', 0))
                     configs.append(summary)
                 except Exception as exc:
-                    self._log(self.SERVICE, f'Failed to list PB8 optimize config {directory.name}: {exc}', level='WARNING')
+                    self._log(self.SERVICE, f'Failed to list {self.label} optimize config {directory.name}: {exc}', level='WARNING')
         return {'configs': configs}
 
     def config_backtest_counts(self, body: dict, session: SessionToken=Depends(require_auth)) -> dict:
@@ -3553,7 +3553,7 @@ class OptimizeEngine:
                 config = editor_payload['config']
                 return {**editor_payload, 'name': name, 'config': config, 'param_status': editor_payload.get('param_status', {}), 'override_configs': self._load_override_payloads(config, path.parent)}
         except self.PB8ConfigurationError as exc:
-            raise self._configuration_error(f'Loading PB8 optimize config {name}', exc) from exc
+            raise self._configuration_error(f'Loading {self.label} optimize config {name}', exc) from exc
 
     def preview_hsl_migration(self, name: str, body: dict, session: SessionToken=Depends(require_auth)) -> dict:
         """Preview the native HSL migration; the existing config remains untouched."""
@@ -3566,7 +3566,7 @@ class OptimizeEngine:
                 self._load_override_payloads(editor_payload['config'], path.parent)
                 return self.preview_pb8_hsl_migration(path, body)
             except self.PB8ConfigurationError as exc:
-                raise self._configuration_error('Previewing PB8 HSL migration', exc) from exc
+                raise self._configuration_error(f'Previewing {self.label} HSL migration', exc) from exc
 
     def save_config(self, name: str, body: dict, create_only: bool=False, session: SessionToken=Depends(require_auth)) -> dict:
         name = self._validate_name(name)
@@ -3582,7 +3582,7 @@ class OptimizeEngine:
                 prepared = self._save_config_bundle(name, config, create_only=create_only, override_payloads=override_payloads, migration_report=migration_report, preserve_hsl_runtime_overrides=migration_report is not None)
             return {'ok': True, 'name': name, 'config': prepared, 'override_configs': self._load_override_payloads(prepared, self._config_dir(name))}
         except self.PB8ConfigurationError as exc:
-            raise self._configuration_error(f'Saving PB8 optimize config {name}', exc) from exc
+            raise self._configuration_error(f'Saving {self.label} optimize config {name}', exc) from exc
 
     def duplicate_config(self, name: str, body: dict, session: SessionToken=Depends(require_auth)) -> dict:
         source = self._config_file(name)
@@ -3742,7 +3742,7 @@ class OptimizeEngine:
                     raise self.HTTPException(status_code=exc.status, detail=str(exc)) from None
             options = self._validate_launch_options((body or {}).get('launch_options') or self._runtime_options_from_config(prepared))
         except self.PB8ConfigurationError as exc:
-            raise self._configuration_error(f'Queueing PB8 optimize config {name}', exc) from exc
+            raise self._configuration_error(f'Queueing {self.label} optimize config {name}', exc) from exc
         return self._create_queue_record(name, prepared, options, overrides)
 
     def _queue_record_for_operation_unlocked(self, operation_id: str) -> dict | None:
@@ -3923,7 +3923,7 @@ class OptimizeEngine:
                 prepared = self.load_pb8_config(config_path)
                 overrides = self._load_override_payloads(prepared, self._config_dir(name))
             except self.PB8ConfigurationError as exc:
-                raise self._configuration_error(f'Repairing PB8 optimize queue config {name}', exc) from exc
+                raise self._configuration_error(f'Repairing {self.label} optimize queue config {name}', exc) from exc
         stage = self._stage_snapshot_bundle(filename, prepared, overrides)
         with self._queue_lock():
             backup = None
@@ -4355,7 +4355,7 @@ class OptimizeEngine:
             prepared = self.prepare_pb8_config(config, base_config_path=str(result_dir / self._CONFIG_FILENAME))
             return {'config': prepared, 'param_status': {}, 'override_configs': self._result_override_payloads(result_dir, prepared)}
         except self.PB8ConfigurationError as exc:
-            raise self._configuration_error('Loading PB8 result config', exc) from exc
+            raise self._configuration_error(f'Loading {self.label} result config', exc) from exc
 
     def _result_convergence_config(self, result_dir: Path, fallback: dict) -> dict:
         """Recover reviewed local settings from bounded, result-owned history, never native defaults."""
@@ -4389,7 +4389,7 @@ class OptimizeEngine:
             try:
                 candidate = self.prepare_pb8_config(self._normalize_config(config, name))
             except self.PB8ConfigurationError as exc:
-                raise self._configuration_error('Preparing PB8 checkpoint resume', exc) from exc
+                raise self._configuration_error(f'Preparing {self.label} checkpoint resume', exc) from exc
             self._preflight_checkpoint_resume(candidate, result_dir)
             options = self._validate_launch_options({**self._result_launch_options(result_dir, config), 'mode': 'checkpoint_resume', 'source': str(result_dir), 'convergence_config': convergence_config})
             try:

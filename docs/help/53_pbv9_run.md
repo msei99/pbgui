@@ -1,5 +1,7 @@
 # PB9 Run
 
+Importing a config discards inactive strategy values from the previous document. Raw changes to the account or strategy tree also clear that cache; unrelated Raw edits keep it. Switching strategies within the same document keeps your edits. Deactivation and destructive changes are synchronized with local process starts.
+
 Open **PBv9 → Run** to manage PB9 live instances. The list and editor share the PB7/PB8 Run interface. PB9 uses its own source tree, Python environment, instance directory and backups.
 
 ## Configure an instance
@@ -18,13 +20,19 @@ Save creates a new config version. Existing instances require the version you op
 
 Unregistered fields from the installed prototype/template or loaded config appear under **Advanced Settings → Additional Parameters** until a dedicated control is available. Unedited defaults remain inherited; editing and removing an explicit value preserve native types and inheritance.
 
-## Local operation
+## Local and Cluster operation
 
 **Enabled on → disabled** saves without scheduling trading. Selecting this PBGui host schedules the instance for the PBRun daemon. A working separately installed PB9 runtime, current Rust extension, available account credentials and running PBRun service are required. A conflicting PB7/PB8/PB9 assignment for the same account blocks activation. Saving a config never bypasses these start checks.
 
 After updating PBGui, restart the local API and PBRun services to load the new code. Use **System → PBGUI Services** for the individual services. The restart indicator shows services still running an older code serial.
 
-PB9 currently supports local operation. Use **Backtest** to pass the current editor config to the shared PB9 Backtest page. Remote hosts and Strategy Explorer still require their own PB9 integration. Changing a host assignment can start or stop trading; use only accounts and settings you intend to run.
+**Enabled on** also offers joined, reachable Cluster hosts with fresh PB9 runtime/schema metadata. All active state replicas must confirm the PB9 operation protocol before enabling or moving a managed instance. Install/update PBGui and the separate PB9 runtime on the intended target, and complete Cluster Join first. Missing, old or incompatible host metadata keeps the target unavailable; the existing automatic monitoring updates the selector.
+
+Saving a managed instance publishes a signed PB9 operation and an immutable native-config/sidecar manifest through the same Cluster transport as PB8. The response may remain pending until automatic reconciliation. PBRun checks the assigned node, complete manifest and version before starting; PB8 and PB9 states remain separate even for identical names. Existing local PB9 bundles remain local until explicitly saved into Cluster. A replicated name cannot overwrite an unrelated local bundle without matching its exact predecessor manifest. Deactivation of an already managed instance remains possible when a peer is unavailable; pending sync does not confirm a remote stop.
+
+Use **Backtest** to pass the current editor config to the shared PB9 Backtest page. Strategy Explorer remains pending. Changing a host assignment can start or stop trading; use only accounts and settings you intend to run.
+
+Before moving an existing instance to another host, disable it and wait for a fresh confirmed stop. The disabled config remains assigned to its previous host until that proof arrives.
 
 ## Backups and logs
 

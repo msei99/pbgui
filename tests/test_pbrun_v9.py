@@ -138,3 +138,35 @@ def test_pb9_launch_environment_excludes_foreign_python_import_paths(runner, mon
     assert not {'PYTHONPATH', 'PYTHONHOME', 'PYTHONUSERBASE'} & env.keys()
     assert env['PYTHONNOUSERSITE'] == '1'
     assert env['VIRTUAL_ENV'] == str(Path(runner.pb9venv).parent.parent)
+
+
+@pytest.mark.parametrize('state', ['allowed', 'wrong_host', 'version', 'manifest', 'stopped', 'tombstone', 'pb8_only', 'legacy'])
+def test_pb9_cluster_gate_checks_only_native_assignment_and_manifest(runner, state):
+    """Use the real shared runner gate without starting or stopping any process."""
+    from master.cluster_state import (ensure_local_identity, append_operation, rebuild_materialized_state,
+                                     persist_config_manifest_blobs)
+    from tests.test_pb8_cluster_sync import CLUSTER_ID, NODE_A, NODE_B
+    root = Path(runner.pbgdir) / 'data/cluster'
+    ensure_local_identity(root, role='master', pbname='node', cluster_id=CLUSTER_ID, node_id=NODE_A)
+    append_operation(root, 'ADD_NODE', {'node_id': NODE_A, 'role': 'master', 'pbname': 'node'})
+    sidecar = Path(runner.path) / 'pbgui.json'
+    metadata = json.loads(sidecar.read_text())
+    if state != 'legacy': metadata['cluster_managed'] = True
+    sidecar.write_text(json.dumps(metadata))
+    assert runner.load()
+    digest = persist_config_manifest_blobs(root, Path(runner.path))
+    family = 'PB8' if state in {'pb8_only', 'legacy'} else 'PB9'
+    append_operation(root, f'UPSERT_{family}_CONFIG', {
+        'instance': 'fixture', 'version': '4' if state == 'version' else '3',
+        'assigned_host': NODE_B if state == 'wrong_host' else NODE_A,
+        'desired_state': 'stopped' if state == 'stopped' else 'running',
+        'config_manifest_hash': digest,
+    })
+    if state == 'manifest':
+        value = json.loads(sidecar.read_text()); value['note'] = 'changed after publication'
+        sidecar.write_text(json.dumps(value))
+    if state == 'tombstone':
+        append_operation(root, 'DELETE_PB9_INSTANCE', {'instance': 'fixture', 'version': '3'})
+    rebuild_materialized_state(root)
+    result = runner._cluster_gate_result()
+    assert result['ok'] is (state in {'allowed', 'legacy'}), result

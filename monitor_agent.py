@@ -232,7 +232,7 @@ def _pbrun_required_for_host(pbname: str) -> bool:
     target = str(pbname or "").strip()
     if not target:
         return False
-    for runtime, run_root in (("pb7", PBGDIR / "data" / "run_v7"), ("pb8", PBGDIR / "data" / "run_v8")):
+    for runtime, run_root in (("pb7", PBGDIR / "data" / "run_v7"), ("pb8", PBGDIR / "data" / "run_v8"), ("pb9", PBGDIR / "data" / "run_v9")):
         if not run_root.is_dir():
             continue
         for cfg_path in run_root.glob("*/config.json"):
@@ -240,7 +240,8 @@ def _pbrun_required_for_host(pbname: str) -> bool:
                 payload = json.loads(cfg_path.read_text(encoding="utf-8"))
             except Exception:
                 continue
-            pbgui = payload.get("pbgui") if isinstance(payload, dict) else None
+            pbgui = (_read_json(cfg_path.parent / "pbgui.json", {}) if runtime == "pb9"
+                     else payload.get("pbgui") if isinstance(payload, dict) else None)
             enabled_on = str((pbgui or {}).get("enabled_on") or "").strip()
             configured_runtime = str((pbgui or {}).get("runtime") or runtime).strip().lower()
             if enabled_on == target and configured_runtime == runtime:
@@ -408,7 +409,7 @@ def _run_hl_rate_limits() -> None:
     snapshot = _read_json(DATA_DIR / "instance_snapshot.json", {})
     generated_at = snapshot.get("generated_at") if isinstance(snapshot, dict) else None
     fresh = type(generated_at) in {int, float} and 0 <= time.time() - generated_at <= 90
-    rows = (snapshot.get("v7") or []) + (snapshot.get("v8") or []) if fresh else []
+    rows = (snapshot.get("v7") or []) + (snapshot.get("v8") or []) + (snapshot.get("v9") or []) if fresh else []
     user_names = {str(row.get("user") or "").strip() for row in rows
                   if isinstance(row, dict) and row.get("running") is True and row.get("user")}
     if not user_names:
@@ -418,13 +419,16 @@ def _run_hl_rate_limits() -> None:
     users = Users()
     users_by_name = {name: users.find_user(name) for name in user_names}
     if any(user is None for user in users_by_name.values()):
-        # PB8-only VPS hosts have no PB7 api-keys.json; Cluster Sync projects
-        # the same account records into the local PB8 installation instead.
-        pb8_directory = str(pbgui_purefunc.pb8dir() or "").strip()
-        if pb8_directory:
-            pb8_api_keys = Path(pb8_directory) / "api-keys.json"
-            if pb8_api_keys.is_file() and pb8_api_keys != Path(users.api7_path):
-                users.api7_path = str(pb8_api_keys)
+        # Native-only hosts use the same projected exchange-key catalog in their own slot.
+        directories = [str(pbgui_purefunc.pb8dir() or "").strip()]
+        if any(isinstance(row, dict) and row.get("running") is True for row in snapshot.get("v9") or []):
+            directories.append(str(_read_ini().get("main", "pb9dir", fallback="") or "").strip())
+        for directory in directories:
+            if not directory:
+                continue
+            api_keys = Path(directory) / "api-keys.json"
+            if api_keys.is_file() and api_keys != Path(users.api7_path):
+                users.api7_path = str(api_keys)
                 users.load()
                 for name, user in users_by_name.items():
                     if user is None:
@@ -494,7 +498,7 @@ def _run_instance_snapshot() -> None:
     payload["source"] = "monitor-agent"
     with _HL_RATE_LIMIT_LOCK:
         samples = dict(_HL_RATE_LIMITS_BY_USER)
-    for field in ("v7", "v8"):
+    for field in ("v7", "v8", "v9"):
         for row in payload.get(field) or []:
             if isinstance(row, dict) and row.get("running") is True:
                 sample = samples.get(str(row.get("user") or ""))
@@ -1014,6 +1018,11 @@ def _bot_processes(previous: dict[int, tuple[int, float]], history: dict[int, de
     pb8_dir = Path(pb8_dir_raw).expanduser().resolve() if pb8_dir_raw else None
     pb8_python = Path(pb8_venv_raw).expanduser().absolute() if pb8_venv_raw else None
     pb8_cli = pb8_python.parent / "passivbot" if pb8_python else None
+    pb9_dir_raw = str(cfg.get("main", "pb9dir", fallback="") or "").strip()
+    pb9_venv_raw = str(cfg.get("main", "pb9venv", fallback="") or "").strip()
+    pb9_dir = Path(pb9_dir_raw).expanduser().resolve() if pb9_dir_raw else None
+    pb9_python = Path(pb9_venv_raw).expanduser().absolute() if pb9_venv_raw else None
+    pb9_cli = pb9_python.parent / "passivbot" if pb9_python else None
     for proc_dir in Path("/proc").iterdir():
         if not proc_dir.name.isdigit():
             continue
@@ -1025,6 +1034,7 @@ def _bot_processes(previous: dict[int, tuple[int, float]], history: dict[int, de
         identity = _bot_identity_from_process(
             proc_dir, argv, pb7_main=pb7_main, pb8_dir=pb8_dir,
             pb8_python=pb8_python, pb8_cli=pb8_cli,
+            pb9_dir=pb9_dir, pb9_python=pb9_python, pb9_cli=pb9_cli,
         )
         if not identity:
             continue
@@ -1079,6 +1089,9 @@ def _bot_identity_from_process(
     pb8_dir: Path | None,
     pb8_python: Path | None,
     pb8_cli: Path | None,
+    pb9_dir: Path | None = None,
+    pb9_python: Path | None = None,
+    pb9_cli: Path | None = None,
 ) -> tuple[str, str] | None:
     """Return an exact PBRun-managed ``(name, runtime)`` process identity."""
 
@@ -1094,25 +1107,29 @@ def _bot_identity_from_process(
         if config_path.name == "config_run.json" and config_path.parent.parent == run_v7_root:
             return config_path.parent.name, "7"
 
-    if not pb8_dir or not pb8_python or not pb8_cli:
+    configs = [Path(arg).resolve() for arg in argv if arg.endswith("/config.json")]
+    if len(configs) != 1:
         return None
-    run_v8_root = (PBGDIR / "data" / "run_v8").resolve()
-    v8_configs = [Path(arg).resolve() for arg in argv if arg.endswith("/config.json")]
-    if len(v8_configs) != 1:
-        return None
-    config_path = v8_configs[0]
-    if config_path.name != "config.json" or config_path.parent.parent != run_v8_root:
-        return None
-    expected = [str(pb8_cli), "live", str(config_path), "--fail-on-stale-rust"]
-    normalized = [str(Path(argv[0]).absolute()), *argv[1:]] if argv else []
-    if normalized not in (expected, [str(pb8_python), *expected]):
-        return None
-    try:
-        if (proc_dir / "cwd").resolve() != pb8_dir:
-            return None
-    except OSError:
-        return None
-    return config_path.parent.name, "8"
+    config_path = configs[0]
+    for runtime, source, python, cli in (
+        ("8", pb8_dir, pb8_python, pb8_cli), ("9", pb9_dir, pb9_python, pb9_cli),
+    ):
+        if not source or not python or not cli:
+            continue
+        root = (PBGDIR / "data" / ("run_v" + runtime)).resolve()
+        if config_path.name != "config.json" or config_path.parent.parent != root:
+            continue
+        expected = [str(cli), "live", str(config_path), "--fail-on-stale-rust"]
+        normalized = [str(Path(argv[0]).absolute()), *argv[1:]] if argv else []
+        if normalized not in (expected, [str(python), *expected], [str(python.resolve()), *expected]):
+            continue
+        try:
+            if (proc_dir / "cwd").resolve() != source:
+                continue
+        except OSError:
+            continue
+        return config_path.parent.name, runtime
+    return None
 
 
 def _process_memory_mb(proc_dir: Path) -> tuple[float, float]:

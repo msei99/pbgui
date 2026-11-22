@@ -24,10 +24,10 @@ def filter_preferences(raw: dict) -> dict:
     if "tags" in raw:
         tags = raw["tags"]
         if (not isinstance(tags, list) or len(tags) > 200
-                or any(not isinstance(tag, str) or not tag or len(tag) > 128
+                or any(not isinstance(tag, str) or not tag.strip() or len(tag) > 128
                        or any(ord(c) < 32 or ord(c) == 127 for c in tag) for tag in tags)):
             raise ValueError("Invalid PB9 editor filter tags")
-        result["tags"] = list(tags)
+        result["tags"] = list(dict.fromkeys(tag.strip() for tag in tags))
     return result
 
 

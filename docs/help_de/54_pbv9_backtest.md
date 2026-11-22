@@ -1,5 +1,7 @@
 # PB9 Backtest
 
+Raw-JSON- und Formularänderungen werden in Bearbeitungsreihenfolge zusammengeführt, auch beim sofortigen Speichern. Unvollständiges JSON blockiert Save, ohne ausstehende Formularänderungen zu verwerfen.
+
 Coin-Auswahl und Apply Filters verwenden die PB8-Katalog- und Filterlogik mit
 dem nativen PB9-Resolver. Normale Coins erscheinen einmal unter ihrem Namen;
 exakte Kennungen bleiben für mehrdeutige Märkte und bestehende exakte Auswahlen

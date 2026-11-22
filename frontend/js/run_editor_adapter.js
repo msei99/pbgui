@@ -506,7 +506,8 @@
       V9_SCOPES.forEach(function (scope) {
         var path = ['bot', scope, 'strategy'];
         var store = cp.get(target, path);
-        if (!store || typeof store !== 'object' || Array.isArray(store)) return;
+        if (!store) store = {};
+        if (typeof store !== 'object' || Array.isArray(store)) return;
         Object.keys(store).forEach(function (name) {
           if (name === kind) return;
           strategyCache[scope][name] = clone(store[name]);
@@ -514,6 +515,7 @@
         });
         if (store[kind] === undefined && strategyCache[scope][kind] !== undefined) store[kind] = clone(strategyCache[scope][kind]);
         if (!Object.keys(store).length) cp.remove(target, path, 2);
+        else cp.set(target, path, store);
       });
     }
 
@@ -631,6 +633,21 @@
       },
       configureRuntimeConfig: function () {
         return [];
+      },
+      resetDocumentState: function () {
+        // Inactive strategies belong to one editing document, never its replacement.
+        strategyCache = { global: {}, long: {}, short: {} };
+      },
+      applyRawDocumentState: function (before, after) {
+        // Editing unrelated Raw fields must retain same-document switch-back.
+        // A changed account/schema/strategy tree invalidates inactive strategies.
+        function identity(document) {
+          return [paths().get(document, ['config_version']), paths().get(document, ['live','account','user']),
+            paths().get(document, V9_STRATEGY_PATH)].concat(V9_SCOPES.map(function(scope) {
+              return paths().get(document, ['bot',scope,'strategy']);
+            }));
+        }
+        if (JSON.stringify(identity(before || {})) !== JSON.stringify(identity(after || {}))) this.resetDocumentState();
       },
       coinOverrideOptions: function (apiBase) {
         return {

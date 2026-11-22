@@ -65,7 +65,8 @@ def test_vps_agent_samples_only_running_wallet_once(monkeypatch):
     assert monitor_agent._HL_RATE_LIMITS_BY_USER["hl_two"]["cap"] == 100
 
 
-def test_vps_agent_uses_pb8_projection_without_pb7(monkeypatch, tmp_path):
+@pytest.mark.parametrize("runtime", ["8", "9"])
+def test_vps_agent_uses_pb8_projection_without_pb7(monkeypatch, tmp_path, runtime):
     """A PB8-only VPS resolves running wallets from its projected API keys."""
     import User
 
@@ -104,10 +105,13 @@ def test_vps_agent_uses_pb8_projection_without_pb7(monkeypatch, tmp_path):
     pb8_keys = tmp_path / "api-keys.json"
     pb8_keys.write_text("{}")
     snapshot = {"generated_at": monitor_agent.time.time(),
-                "v8": [{"name": "bot_a", "user": "hl_one", "running": True},
+                "v" + runtime: [{"name": "bot_a", "user": "hl_one", "running": True},
                        {"name": "bot_b", "user": "hl_two", "running": True}]}
     monkeypatch.setattr(User, "Users", Pb8OnlyUsers)
-    monkeypatch.setattr(monitor_agent.pbgui_purefunc, "pb8dir", lambda: str(tmp_path))
+    monkeypatch.setattr(monitor_agent.pbgui_purefunc, "pb8dir", lambda: str(tmp_path) if runtime == "8" else "")
+    import configparser
+    cfg = configparser.ConfigParser(); cfg['main'] = {'pb9dir': str(tmp_path)}
+    monkeypatch.setattr(monitor_agent, '_read_ini', lambda: cfg)
     monkeypatch.setattr(monitor_agent, "_read_json", lambda *args: snapshot)
     monkeypatch.setattr(monitor_agent, "_HL_RATE_LIMITS_BY_USER", {})
     calls = []

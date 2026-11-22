@@ -206,6 +206,7 @@ def _python_versions() -> dict[str, str]:
         "PBGui": f"Python {platform.python_version()}",
         "PB7": system_stats.python_version(str(load_ini("main", "pb7venv") or "").strip()),
         "PB8": system_stats.python_version(str(load_ini("main", "pb8venv") or "").strip()),
+        "PB9": system_stats.python_version(str(load_ini("main", "pb9venv") or "").strip()),
     }
 
 
