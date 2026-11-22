@@ -2118,11 +2118,18 @@ async function refreshHostCapabilities() {
     if (!payload) return;
     var currentSelection = getVal('f-enabled-on');
     if (currentSelection && currentSelection !== selected) selected = currentSelection;
+    var previousHosts = allHosts;
     hostCapabilitiesByName = payload.host_capabilities || {};
     allHosts = payload.hosts || allHosts;
+    if (runEditorAdapter.metadataDriven) {
+      Object.keys(hostCapabilitiesByName).forEach(function(host) {
+        if ((hostCapabilitiesByName[host].pb9_capable === true || previousHosts.indexOf(host) >= 0)
+            && allHosts.indexOf(host) < 0) allHosts.push(host);
+      });
+    }
     if (selected && selected !== 'disabled' && allHosts.indexOf(selected) < 0) {
       var selectedCapability = hostCapabilitiesByName[selected] || null;
-      if (!selectedCapability || selectedCapability.schema_compatible !== false) allHosts.push(selected);
+      if (runEditorAdapter.metadataDriven || !selectedCapability || selectedCapability.schema_compatible !== false) allHosts.push(selected);
     }
     populateHosts();
     var select = document.getElementById('f-enabled-on');
@@ -2165,9 +2172,14 @@ function updateEnabledOnAvailability() {
     }
     var capability = hostCapabilitiesByName[opt.value] || null;
     var schemaBlocked = (runEditorAdapter.isV8 || runEditorAdapter.metadataDriven) && capability && capability.schema_compatible === false;
-    opt.disabled = !capability || capability[runEditorAdapter.capabilityKey] !== true || schemaBlocked;
+    var targetBlocked = capability && (runEditorAdapter.metadataDriven
+      ? capability.target_eligible !== true : capability.target_eligible === false);
+    opt.disabled = !capability || capability[runEditorAdapter.capabilityKey] !== true || schemaBlocked || targetBlocked;
+    opt.title = capability ? String(capability.reason || '') : '';
     if (schemaBlocked) {
       opt.textContent += ' (' + String(capability.schema_reason || ((runEditorAdapter.label || 'PB8') + ' config schema unsupported')) + ')';
+    } else if (targetBlocked) {
+      opt.textContent += ' (' + String(capability.reason || 'Cluster target unavailable') + ')';
     } else if (opt.disabled) {
       opt.textContent += ' (' + runEditorAdapter.label + ' capability unconfirmed)';
     }
@@ -4445,6 +4457,8 @@ _editorInitPromise = init();
     if (main && Number.isFinite(state.scroll)) main.scrollTop = state.scroll;
   }
   async function update() {
+    if (!alive || controller || document.hidden) return;
+    await refreshHostCapabilities();
     if (!alive || controller || document.hidden || IS_NEW === 'true' || !INSTANCE_NAME || dirty || _configLoadFailed) return;
     var snapshot = cfg;
     controller = new AbortController();
@@ -4488,6 +4502,8 @@ _editorInitPromise = init();
   window.addEventListener('pagehide', function () {
     alive = false; saveView(); clearTimeout(viewTimer); clearInterval(timer);
     if (controller) controller.abort();
+    ++_hostCapabilityGeneration;
+    if (_hostCapabilityController) _hostCapabilityController.abort();
   });
   window.addEventListener('pageshow', function (event) {
     if (event.persisted) { alive = true; timer = setInterval(update, 10000); update(); }

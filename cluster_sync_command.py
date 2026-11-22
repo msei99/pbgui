@@ -2933,7 +2933,8 @@ def _pb8_materialization_blockers(
     try:
         if runtime == "pb9":
             from pbgui_purefunc import load_ini_snapshot
-            pb8_directory = load_ini_snapshot().get("main", "pb9dir", fallback="").strip()
+            snapshot = load_ini_snapshot()
+            pb8_directory = snapshot.get("main", "pb9dir").strip() if snapshot.has_option("main", "pb9dir") else ""
         else:
             pb8_directory = str(pb8dir() or "").strip()
     except Exception:

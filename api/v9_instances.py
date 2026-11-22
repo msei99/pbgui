@@ -1403,13 +1403,15 @@ def _op_last_active_host(args, body, cancel_event) -> dict[str, Any]:
 
 
 def _op_log(args, body, cancel_event) -> dict[str, Any]:
-    """Read the own local error log, or the newest backed-up one."""
+    """Keep an enabled remote assignment authoritative over old local logs."""
     name = _validate_name(args["name"])
     lines = args.get("lines")
     if type(lines) is not int or not 1 <= lines <= 10000:
         raise HTTPException(status_code=422, detail="lines must be between 1 and 10000")
     host_info = _last_active_host(name)
     master = host_info["master"]
+    if host_info["source"] == "current" and host_info["host"] != master:
+        return {**host_info, "log": "", "source": "remote", "source_label": f"assigned host ({host_info['host']})"}
     directory = _instance_dir(name)
     if not _data_root().is_symlink() and not _run_root().is_symlink() and not directory.is_symlink():
         for filename in _LOG_FILES:
@@ -1455,6 +1457,7 @@ def _op_hosts(args, body, cancel_event) -> dict[str, Any]:
     compatible = supported == required if required and supported else None
     capability.update({
         "name": master,
+        "target_eligible": capability["pb9_capable"] is True and compatible is not False,
         "required_config_schema": required or None,
         "schema_compatible": compatible,
         "schema_reason": (
@@ -1479,12 +1482,14 @@ def _op_hosts(args, body, cancel_event) -> dict[str, Any]:
             candidate["schema_compatible"] = (shared._host_supports_config_schema(required, supported)
                                                if required else supported.startswith("v9."))
             candidate["name"] = host
+            candidate["target_eligible"] = False
             candidate["schema_reason"] = "PB9 schema support requires fresh host metadata"
             capabilities[host] = candidate
             if (candidate.get("pb9_capable") is True and candidate["schema_compatible"] is True
                     and supported.startswith("v9.") and node.get("enabled") is not False
                     and node.get("state_replica") is not False and node.get("sync_mode") == "reachable"):
                 _cluster_context(host, required or supported)
+                candidate["target_eligible"] = True
                 hosts.append(host)
         except HTTPException as exc:
             if host in capabilities:

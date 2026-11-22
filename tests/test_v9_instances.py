@@ -296,6 +296,58 @@ def test_remote_restart_and_observation_keep_pb9_identity(remote_run):
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize('remote_result', ['fresh remote log', '', None])
+def test_remote_log_never_selects_leftover_local_log(remote_run, remote_result):
+    """A moved instance stays on its assigned host even before remote logs arrive."""
+    from api import vps
+    s = remote_run
+    _save(s)
+    path = s.root / 'data/run_v9/fixture/passivbot_err.log'
+    path.write_text('old local output')
+    calls = []
+
+    async def remote_log(host, name, **kwargs):
+        """Model success, an empty remote log, and a transient transport failure."""
+        calls.append((host, name, kwargs['pb_version']))
+        if remote_result is None:
+            raise TimeoutError('synthetic')
+        return remote_result
+
+    s.monkeypatch.setattr(vps, 'get_bot_log_tail', remote_log)
+    data = s.client.get('/api/v9/instances/fixture/log-smart?lines=1').json()
+    assert data['host'] == 'remote'
+    assert data['source'] == 'remote'
+    assert data['log'] == (remote_result or '')
+    assert calls == [('remote', 'fixture', '9')]
+
+
+def test_local_log_and_disabled_history_remain_readable(run_api):
+    """Disabled local post-mortems retain their existing log and backup behavior."""
+    s = run_api
+    _save(s)
+    path = s.root / 'data/run_v9/fixture/passivbot_err.log'
+    path.write_text('local output')
+    data = s.client.get('/api/v9/instances/fixture/log-smart?lines=1').json()
+    assert data['host'] == 'node' and data['log'] == 'local output'
+
+
+def test_blocked_remote_host_reports_disabled_selection(remote_run):
+    """A ready target with failed Cluster checks carries a non-selectable reason."""
+    s = remote_run
+    s.monkeypatch.setattr(api, '_local_capability', lambda *_: {
+        'pb9_capable': True, 'config_schema': 'v9.0.0'})
+    def blocked(*args):
+        """Keep placement blocked without changing runtime readiness."""
+        raise api.HTTPException(409, 'PB9 materialization blocked')
+    s.monkeypatch.setattr(api, '_cluster_context', blocked)
+    data = s.client.get('/api/v9/hosts?config_schema=v9.0.0').json()
+    assert 'remote' not in data['hosts']
+    capability = data['host_capabilities']['remote']
+    assert capability['pb9_capable'] is True
+    assert capability['target_eligible'] is False
+    assert capability['reason'] == 'PB9 materialization blocked'
+
+
 def test_remote_delete_requires_disabled_and_fresh_stopped_proof(remote_run):
     """Stale remote state never authorizes removal of the local source or a tombstone."""
     import time

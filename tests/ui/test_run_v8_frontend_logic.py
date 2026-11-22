@@ -675,6 +675,48 @@ def test_pb8_log_panel_uses_smart_history_and_backup_viewer_alias() -> None:
     assert "'/instances/' + encodeURIComponent(INSTANCE_NAME) + '/restart'" in open_log_panel
 
 
+def test_pb9_host_refresh_preserves_target_and_explains_cluster_failure() -> None:
+    """Temporary readiness failures disable the existing target without losing edits."""
+    page = (ROOT / 'frontend/v7_edit.html').read_text()
+    functions = '\n'.join(_exact_page_function(page, name) for name in (
+        'refreshHostCapabilities', 'populateHosts', 'updateEnabledOnAvailability'))
+    _run_node('(async () => {\n' + functions + r'''
+      document.body.innerHTML = '<select id="f-enabled-on"><option value="remote" selected>remote</option></select>';
+      const assert = browserAssert;
+      const runEditorAdapter = {metadataDriven:true, capabilityKey:'pb9_capable', label:'PB9'};
+      var allHosts = ['disabled','node','remote'];
+      var hostCapabilitiesByName = {};
+      function getVal(id) { return document.getElementById(id).value; }
+      var capability = {pb9_capable:true, schema_compatible:true, target_eligible:false, reason:'Cluster check pending'};
+      async function requestHostCapabilities() { return {
+        hosts:['disabled','node'], host_capabilities:{node:{pb9_capable:true,target_eligible:true},remote:capability}
+      }; }
+      await refreshHostCapabilities();
+      var select = document.getElementById('f-enabled-on');
+      assert.strictEqual(select.value, 'remote');
+      assert.strictEqual(select.selectedOptions[0].disabled, true);
+      assert.ok(select.selectedOptions[0].textContent.includes('Cluster check pending'));
+      capability = {pb9_capable:null, reason:'PB9 runtime metadata is stale'};
+      await refreshHostCapabilities();
+      assert.strictEqual(select.value, 'remote');
+      assert.strictEqual(select.selectedOptions[0].disabled, true);
+      assert.strictEqual(select.selectedOptions[0].title, 'PB9 runtime metadata is stale');
+      capability = {pb9_capable:true, schema_compatible:true, target_eligible:true};
+      await refreshHostCapabilities();
+      assert.strictEqual(select.value, 'remote');
+      assert.strictEqual(select.selectedOptions[0].disabled, false);
+      capability = {pb9_capable:true, schema_compatible:true};
+      await refreshHostCapabilities();
+      assert.strictEqual(select.value, 'remote');
+      assert.strictEqual(select.selectedOptions[0].disabled, true);
+      capability = {pb9_capable:true, schema_compatible:false, schema_reason:'Unsupported schema'};
+      await refreshHostCapabilities();
+      assert.strictEqual(select.value, 'remote');
+      assert.strictEqual(select.selectedOptions[0].disabled, true);
+      })().catch(error => { console.error(error); finishTest(1); });
+    ''')
+
+
 def test_save_waits_for_editor_initialization_before_validating_raw_json() -> None:
     """An early Save click must not validate the temporarily empty Raw JSON field."""
 

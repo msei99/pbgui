@@ -70,7 +70,7 @@ def editor():
             elif path == '/api/v9/users':
                 route.fulfill(json={'users': [{'name': 'fixture', 'exchange': 'bybit'}]})
             elif path == '/api/v9/hosts':
-                route.fulfill(json={**getattr(state, 'hosts_payload', {'hosts': ['disabled', 'fixture-host'], 'host_capabilities': {'fixture-host': {'pb9_capable': True}}}), 'request_id': parse_qs(url.query).get('request_id', [''])[0]})
+                route.fulfill(json={**getattr(state, 'hosts_payload', {'hosts': ['disabled', 'fixture-host'], 'host_capabilities': {'fixture-host': {'pb9_capable': True, 'target_eligible': True}}}), 'request_id': parse_qs(url.query).get('request_id', [''])[0]})
             elif path.endswith('/next-version'):
                 route.fulfill(json={'next_version': 1, 'version': 1})
             elif path.endswith('/config') and route.request.method == 'PUT':
@@ -424,7 +424,7 @@ def test_joined_remote_target_uses_existing_host_control_and_save(editor):
     page = editor.page
     editor.hosts_payload = {
         'hosts': ['disabled', 'fixture-host', 'remote'],
-        'host_capabilities': {'remote': {'pb9_capable': True, 'confirmed': True,
+        'host_capabilities': {'remote': {'pb9_capable': True, 'confirmed': True, 'target_eligible': True,
                                        'schema_compatible': True, 'config_schema': 'v9.0.0'}},
     }
     page.reload()
@@ -436,4 +436,36 @@ def test_joined_remote_target_uses_existing_host_control_and_save(editor):
     while not editor.saved and time.monotonic() < deadline:
         page.wait_for_timeout(25)
     assert editor.saved and editor.saved[-1]['config']['pbgui']['enabled_on'] == 'remote'
+    assert not editor.errors and not editor.unexpected
+
+
+def test_target_readiness_updates_without_replacing_dirty_assignment(editor):
+    """The real PB9 page keeps a selected host through failure and recovery."""
+    page = editor.page
+    editor.hosts_payload = {
+        'hosts': ['disabled', 'remote'],
+        'host_capabilities': {'remote': {'pb9_capable': True, 'target_eligible': True,
+                                       'schema_compatible': True}},
+    }
+    page.reload()
+    expect(page.locator('#f-enabled-on option[value="remote"]')).to_have_count(1)
+    page.locator('#f-enabled-on').select_option('remote')
+    page.locator('#btn-save').click()
+    expect(page.locator('#f-version')).to_have_value('1')
+    assert editor.saved[-1]['config']['pbgui']['enabled_on'] == 'remote'
+    expect(page.locator('#f-enabled-on')).to_have_value('remote')
+    page.locator('#f-note').fill('unsaved note')
+    editor.hosts_payload['hosts'] = ['disabled']
+    capability = editor.hosts_payload['host_capabilities']['remote']
+    capability.update(target_eligible=False, reason='Cluster check pending')
+    page.evaluate('document.dispatchEvent(new Event("visibilitychange"))')
+    expect(page.locator('#f-enabled-on option[value="remote"]')).to_be_disabled()
+    expect(page.locator('#f-enabled-on')).to_have_value('remote')
+    expect(page.locator('#f-note')).to_have_value('unsaved note')
+    assert 'Cluster check pending' in page.locator('#f-enabled-on option[value="remote"]').text_content()
+    capability.update(target_eligible=True)
+    page.evaluate('document.dispatchEvent(new Event("visibilitychange"))')
+    expect(page.locator('#f-enabled-on option[value="remote"]')).to_be_enabled()
+    expect(page.locator('#f-note')).to_have_value('unsaved note')
+    assert len(editor.saved) == 1
     assert not editor.errors and not editor.unexpected

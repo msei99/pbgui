@@ -45,6 +45,6 @@ Before moving an existing instance to another host, disable it and wait for a fr
 
 ## Backups and logs
 
-Previous saved versions are backed up with the PBGui sidecar. Open a backup as an editor draft or restore it to a new version. Restoring initially disables the instance. Running instances must be stopped before deletion. Use the shared log panel to inspect local runtime output. Restart stops the exact managed process so PBRun can relaunch it through its regular checks.
+Previous saved versions are backed up with the PBGui sidecar. Open a backup as an editor draft or restore it to a new version. Restoring initially disables the instance. Running instances must be stopped before deletion. The shared log panel follows the saved execution host. While an enabled remote host has no log available, it keeps that host selected instead of displaying old local output. Disabled instances retain local and backup log access. Previously detected targets remain visible but disabled when Cluster readiness fails; eligibility updates automatically without changing your selection. Restart stops the exact managed process so PBRun can relaunch it through its regular checks.
 
 The list updates automatically. Browser refresh preserves its search, sorting and navigation context. The Guide opens over the current page; Information → Help opens the complete documentation.

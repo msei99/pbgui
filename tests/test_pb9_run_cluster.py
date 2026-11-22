@@ -14,6 +14,34 @@ from master.cluster_checkpoint import build_shadow_checkpoint, materialize_check
 from tests.test_pb8_cluster_sync import _write_manifest, CLUSTER_ID, NODE_A
 
 
+@pytest.mark.parametrize('configured', [True, False])
+def test_pb9_materialization_reads_real_ini_snapshot(tmp_path, monkeypatch, configured):
+    """Use the actual snapshot contract so unsupported get keywords cannot be hidden."""
+    from pbgui_purefunc import load_ini_snapshot
+    import pbgui_purefunc
+    app = tmp_path / 'pbgui'
+    app.mkdir()
+    bot = tmp_path / 'pb9'
+    (bot / '.git').mkdir(parents=True)
+    ini = app / 'pbgui.ini'
+    ini.write_text('[main]\n' + (f'pb9dir = {bot}\n' if configured else ''))
+    snapshot = load_ini_snapshot(ini)
+    monkeypatch.setattr(pbgui_purefunc, 'load_ini_snapshot', lambda: snapshot)
+    monkeypatch.setattr(sync, 'PBGDIR', app)
+    monkeypatch.setattr(sync, '_build_materialize_api_keys_plan', lambda *args: {
+        'status': 'ok', 'counts': {'error': 0},
+        'projection_paths': {'pb9': str(bot / 'api-keys.json')},
+        'projections': {'pb9': 'current'},
+    })
+    desired = {'pb9_instances': {'fixture': {'assigned_host': NODE_A}}, 'api_keys': {}}
+    blockers = sync._pb8_materialization_blockers(
+        app / 'data/cluster', desired, NODE_A, materialize_all=False, runtime='pb9')
+    if configured:
+        assert blockers == []
+    else:
+        assert blockers == ['PB9 runtime is not cloned; exchange-key projection is unavailable']
+
+
 @pytest.fixture
 def cluster(tmp_path, monkeypatch):
     """Use a private temporary cluster; never inspect production credentials or processes."""
