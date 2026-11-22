@@ -301,6 +301,7 @@ def test_real_watchers_dispatch_rotation_and_respect_cluster_stop(setup, monkeyp
         setup.writer = writer
         setup.journal = CredentialRuntimeJournal(writer.api_keys_path, writer.projection_status_path)
         runner.pb8dir = pb8
+        runner.runtime_generation = pbrun.RunV8.runtime_generation
         runner.live_user = 'alice'
         original = runner.start.__wrapped__
         runner.start = pbrun._credential_launch('pb8')(original).__get__(runner)

@@ -210,6 +210,7 @@ def test_pareto_keeps_custom_z_across_dimensions():
     code=function('v7_pareto_explorer.html','updatePlaygroundCustomUi')+function('v7_pareto_explorer.html','preserveCurrentCustomMetrics')
     execute(code+r'''
 const assert=browserAssert;const state={playground:{quickView:'Custom...',vizType:'2D Scatter',customZMetric:'chosen'}};
+const optimizeVersion=()=>'v8';
 const el=()=>({style:{}}),filterCustomMetrics=x=>x,setSelectOptions=(node,options,value,fallback)=>value||fallback||options[0];
 const payload={available_metrics:['fallback','chosen'],metrics:{x_metric:'x',y_metric:'y'}};
 updatePlaygroundCustomUi(payload);preserveCurrentCustomMetrics(payload);assert.equal(state.playground.customZMetric,'chosen');

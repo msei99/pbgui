@@ -1941,6 +1941,38 @@ def test_results_reuse_persistent_summary_index(tmp_path, monkeypatch) -> None:
     assert second == first
 
 
+def test_isolated_warm_page_retains_managed_result_identity(tmp_path, monkeypatch) -> None:
+    """The reader shortcut returns the same managed identity as a cold index read."""
+    from ai_capabilities import AICapabilityService
+
+    root = tmp_path / 'pb8' / 'backtests' / 'pbgui'
+    result_dir = root / 'demo' / 'bybit' / 'run-1'
+    result_dir.mkdir(parents=True)
+    analysis = result_dir / 'analysis.json'
+    analysis.write_text(json.dumps({'gain_usd': 1.2}))
+    (result_dir / 'config.json').write_text(json.dumps({
+        'backtest': {'starting_balance': 1000}, 'bot': {}, 'live': {}}))
+    monkeypatch.setattr(backtest_v8, '_results_root', lambda: root)
+    monkeypatch.setattr(backtest_v8, '_result_analysis_paths', lambda *_: [analysis])
+    monkeypatch.setattr(backtest_v8, '_result_discovery_worker', None)
+    monkeypatch.setattr(backtest_result_index, 'PBGDIR', str(tmp_path))
+    cold = backtest_v8.get_results(offset=0, limit=100, session=None)
+    cached = backtest_result_index._cached_payloads('v8', {
+        str(result_dir): backtest_result_index.result_signature(analysis, version='v8')})
+    assert 'resource' not in cached[str(result_dir)]
+    monkeypatch.setattr(backtest_v8, '_result_discovery_worker', SimpleNamespace(
+        cached_page=lambda *_: copy.deepcopy(cached)))
+    monkeypatch.setattr(backtest_v8, '_list_results',
+        lambda *_: pytest.fail('A complete warm page must not rebuild its summaries'))
+    monkeypatch.setattr(backtest_v8, 'load_indexed_results',
+        lambda *_args, **_kwargs: pytest.fail('The isolated warm-page shortcut must be exercised'))
+    warm = backtest_v8.get_results(offset=0, limit=100, session=None)
+    expected = AICapabilityService._virtual_uri('backtest', 'v8', str(result_dir))
+    assert cold['results'][0]['resource'] == expected
+    assert warm['results'] == cold['results']
+    assert str(tmp_path) not in warm['results'][0]['resource']
+
+
 def test_result_list_uses_analysis_terminal_values_without_opening_large_csv(tmp_path, monkeypatch) -> None:
     """Modern compact summaries must not stream balance history during list loading."""
     root = tmp_path / "pb8" / "backtests" / "pbgui"

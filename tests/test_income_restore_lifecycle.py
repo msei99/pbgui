@@ -39,6 +39,21 @@ def isolated_runtime(tmp_path, monkeypatch):
         inspect=Mock(return_value="systemd"), stop=Mock(), start=Mock(),
     )))
     monkeypatch.setattr(dashboard, "_income_restore_active", threading.Event())
+    for name, value in (("_server_restart_task", None), ("_api_restart_handoff_task", None),
+                        ("_api_restart_lease", None), ("_server_restart_request", {}),
+                        ("_sse_subscribers", [])):
+        monkeypatch.setattr(PBApiServer, name, value)
+    restart_attempted = threading.Event()
+    acquire_restart = PBApiServer._acquire_api_restart_leases
+
+    def observe_restart_admission():
+        """Signal after the real temporary-lock reservation attempt has completed."""
+        try:
+            return acquire_restart()
+        finally:
+            restart_attempted.set()
+
+    monkeypatch.setattr(PBApiServer, "_acquire_api_restart_leases", observe_restart_admission)
     for name in ("_get_db", "_pbdata_stop", "_pbdata_start"):
         monkeypatch.setattr(dashboard, name, Mock(side_effect=AssertionError(name)))
     for name in ("_backup_local_file", "_pool"):
@@ -59,7 +74,7 @@ def isolated_runtime(tmp_path, monkeypatch):
     ))
     monkeypatch.setattr(dashboard, "_log", Mock())
     monkeypatch.setattr(database_mod, "_human_log", Mock())
-    yield
+    yield restart_attempted
     for name in ("_get_db", "_pbdata_stop", "_pbdata_start"):
         getattr(dashboard, name).assert_not_called()
     PBApiServer._restart_status_payload.assert_not_called()
@@ -78,7 +93,12 @@ def client():
     app.dependency_overrides[dashboard.require_auth] = lambda: object()
     app.dependency_overrides[PBApiServer.require_auth] = lambda: object()
     with TestClient(app) as test_client:
-        yield test_client
+        try:
+            yield test_client
+        finally:
+            test_client.portal.call(PBApiServer._shutdown_requested_restart)
+            assert not PBApiServer._api_restart_pending()
+            assert PBApiServer._server_restart_request == {}
 
 
 @pytest.fixture
@@ -203,7 +223,7 @@ def test_existing_lease_blocks_restore_before_helper(client, database, tmp_path,
 
 
 @pytest.mark.parametrize("fail", [False, True])
-def test_active_restore_excludes_installer_second_restore_and_restart(client, tmp_path, monkeypatch, fail):
+def test_active_restore_excludes_installer_second_restore_and_restart(client, tmp_path, monkeypatch, fail, isolated_runtime):
     """An overlapping restore owns admission until its callback succeeds or fails."""
     entered, release = threading.Event(), threading.Event()
 
@@ -231,7 +251,14 @@ def test_active_restore_excludes_installer_second_restore_and_restart(client, tm
             db_tools._start_target_pbdata.assert_not_called()
             assert client.post("/api/dashboard/income/restore", json={"path": "unused.db"}).status_code == 409
             assert dashboard.restart_block_reason() == reason
-            assert client.post("/api/server-restart").status_code == 409
+            response = client.post("/api/server-restart")
+            assert response.status_code == 200
+            assert response.json()["restart_request"]["state"] == "waiting"
+            assert isolated_runtime.wait(5), "Restart coordinator never attempted admission"
+            PBApiServer._restart_current_api_systemd_unit.assert_not_called()
+            client.portal.call(PBApiServer._shutdown_requested_restart)
+            assert not PBApiServer._api_restart_pending()
+            PBApiServer._restart_current_api_systemd_unit.assert_not_called()
             callback.assert_called_once()
         finally:
             release.set()
@@ -304,8 +331,22 @@ def test_restart_route_honors_restore_reason_and_releases_reservation(client, tm
     dashboard._income_restore_active.set()
     try:
         response = client.post("/api/server-restart")
-        assert response.status_code == 409
-        assert dashboard.restart_block_reason() in response.json()["detail"]
+        assert response.status_code == 200
+        assert response.json()["restart_request"]["state"] == "waiting"
+
+        async def observe_restore_blocker():
+            """Observe the real blocked coordinator before cancelling its owned task."""
+            async def wait_for_reason():
+                while dashboard.restart_block_reason() not in PBApiServer._server_restart_request.get("reason", ""):
+                    await asyncio.sleep(0.01)
+            await asyncio.wait_for(wait_for_reason(), 2)
+
+        client.portal.call(observe_restore_blocker)
+        PBApiServer._restart_current_api_systemd_unit.assert_not_called()
+        client.portal.call(PBApiServer._shutdown_requested_restart)
+        assert not PBApiServer._api_restart_pending()
+        assert PBApiServer._server_restart_request == {}
+        PBApiServer._restart_current_api_systemd_unit.assert_not_called()
         with acquire_master_update_lock(tmp_path):
             pass
     finally:

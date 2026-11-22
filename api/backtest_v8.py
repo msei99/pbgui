@@ -52,7 +52,7 @@ from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log, rotate_managed_log_before_open
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from backtest_autostart import BacktestQueueWorker, claim_backtest_slot, publish_backtest_process, release_backtest_slot
-from backtest_result_index import invalidate_result as invalidate_result_index, load_indexed_results, _SUMMARY_SCHEMA_VERSION
+from backtest_result_index import attach_result_resources, invalidate_result as invalidate_result_index, load_indexed_results, _SUMMARY_SCHEMA_VERSION
 from backtest_result_discovery import ResultDiscoveryUnavailable, ResultDiscoveryWorker, discover_result_paths
 from ParetoDataLoader import _flatten_bot_params
 from pareto_preset_generator import (
@@ -3198,7 +3198,7 @@ def get_results(
         except (OSError, ValueError, ResultDiscoveryUnavailable) as exc:
             _log(SERVICE, 'Isolated result cache read unavailable; using the index', level='WARNING',
                  meta={'error_type': type(exc).__name__})
-    summaries = ([warm[str(path.parent)] for path in page_paths]
+    summaries = (attach_result_resources('v8', [warm[str(path.parent)] for path in page_paths])
         if page_paths and all(str(path.parent) in warm for path in page_paths)
         else load_indexed_results(
             "v8", page_paths, lambda selected: _list_results(selected),

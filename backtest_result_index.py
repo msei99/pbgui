@@ -93,6 +93,17 @@ def _cached_payloads(version, signatures):
         return cached_payloads(connection, version, signatures)
 
 
+def attach_result_resources(version: str, results: list[dict]) -> list[dict]:
+    """Attach managed AI identities to response copies, independently of cache transport."""
+    normalized_version = str(version).lower()
+    for item in results:
+        identity = str(item.get('path') or '')
+        if identity:
+            opaque = hashlib.sha256(f'backtest\0{normalized_version}\0{identity}'.encode('utf-8')).hexdigest()[:32]
+            item['resource'] = f'pbgui://backtest/{normalized_version}/{opaque}'
+    return results
+
+
 @contextmanager
 def _build_ownership(version, cancel_check):
     """Serialize cold reads per generation while keeping cancellation responsive."""
@@ -194,14 +205,7 @@ def load_indexed_results(
     if cancel_check:
         cancel_check()
     results = [copy.deepcopy(payloads[str(path.parent)]) for path in paths if str(path.parent) in payloads]
-    # Match the AI capability registry's non-reversible managed result identity.
-    # Enrich warm and fallback reads without rebuilding the persistent index.
-    for item in results:
-        identity = str(item.get('path') or '')
-        if identity:
-            opaque = hashlib.sha256(f'backtest\0{normalized_version}\0{identity}'.encode('utf-8')).hexdigest()[:32]
-            item['resource'] = f'pbgui://backtest/{normalized_version}/{opaque}'
-    return results
+    return attach_result_resources(normalized_version, results)
 
 
 def invalidate_result(version: str, result_path: Path) -> None:

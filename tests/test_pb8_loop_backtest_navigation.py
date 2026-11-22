@@ -49,6 +49,7 @@ function showLog(id){logs.push(id);}
 function initializeBacktestLoopReturn(){}
 async function openInitialBacktestDraftFromUrl(){return false;}
 async function openInitialBacktestQueueDraftFromUrl(){return false;}
+async function restoreBacktestDraftForRefresh(){return false;}
 function editConfig(){}
 '''+function+'''
 (async()=>{

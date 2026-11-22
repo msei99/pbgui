@@ -169,7 +169,8 @@ def test_local_kill_does_not_require_startable_config(tmp_path, monkeypatch, ver
     runner.load.return_value = False
     runner.pid.return_value = SimpleNamespace(pid=4321) if running else None
     constructors = SimpleNamespace(PBRun=Mock(return_value=supervisor),
-                                   RunV7=Mock(return_value=runner), RunV8=Mock(return_value=runner))
+                                   RunV7=Mock(return_value=runner), RunV8=Mock(return_value=runner),
+                                   RunV9=Mock())
     monkeypatch.setitem(sys.modules, "PBRun", constructors)
     result = asyncio.run(vps._local_kill_instance("alice", version))
     assert result["success"] is running
@@ -179,12 +180,13 @@ def test_local_kill_does_not_require_startable_config(tmp_path, monkeypatch, ver
     runner.load.assert_not_called()
     assert runner.stop.call_count == int(running)
     assert getattr(constructors, f"RunV{version}").call_count == 1
+    constructors.RunV9.assert_not_called()
 
 
 @pytest.mark.parametrize("name,version", [("../alice", "8"), ("alice\x00", "7"), ("alice", "6")])
 def test_local_kill_retains_identifier_validation(monkeypatch, name, version):
     """Invalid commands never construct a supervisor or inspect real processes."""
-    constructors = SimpleNamespace(PBRun=Mock(), RunV7=Mock(), RunV8=Mock())
+    constructors = SimpleNamespace(PBRun=Mock(), RunV7=Mock(), RunV8=Mock(), RunV9=Mock())
     monkeypatch.setitem(sys.modules, "PBRun", constructors)
     assert asyncio.run(vps._local_kill_instance(name, version))["success"] is False
     constructors.PBRun.assert_not_called()

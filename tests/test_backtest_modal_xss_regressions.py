@@ -36,12 +36,14 @@ def test_stored_balances_and_dates_cannot_create_modal_markup(name, balance, exp
     source = (root / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
     date_input_source = (root / "frontend" / "js" / "date_overwrite.js").read_text(encoding="utf-8")
     names = [name, "backtestDialogDateInputHtml", "esc", "escAttr", "normalizeArchiveMarketDataPath",
-             "archiveConfigUsesPbguiMarketData", "archiveRetestDefaultDays"]
+             "archiveConfigUsesPbguiMarketData", "archiveRetestDefaultDays", "archiveResultByPath",
+             "archiveExchangeChoices"]
     functions = "\n".join(re.search(r"^function " + function + r"\(.*?^}", source, re.M | re.S).group() for function in names)
     cfg = {"backtest": {"starting_balance": balance, "exchanges": ["bybit", '"><svg onload=alert(1)>'],
                         "start_date": '"><img src=x onerror=alert(1)>', "end_date": '" autofocus onfocus=alert(1) x="'}}
     script = r"""
 const cfg = CONFIG;
+const archiveResults = [];
 let body = null;
 const errors = [];
 const window = globalThis;

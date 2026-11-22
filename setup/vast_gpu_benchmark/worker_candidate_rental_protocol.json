@@ -3,8 +3,8 @@
     "state": "unpublished_candidate",
     "base_image": "ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1",
     "base_revision": "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a",
-    "candidate_tag": "pbgui-pb8-worker:b9d6692-rental-protocol-v3-runtime-dispatch-candidate",
-    "worker_source_sha256": "aa12f83cd82af7969e925b505b1709bfee9c065039e279070e7694354690df50",
+    "candidate_tag": "pbgui-pb8-worker:b9d6692-rental-protocol-v3-v2.12.0-source-candidate",
+    "worker_source_sha256": "940ffcff21ceb6885d1446f02fae0b40786b51e75c7711f3251fba0f35aff68e",
     "capabilities": [
         "multi_day",
         "pareto_delta"
@@ -21,5 +21,7 @@
             "loaded Rust extension source stamp"
         ],
         "build_verifier": "/opt/pbgui/verify_fresh_population.py"
-    }
+    },
+    "worker_source_commit": "6d548e022ed7755ab2a241682b38a7fd29eb591c",
+    "source_validation": "Offline guard/deadline/delta checks against committed wrapper source; no new image build, publication or rental."
 }

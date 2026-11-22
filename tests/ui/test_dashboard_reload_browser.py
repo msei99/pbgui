@@ -366,7 +366,8 @@ def test_ppl_aggregation_controls_persist_and_update(editing, saved_sum):
         browser.close()
 
 
-def test_orders_viewport_survives_updates():
+@pytest.mark.parametrize('history_before_second_pan', [False, True], ids=['late-history', 'prefetched-history'])
+def test_orders_viewport_survives_updates(history_before_second_pan):
     """Real menu, shell and local LWC 5.2.0 retain logical ranges on isolated data."""
     from starlette.requests import Request
     from api import dashboard
@@ -389,6 +390,8 @@ def test_orders_viewport_survives_updates():
 
     candles = [candle(i) for i in range(180) if i != 40]
     snapshots, history, pending = [], [], {}
+    held_history = []
+    hold_history = False
     errors, assets = [], []
     with sync_browser() as driver:
         browser = driver.chromium.launch()
@@ -434,7 +437,10 @@ def test_orders_viewport_survives_updates():
                 elif path == '/api/dashboard/orders_data':
                     if 'since' in query:
                         history.append(query)
-                        route.fulfill(json={'candles': [candle(i) for i in range(-30, 45)]})
+                        if hold_history:
+                            held_history.append(route)
+                        else:
+                            route.fulfill(json={'candles': [candle(i) for i in range(-30, 45)]})
                     else:
                         route.fulfill(json={'user': 'alice', 'symbol': 'BTCUSDT', 'candles': candles,
                                             'position': position, 'orders': [], 'current_price': 101})
@@ -564,6 +570,8 @@ def test_orders_viewport_survives_updates():
             assert_range(panned)
 
             # Fractional historical range, then real onLoadMore with overlaps and an interior gap.
+            assert not history
+            hold_history = True
             inner.evaluate('() => ordersTest.chart.timeScale().setVisibleLogicalRange({from:30.25,to:100.75})')
             expected = {'from': 30.25, 'to': 100.75}
             assert_range(expected)
@@ -571,14 +579,26 @@ def test_orders_viewport_survives_updates():
             assert_range(expected)
             inner.evaluate('() => ordersTest.chart.timeScale().setVisibleLogicalRange({from:10.25,to:80.75})')
             settle()
-            # The preceding range can trigger its own valid prefetch depending on
-            # callback timing; the pan must not start an unbounded request loop.
-            assert 1 <= len(history) <= 2
-            history_after_pan = len(history)
+            # Hold the real history response until after the second user pan.
+            # Otherwise an earlier valid prefetch may have already prepended
+            # these rows before that pan, requiring no later +30 range shift.
+            assert len(held_history) == 1
+            assert len(history) == 1
+            hold_history = False
+            held_history.pop().fulfill(json={'candles': [candle(i) for i in range(-30, 45)]})
             assert_range({'from': 40.25, 'to': 110.75})
+            if history_before_second_pan:
+                # Completed prefetch precedes a newer user gesture: that gesture
+                # is already in the expanded dataset and needs no additional shift.
+                inner.evaluate('() => ordersTest.chart.timeScale().setVisibleLogicalRange({from:10.25,to:80.75})')
+                settle()
+            pan_range = ({'from': 10.25, 'to': 80.75} if history_before_second_pan
+                         else {'from': 40.25, 'to': 110.75})
+            history_after_pan = len(history)
+            assert_range(pan_range)
             # Restore was programmatic even though from < 20 in the pre-prepend range.
             inner.evaluate('(rows) => ordersTest.prependData(rows)', [candle(i) for i in range(-30, 45)])
-            assert_range({'from': 40.25, 'to': 110.75})
+            assert_range(pan_range)
             assert len(history) == history_after_pan
 
             # Returning within one logical bar re-enables follow and retains zoom span.

@@ -207,6 +207,7 @@ class TestReadOnlySystemdGuard:
         original=guard.process_observation
         samples={}
         terminals=[]
+        ready_ticks=0
         def observing(pid='self'):
             """Alter only live scheduler states of our own children, preserving real identities/exits."""
             observed=original(pid)
@@ -220,8 +221,16 @@ class TestReadOnlySystemdGuard:
             return observed
         def tick(delay):
             """Advance one bounded pipe barrier while the real readiness loop runs."""
+            nonlocal ready_ticks
             assert state.child is not old_child
-            assert state.stage!='ready'
+            if state.stage=='ready':
+                # Pipe publication and the next OS/guard observation need not
+                # become visible in the same scheduling slice. Keep observing
+                # the real ready child; there is no remaining barrier to advance.
+                ready_ticks+=1
+                assert ready_ticks<=5000, 'Ready publications never became observable'
+                threading.Event().wait(.001)
+                return
             state.phases.append(state.stage)
             state.advance()
         monkeypatch.setattr(guard,'process_observation',observing)

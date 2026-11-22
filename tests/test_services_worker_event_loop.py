@@ -44,6 +44,7 @@ def test_overview_summary_reads_live_workers_without_loading_queues(monkeypatch)
     """Overview counts use task ownership and never scan or parse queued bot configs."""
     from types import SimpleNamespace
     import api
+    from api.optimize_v9 import engine as pb9_engine
     import task_worker_ownership
 
     active = SimpleNamespace(_task=SimpleNamespace(done=lambda: False))
@@ -53,6 +54,7 @@ def test_overview_summary_reads_live_workers_without_loading_queues(monkeypatch)
     monkeypatch.setattr(api, 'backtest_v8', SimpleNamespace(_worker=active), raising=False)
     monkeypatch.setattr(api, 'optimize_v7', SimpleNamespace(_worker=stopped), raising=False)
     monkeypatch.setattr(api, 'optimize_v8', SimpleNamespace(_worker=active), raising=False)
+    monkeypatch.setattr(pb9_engine, '_worker', stopped)
     monkeypatch.setattr(task_worker_ownership, 'get_task_worker_status', lambda: SimpleNamespace(running=True))
 
     async def forbidden_scan():
@@ -62,7 +64,7 @@ def test_overview_summary_reads_live_workers_without_loading_queues(monkeypatch)
     monkeypatch.setattr(services, '_collect_worker_groups', forbidden_scan)
     start = time.monotonic()
     result = asyncio.run(services.get_workers_summary(session=object()))
-    assert result['counts'] == {'total': 7, 'running': 5}
+    assert result['counts'] == {'total': 8, 'running': 5}
     assert time.monotonic() - start < 1.0
 
 

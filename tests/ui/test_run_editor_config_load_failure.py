@@ -23,6 +23,7 @@ def test_config_load_failure_is_reported_and_blocks_blank_form(failure):
         '// User change → reload symbols/tags',
     )
     script = 'const failure = %r;\n' % failure
+    script += _extract('function replaceRunEditorConfig(', 'var _fromBacktestConfig')
     script += 'async function loadExistingConfig() {\n' + branch.rstrip() + '\n'
     script += r'''
 const assert = browserAssert;

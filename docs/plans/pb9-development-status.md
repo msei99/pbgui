@@ -1,6 +1,7 @@
 # PB9 integration — optional experimental feature
 
-**Integration target: `main`; preparation does not publish or update hosts.**
+**Available on `main` and in v2.12.0 as an optional experimental feature.
+Publishing the release does not update hosts.**
 
 **Status: UNFINISHED / NOT FULLY TESTED — NOT A STABLE RELEASE**
 
@@ -10,6 +11,10 @@ The PB9 integration is intended for controlled testing in the existing Cluster.
 It is not a production-readiness claim. PB9 integration is incomplete, and the
 full remote installation/update workflow has not been tested end to end on a
 real master or VPS. No host is updated merely by publishing this branch.
+
+The final v2.12.0 offline validation and corrected release checks are recorded in
+[the release notes](../../releases/v2.12.0.md). The development snapshots below
+retain their original test limits; they do not replace that final record.
 
 ## Included in this snapshot
 

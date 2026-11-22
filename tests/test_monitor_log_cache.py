@@ -277,7 +277,8 @@ def test_embedded_collector_uses_persistent_history_cache(tmp_path):
     source = INSTANCE_COLLECT_SCRIPT[len(prefix):-2]
     # Never enumerate or operate on production processes in this integration test.
     source = source.replace("os.listdir('/proc')", "[]")
-    marker = "for name, process_info in sorted(running_v8.items()):"
+    marker = "v8 = _collect_native('8', PB8DIR, PB8VENV, running_v8)"
+    assert source.count(marker) == 1
     source = source.replace(marker, f"running_v8 = {{'bot': {{'dir': {str(config_dir)!r}, 'pid': 0}}}}\n" + marker)
     env = {**os.environ, "PBGUI_PBGDIR": str(pbgui), "PBGUI_PB7DIR": str(tmp_path / "pb7"),
            "PBGUI_CACHE_VERSION": "2", "PBGUI_CACHE": "{}"}

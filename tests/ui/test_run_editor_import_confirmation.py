@@ -15,6 +15,8 @@ def test_import_preserves_draft_until_confirmed(runtime, decision):
     start = source.index('async function doImport()')
     end = source.index('\n}', start)
     script = 'const runtime = %r, decision = %r;\n' % (runtime, decision)
+    helper_start = source.index('function replaceRunEditorConfig(')
+    script += source[helper_start:source.index('var _fromBacktestConfig', helper_start)]
     script += source[start:end+2]
     script += r'''
 const assert = browserAssert;

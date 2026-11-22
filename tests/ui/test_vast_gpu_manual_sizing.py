@@ -130,8 +130,9 @@ assert(!ordinary.includes('stepNullablePositiveInteger'));
                             capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
 
-def test_queued_job_gpu_preview_uses_billions_and_keeps_exact_override():
-    """A card preview exposes each job's Auto values and stores exact custom bars."""
+@pytest.mark.parametrize('native_runtime', [False, True], ids=['pb8', 'pb9'])
+def test_queued_job_gpu_preview_uses_billions_and_keeps_exact_override(native_runtime):
+    """Both runtime contexts retain each job's exact manual work-limit override."""
     browser_api = __import__('browser_driver')
     source = Path('frontend/js/vast.js').read_text()
     start = source.index('  const offerJobSelections = new Map()')
@@ -141,7 +142,7 @@ def test_queued_job_gpu_preview_uses_billions_and_keeps_exact_override():
         try:
             page = browser.new_page()
             page.set_content('<div id="preview"></div>')
-            page.add_script_tag(content='const el=id=>document.getElementById(id);' + source[start:end])
+            page.add_script_tag(content=f'const nativeRuntime={str(native_runtime).lower()}; const el=id=>document.getElementById(id);' + source[start:end])
             result = page.evaluate('''() => {
               const assert = (condition, message) => { if (!condition) throw Error(message); };
               const first='a'.repeat(32), second='b'.repeat(32);
