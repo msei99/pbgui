@@ -62,6 +62,72 @@ def operation(action,body=None,**args):
     return bt._operation('bt9_'+action,PB9CancelSignal(),payload)
 
 
+@pytest.mark.parametrize('sidecar', [None, 'config.original.json', 'pbgui.source.json'])
+@pytest.mark.parametrize('wrapped', [False, True])
+def test_result_handoffs_and_archive_read_native_envelopes(native, monkeypatch, sidecar, wrapped):
+    """New result records retain metadata and handoffs without changing artifact bytes."""
+    from api import archive_helpers, backtest_v7
+    source, _, root = native
+    source['backtest'].update(starting_balance=1000, exchanges=['bybit', 'hyperliquid'])
+    source['bot']['portfolio']['strategy_kind'] = 'trailing_martingale'
+    source['bot']['long'] = {'enabled': True, 'universe': {'approved_coins': ['HYPE']}}
+    local = root/'data/bt_v9_results/result/combined/run'
+    local.mkdir(parents=True)
+    record = {'result_version': 1, 'config': source, 'provenance': {}, 'metrics': {}} if wrapped else source
+    bt._write(local/'config.json', record)
+    if sidecar:
+        bt._write(local/sidecar, source)
+    bt._write(local/'analysis.json', {'sharpe_ratio_strategy_equity': 2})
+    np.savez(local/'balance_and_equity.npz', schema_version=np.int64(1),
+             timestamp_ms=np.array([1735689600000, 1735776000000], dtype=np.int64),
+             usd_total_balance=np.array([1000., 1200.]), usd_total_equity=np.array([1000., 1300.]))
+    original_bytes = (local/'config.json').read_bytes()
+    summary = bt._summaries([local/'analysis.json'])[0]
+    assert summary['starting_balance'] == 1000
+    assert summary['gain'] == 1.3
+    assert summary['strategy'] == 'trailing_martingale'
+    assert summary['exchanges'] == ['bybit', 'hyperliquid']
+    assert operation('result_config', path=str(local.relative_to(bt._root('results')))) == source
+    price_configs = []
+    monkeypatch.setattr(bt, 'build_market_price_payload', lambda config, **kw: price_configs.append(config) or {'points': []})
+    operation('price', path=str(local.relative_to(bt._root('results'))), exchange='bybit', coin='HYPE', max_points=100)
+    assert price_configs == [source]
+    archive_root = root/'archives'
+    monkeypatch.setattr(backtest_v7, '_archives_dir', lambda: archive_root)
+    archive = archive_root/'own'
+    archived = Path(archive_helpers.copy_backtest_result_to_archive(local, archive)['path'])
+    archived_summary = archive_helpers.summarize_backtest_result(archived, archive)
+    assert archived_summary['backtest_version'] == 'v9'
+    for field in ('starting_balance', 'gain', 'strategy', 'exchanges'):
+        assert archived_summary[field] == summary[field]
+    assert operation('result_config', path=str(archived)) == source
+    archive_config, archive_version, overrides = backtest_v7._load_archived_backtest_config(archived, archive)
+    assert archive_config == source and archive_version == 'v9' and overrides == {}
+    assert (local/'config.json').read_bytes() == (archived/'config.json').read_bytes() == original_bytes
+
+
+@pytest.mark.parametrize('change', [
+    {'result_version': True}, {'result_version': 2}, {'config': []},
+    {'config': {}}, {'config': {'config_version': 'v8.6.0'}},
+    {'provenance': None}, {'unexpected': 'field'},
+])
+def test_bad_result_envelope_never_falls_back_to_pb7(native, change):
+    """Unsupported result wrappers fail closed in both native and shared archive readers."""
+    from api.archive_helpers import config_version_info
+    from pb9_result_helpers import result_config_view
+    record = {'result_version': 1, 'config': native[0], 'provenance': {}}
+    record.update(change)
+    for read in (result_config_view, config_version_info):
+        with pytest.raises(ValueError):
+            read(record)
+    path = native[2]/'data/bt_v9_results/bad/combined/run'
+    path.mkdir(parents=True)
+    bt._write(path/'config.json', record)
+    with pytest.raises(HTTPException) as error:
+        operation('result_config', path='bad/combined/run')
+    assert error.value.status_code == 422
+
+
 def test_ohlcv_dispatch_retains_native_config_and_cancellation(native, monkeypatch):
     """Both tools use the PB9 adapter, never the legacy preparation endpoint."""
     from api import pb9_ohlcv_tools as tools

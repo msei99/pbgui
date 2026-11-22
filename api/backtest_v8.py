@@ -52,7 +52,8 @@ from file_lock import advisory_file_lock
 from logging_helpers import human_log as _log, rotate_managed_log_before_open
 from master_update_lock import MasterUpdateBusyError, acquire_master_runtime_lock
 from backtest_autostart import BacktestQueueWorker, claim_backtest_slot, publish_backtest_process, release_backtest_slot
-from backtest_result_index import invalidate_result as invalidate_result_index, load_indexed_results
+from backtest_result_index import invalidate_result as invalidate_result_index, load_indexed_results, _SUMMARY_SCHEMA_VERSION
+from backtest_result_discovery import ResultDiscoveryUnavailable, ResultDiscoveryWorker, discover_result_paths
 from ParetoDataLoader import _flatten_bot_params
 from pareto_preset_generator import (
     OPTIMIZE_PRESET_DIRECTIONS,
@@ -87,6 +88,7 @@ from pbgui_purefunc import (
     PBGUI_VERSION,
     load_ini_section,
     pb7dir,
+    pb8dir,
     pb8_runtime_status,
     save_ini_section,
 )
@@ -96,6 +98,8 @@ SERVICE = "BacktestV8"
 router = APIRouter()
 _result_path_snapshots = OrderedDict()
 _result_path_snapshot_lock = threading.Lock()
+_result_discovery_worker = None
+_result_discovery_closing = False
 
 
 def _result_page_paths(name, snapshot, session):
@@ -112,7 +116,7 @@ def _result_page_paths(name, snapshot, session):
             cached = _result_path_snapshots.get(snapshot)
             if cached is None or cached['identity'] != identity:
                 raise HTTPException(409, 'Result pages expired; reload the current result list.')
-            cached['expires'] = min(now + 60, cached['created'] + 180)
+            cached['expires'] = now + 60
             _result_path_snapshots.move_to_end(snapshot)
             return cached['paths'], snapshot
     paths = _result_analysis_paths(name)
@@ -245,8 +249,7 @@ def _results_root() -> Path:
 
 def _backtests_root() -> Path:
     """Return the installed PB8 backtest root without broadening managed writes."""
-    status = pb8_runtime_status()
-    pb8_dir = str(status.get("pb8dir") or "")
+    pb8_dir = str(pb8dir() or "")
     return Path(pb8_dir) / "backtests" if pb8_dir else _data_dir() / ".pb8-unavailable"
 
 
@@ -1781,6 +1784,9 @@ def _result_terminal_balances(result_dir: Path) -> dict[str, float]:
 
 
 def _result_analysis_paths(name: Optional[str] = None) -> list[Path]:
+    if _result_discovery_closing:
+        _log(SERVICE, 'Backtest result discovery is shutting down', level='WARNING')
+        raise HTTPException(503, 'Result discovery is shutting down')
     root = _results_root()
     if not root.is_dir():
         return []
@@ -1789,20 +1795,17 @@ def _result_analysis_paths(name: Optional[str] = None) -> list[Path]:
         search_root = _safe_path(root / _validate_name(name), root)
         if not search_root.is_dir() or search_root.is_symlink():
             return []
-    root_resolved = root.resolve()
-    indexed_paths = []
-    for analysis_path in search_root.glob("**/analysis.json"):
-        try:
-            if analysis_path.is_symlink():
-                continue
-            resolved = analysis_path.resolve()
-            resolved.relative_to(root_resolved)
-            if resolved.is_file():
-                indexed_paths.append((resolved.stat().st_mtime, str(resolved), resolved))
-        except (OSError, ValueError):
-            continue
-    indexed_paths.sort(reverse=True)
-    return [item[2] for item in indexed_paths]
+    worker = _result_discovery_worker
+    try:
+        if worker is not None:
+            return worker.discover(root, search_root)
+        return [Path(path) for path in discover_result_paths(root, search_root)]
+    except (OSError, ValueError, ResultDiscoveryUnavailable) as exc:
+        _log(SERVICE, 'Backtest result discovery unavailable', level='WARNING',
+             meta={'error_type': type(exc).__name__, 'reason': getattr(exc, 'code', 'io')})
+        detail = str(exc) if isinstance(exc, ResultDiscoveryUnavailable) else 'Result discovery is temporarily unavailable; retry shortly.'
+        raise HTTPException(503, detail) from exc
+
 
 
 def _list_results(
@@ -2185,14 +2188,28 @@ def _cleanup_orphan_queue_snapshots() -> None:
 
 def startup() -> None:
     """Start the V8 queue controller for this API lifespan."""
+    global _result_discovery_worker, _result_discovery_closing
+    _result_discovery_closing = False
     _cleanup_orphan_queue_snapshots()
     _worker.start()
     _batch_submitter.start()
+    if _result_discovery_worker is None:
+        _result_discovery_worker = ResultDiscoveryWorker()
 
 
 async def shutdown() -> None:
     """Stop only the controller; detached PB8 backtests remain running."""
-    await asyncio.gather(_worker.stop(), _batch_submitter.stop(), return_exceptions=True)
+    global _result_discovery_worker, _result_discovery_closing
+    _result_discovery_closing = True
+    discovery, _result_discovery_worker = _result_discovery_worker, None
+    cleanup = [_worker.stop(), _batch_submitter.stop()]
+    if discovery is not None:
+        cleanup.append(asyncio.to_thread(discovery.close))
+    outcomes = await asyncio.gather(*cleanup, return_exceptions=True)
+    for outcome in outcomes:
+        if isinstance(outcome, BaseException):
+            _log(SERVICE, 'Backtest controller cleanup failed', level='ERROR',
+                 meta={'error_type': type(outcome).__name__})
     _clear_queue_item_cache()
     with _result_path_snapshot_lock:
         _result_path_snapshots.clear()
@@ -3165,16 +3182,33 @@ def get_results(
 ) -> dict:
     if offset < 0 or limit < 0 or limit > 100:
         raise HTTPException(status_code=422, detail="offset must be non-negative and limit must be between 0 and 100")
+    started = time.monotonic()
+    if offset == 0:
+        _log(SERVICE, 'Backtest result discovery started', meta={'limit': limit})
     paths, snapshot = _result_page_paths(name, snapshot, session)
+    if offset == 0:
+        _log(SERVICE, 'Backtest result discovery complete',
+             meta={'duration_seconds': round(time.monotonic() - started, 3), 'results': len(paths)})
     page_paths = paths[offset:] if limit == 0 else paths[offset : offset + limit]
     next_offset = offset + len(page_paths)
+    warm = {}
+    if _result_discovery_worker is not None and 0 < limit <= 100:
+        try:
+            warm = _result_discovery_worker.cached_page(_results_root(), page_paths, PBGUI_VERSION, _SUMMARY_SCHEMA_VERSION)
+        except (OSError, ValueError, ResultDiscoveryUnavailable) as exc:
+            _log(SERVICE, 'Isolated result cache read unavailable; using the index', level='WARNING',
+                 meta={'error_type': type(exc).__name__})
+    summaries = ([warm[str(path.parent)] for path in page_paths]
+        if page_paths and all(str(path.parent) in warm for path in page_paths)
+        else load_indexed_results(
+            "v8", page_paths, lambda selected: _list_results(selected),
+            prune_missing=name is None and offset == 0 and limit == 0))
+    elapsed = time.monotonic() - started
+    if offset == 0 or elapsed >= 2:
+        _log(SERVICE, 'Backtest result page ready',
+             meta={'duration_seconds': round(elapsed, 3), 'offset': offset, 'results': len(summaries)})
     return {
-        "results": load_indexed_results(
-            "v8",
-            page_paths,
-            lambda selected: _list_results(selected),
-            prune_missing=name is None and offset == 0 and limit == 0,
-        ),
+        "results": summaries,
         "pagination": {
             "total": len(paths),
             "offset": offset,

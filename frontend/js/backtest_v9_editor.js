@@ -576,7 +576,7 @@
         if(enabled){button.classList.add('active');changed=true;}
       });
     });
-    if(changed)window.onResultActionsChanged();
+    if(changed)window.onResultActionsChanged({preserveExisting:true});
   }
   function restoreSearch() {
     var state=readView(), input=document.getElementById('results-filter');

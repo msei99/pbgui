@@ -506,10 +506,11 @@ def _load_archived_backtest_config(result_dir: Path, archive_dir: Path) -> tuple
     try:
         if version == "v9":
             from passivbot_runtime import generation_from_schema
+            from pb9_result_records import result_config_view
             for filename in ('pbgui.source.json', 'config.original.json', 'config.json'):
                 path = result_dir / filename
                 if path.exists() or path.is_symlink():
-                    config = _read_json_object_nofollow(path, archive_dir, required=True)
+                    config = result_config_view(_read_json_object_nofollow(path, archive_dir, required=True))
                     schema = config.get('config_version')
                     if not isinstance(schema, str) or generation_from_schema(schema) != 'pb9':
                         raise ValueError('Invalid native PB9 source schema')

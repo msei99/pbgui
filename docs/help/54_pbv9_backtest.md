@@ -41,6 +41,20 @@ Use Stop/Restart for the selected managed job and the shared log viewer for outp
 
 This integration runs local native PB9 jobs, with optional queue autostart. VPS execution remains unavailable. Native Optimize has its own shared page and publication requirements for cloud execution. Running a backtest never starts a live trading bot.
 
+Under **Results**, the **All** version filter also allows PB9 actions when the
+selected rows belong to PB9. Select one result for **Add to Run**, **Backtest**,
+**Optimize from Result** or either balance tool. **Add to Run** opens an unsaved,
+disabled PB9 Run draft; it does not start trading. Mixed-generation selections
+remain available for **Compare** and **Delete Selected**. New PB9 result records
+and older flat configs use the same metadata and source-config reader, including
+archived results; browsing and handoffs do not rewrite result artifacts.
+Results arrive automatically in pages of at most 100, so the native controls
+can be used while another version's list is still loading. Filter changes and
+navigation cancel obsolete reads; late responses cannot replace the current view.
+Large tables update in batches while the loading counter advances. Open diagrams
+and selections remain in place. Temporary failed page reads retry automatically
+up to twice; configuration errors are reported immediately.
+
 ## Start from a PB8 backtest
 
 In **PBv8 → Backtest**, use **V9 — Open as PB9 Backtest** on a saved config or local result. PBGui uses the official converter of your installed PB9 runtime and displays the full best-effort changes and warnings before adoption. Conversion can infer different risk-memory policies and metric formulas; freshly evaluate the result. No PB8 file is rewritten and no job starts automatically.

@@ -7,12 +7,13 @@ import hashlib
 import json
 import os
 import sqlite3
-import stat
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable
 
 from file_lock import advisory_file_lock
+from backtest_result_metadata import _file_signature, cached_payloads, result_signature as metadata_result_signature
 from logging_helpers import human_log as _log
 from pbgui_purefunc import PBGDIR, PBGUI_VERSION
 from secure_files import ensure_private_directory
@@ -22,7 +23,9 @@ SERVICE = "BacktestResultIndex"
 _DB_NAME = "backtest_results.sqlite"
 _SUMMARY_SCHEMA_VERSION = 4
 _LOCK = threading.RLock()
-_CONFIG_NAMES = ("config.json", "analysis_config.json", "config_used.json", "backtest_config.json")
+_BUILD_LOCKS = {version: threading.RLock() for version in ('v7', 'v8', 'v9')}
+_BUILD_CHUNK_SIZE = 100
+_CACHE_ERRORS = (OSError, OverflowError, RuntimeError, sqlite3.Error, ValueError)
 
 
 def _db_path() -> Path:
@@ -65,31 +68,44 @@ def _connect() -> sqlite3.Connection:
     return connection
 
 
-def _file_signature(path: Path) -> tuple[int, int, int]:
-    """Return a cheap identity tuple for one regular file."""
+def result_signature(analysis_path: Path, *, version: str = '') -> str:
+    """Fingerprint through the shared pure implementation, preserving the cache contract."""
+    return metadata_result_signature(analysis_path, version=version,
+        gui_version=PBGUI_VERSION, summary_schema=_SUMMARY_SCHEMA_VERSION)
+
+
+@contextmanager
+def _cache_transaction():
+    """Keep database ownership short; never run source builders under this lock."""
+    with _LOCK:
+        with advisory_file_lock(_db_path()):
+            connection = _connect()
+            try:
+                with connection:
+                    yield connection
+            finally:
+                connection.close()
+
+
+def _cached_payloads(version, signatures):
+    """Read only requested summaries, ignoring corrupt or outdated cache rows."""
+    with _cache_transaction() as connection:
+        return cached_payloads(connection, version, signatures)
+
+
+@contextmanager
+def _build_ownership(version, cancel_check):
+    """Serialize cold reads per generation while keeping cancellation responsive."""
+    lock = _BUILD_LOCKS[version]
+    while not lock.acquire(timeout=0.1):
+        if cancel_check:
+            cancel_check()
     try:
-        stat_result = path.lstat()
-        if not stat.S_ISREG(stat_result.st_mode):
-            return (0, 0, 0)
-        return (int(stat_result.st_ino or 0), int(stat_result.st_size), int(stat_result.st_mtime_ns))
-    except OSError:
-        return (0, 0, 0)
-
-
-def result_signature(analysis_path: Path) -> str:
-    """Fingerprint summary-bearing files without reading their contents."""
-    result_dir = analysis_path.parent
-    values = [
-        ["pbgui_version", PBGUI_VERSION],
-        ["summary_schema", _SUMMARY_SCHEMA_VERSION],
-        [analysis_path.name, *_file_signature(analysis_path)],
-    ]
-    for name in (*_CONFIG_NAMES, "config.original.json", "pbgui.source.json", "balance_and_equity.npz", "result.json"):
-        candidate = result_dir / name
-        signature = _file_signature(candidate)
-        if signature != (0, 0, 0):
-            values.append([name, *signature])
-    return json.dumps(values, separators=(",", ":"))
+        if cancel_check:
+            cancel_check()
+        yield
+    finally:
+        lock.release()
 
 
 def load_indexed_results(
@@ -98,89 +114,86 @@ def load_indexed_results(
     builder: Callable[[list[Path]], list[dict]],
     *,
     prune_missing: bool = False,
+    cancel_check: Callable[[], None] | None = None,
 ) -> list[dict]:
-    """Return cached summaries, rebuilding only new or changed result paths."""
+    """Build bounded missing chunks without blocking other generations' reads."""
     normalized_version = str(version or "").strip().lower()
     if normalized_version not in {"v7", "v8", "v9"}:
         raise ValueError("Unsupported Backtest result index version")
     paths = [Path(path).resolve(strict=False) for path in analysis_paths]
-    signatures = {str(path.parent): result_signature(path) for path in paths}
+    signatures = {str(path.parent): result_signature(path, version=normalized_version) for path in paths}
+    if cancel_check:
+        cancel_check()
+    cache_available = True
     try:
-        with _LOCK:
-            db_path = _db_path()
-            with advisory_file_lock(db_path):
-                connection = _connect()
+        payloads = _cached_payloads(normalized_version, signatures) if signatures else {}
+    except _CACHE_ERRORS as exc:
+        _log(SERVICE, f"Backtest result index unavailable; reading source summaries: {exc}", level="WARNING")
+        payloads, cache_available = {}, False
+    if len(payloads) < len(signatures) or prune_missing:
+        with _build_ownership(normalized_version, cancel_check):
+            # A preceding cold reader may have filled these rows while we waited.
+            if cache_available:
                 try:
-                    cached = {}
-                    selected_paths = list(signatures)
-                    for start in range(0, len(selected_paths), 200):
-                        batch = selected_paths[start:start + 200]
-                        cached.update({
-                            str(row[0]): {"signature": str(row[1]), "payload": str(row[2])}
-                            for row in connection.execute(
-                                "SELECT result_path, signature, payload FROM result_summaries WHERE version = ? "
-                                + "AND result_path IN (" + ','.join('?' for _ in batch) + ")",
-                                (normalized_version, *batch),
-                            )
-                        })
-                    payloads: dict[str, dict] = {}
-                    missing = []
-                    for analysis_path in paths:
-                        result_path = str(analysis_path.parent)
-                        entry = cached.get(result_path)
-                        payload = None
-                        if entry and entry["signature"] == signatures[result_path]:
-                            try:
-                                payload = json.loads(entry["payload"])
-                            except (json.JSONDecodeError, TypeError):
-                                payload = None
-                        if isinstance(payload, dict):
-                            payloads[result_path] = payload
-                        else:
-                            missing.append(analysis_path)
-
-                    missing_by_result = {str(path.parent): path for path in missing}
-                    for payload in builder(missing) if missing else []:
-                        if not isinstance(payload, dict) or not payload.get("path"):
-                            continue
-                        result_path = str(Path(str(payload["path"])).resolve(strict=False))
-                        if result_path not in signatures:
-                            continue
-                        payloads[result_path] = payload
-                        analysis_path = missing_by_result[result_path]
-                        connection.execute(
-                            """
-                            INSERT INTO result_summaries(version, result_path, signature, modified, payload)
-                            VALUES (?, ?, ?, ?, ?)
-                            ON CONFLICT(version, result_path) DO UPDATE SET
-                                signature = excluded.signature,
-                                modified = excluded.modified,
-                                payload = excluded.payload
-                            """,
-                            (
-                                normalized_version,
-                                result_path,
-                                signatures[result_path],
-                                analysis_path.stat().st_mtime,
-                                json.dumps(payload, separators=(",", ":"), allow_nan=False),
-                            ),
-                        )
-                    if prune_missing:
+                    payloads = _cached_payloads(normalized_version, signatures)
+                except _CACHE_ERRORS as exc:
+                    _log(SERVICE, f"Backtest result cache read failed: {exc}", level="WARNING")
+                    cache_available = False
+            missing = [path for path in paths if str(path.parent) not in payloads]
+            for start in range(0, len(missing), _BUILD_CHUNK_SIZE):
+                if cancel_check:
+                    cancel_check()
+                chunk = missing[start:start + _BUILD_CHUNK_SIZE]
+                chunk_paths = {str(path.parent): path for path in chunk}
+                # No global, file or SQLite lock is held while this reads artifacts.
+                built = builder(chunk)
+                if cancel_check:
+                    cancel_check()
+                pending = []
+                for payload in built:
+                    if not isinstance(payload, dict) or not payload.get('path'):
+                        continue
+                    result_path = str(Path(str(payload['path'])).resolve(strict=False))
+                    path = chunk_paths.get(result_path)
+                    if path is None or not path.is_file() or result_signature(path, version=normalized_version) != signatures[result_path]:
+                        continue
+                    payloads[result_path] = payload
+                    try:
+                        encoded = json.dumps(payload, separators=(',', ':'), allow_nan=False)
+                    except (ValueError, TypeError):
+                        # The index is optional; retain the owner's uncached result
+                        # contract rather than failing all otherwise valid rows.
+                        _log(SERVICE, 'Backtest summary is not JSON-cacheable; retaining source summary', level='WARNING')
+                        continue
+                    pending.append((result_path, path, payload, encoded))
+                if cache_available and pending:
+                    try:
+                        with _cache_transaction() as connection:
+                            for result_path, path, payload, encoded in pending:
+                                if not path.is_file() or result_signature(path, version=normalized_version) != signatures[result_path]:
+                                    payloads.pop(result_path, None)
+                                    continue
+                                connection.execute(
+                                    'INSERT INTO result_summaries(version, result_path, signature, modified, payload) VALUES (?, ?, ?, ?, ?) '
+                                    'ON CONFLICT(version, result_path) DO UPDATE SET signature=excluded.signature, '
+                                    'modified=excluded.modified, payload=excluded.payload',
+                                    (normalized_version, result_path, signatures[result_path], path.stat().st_mtime, encoded))
+                    except _CACHE_ERRORS as exc:
+                        _log(SERVICE, f"Backtest result cache write failed; retaining source summaries: {exc}", level="WARNING")
+                        cache_available = False
+            if cache_available and prune_missing:
+                try:
+                    with _cache_transaction() as connection:
                         stale = [str(row[0]) for row in connection.execute(
                             'SELECT result_path FROM result_summaries WHERE version = ?', (normalized_version,))
                             if str(row[0]) not in signatures]
-                        if stale:
-                            connection.executemany(
-                                "DELETE FROM result_summaries WHERE version = ? AND result_path = ?",
-                                [(normalized_version, path) for path in stale],
-                            )
-                    connection.commit()
-                finally:
-                    connection.close()
-        results = [copy.deepcopy(payloads[str(path.parent)]) for path in paths if str(path.parent) in payloads]
-    except (OSError, OverflowError, RuntimeError, sqlite3.Error, ValueError) as exc:
-        _log(SERVICE, f"Backtest result index unavailable; rebuilding summaries from files: {exc}", level="WARNING")
-        results = builder(paths)
+                        connection.executemany('DELETE FROM result_summaries WHERE version = ? AND result_path = ?',
+                                               [(normalized_version, path) for path in stale])
+                except _CACHE_ERRORS as exc:
+                    _log(SERVICE, f"Backtest result cache prune failed: {exc}", level="WARNING")
+    if cancel_check:
+        cancel_check()
+    results = [copy.deepcopy(payloads[str(path.parent)]) for path in paths if str(path.parent) in payloads]
     # Match the AI capability registry's non-reversible managed result identity.
     # Enrich warm and fallback reads without rebuilding the persistent index.
     for item in results:

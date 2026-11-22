@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 from fastapi import HTTPException
+from pb9_result_records import result_config_view
 
 
 def load_equity_arrays(path):
@@ -58,6 +59,7 @@ def load_equity_arrays(path):
 
 def summarize_native_result(directory, config, authored, analysis, arrays, *, config_name, display_name, modified):
     """Keep native formulas and inheritance identical in local and archive tables."""
+    config, authored = result_config_view(config), result_config_view(authored)
     bt, bot = config.get('backtest', {}), config.get('bot', {})
     metrics = {key: value for key, value in analysis.items() if isinstance(value, (float, int)) and math.isfinite(value)}
     def metric(*keys, default=0):

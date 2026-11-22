@@ -18,6 +18,15 @@
 - Vast account, job, pool, transfer, calibration and performance-history code is shared. Explicit runtime ownership and an immutable native worker digest gate PB9 publication/rental; a locally built candidate is not a published image. Unknown schemas cannot select PB8. No GPU rental or remote deployment occurs implicitly. Retained native performance comparisons remain readable after job cleanup and cannot operate on PB8 jobs.
 
 - FastAPI serves the existing Vanilla JS frontend; JavaScript executes in the browser.
+- PB8 result discovery and warm summary verification use bounded API-owned,
+  isolated stdlib reader processes. Fingerprints and cache-row decoding are
+  shared with the normal result index; incomplete cache pages fall back to its
+  existing builder. Readers receive only approved paths and version metadata,
+  use a cleared environment and are reaped on timeout/shutdown. Native jobs are
+  independent. Pagination snapshots remain owner/root/filter-bound, expire after
+  60 idle seconds and retain fixed entry/path limits. Large tables update in
+  batches and preserve unchanged result panels instead of redrawing them for
+  every network page; only transient read failures receive bounded retries.
 - Concurrent PB8 backtest queue readers share only the same in-flight validated scan per root. Each caller receives its own result objects; subsequent scans immediately revalidate files, PID identity and status. The producer removes its bounded registry entry on success or failure, and waiters create no separate background jobs or persistent snapshot cache.
 - Local Passivbot source checkouts and their Python environments live outside the PBGui repository, alongside the existing PB7/PB8 installations. The local PB9 installation uses `/home/mani/software/pb9` and `/home/mani/software/venv_pb9`; PBGui selects them through `main.pb9dir` and `main.pb9venv`. PBGui-managed configurations and job workspaces remain in its own data roots.
 - PB7/PB8/PB9 bot code and external provider implementations remain separate from PBGui. Do not modify their implementation or deploy changes to remote hosts without the required authorization.

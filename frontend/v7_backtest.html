@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
 <script src="/app/js/backtest_editor_adapter.js?v=21"></script>
-<script src="/app/js/backtest_v9_editor.js?v=21"></script>
+<script src="/app/js/backtest_v9_editor.js?v=22"></script>
 <script src="/app/js/backtest_v9_migration.js?v=2" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
@@ -1127,9 +1127,9 @@ var configs     = [];          // saved backtest configs
 var queueItems  = [];          // queue items from WS
 var _lastQueueHash = '';       // JSON hash of last queue state (skip re-render if unchanged)
 var results     = [];          // backtest results
-var resultsByVersion = { v7: [], v8: [], v9: [] };
-var RESULTS_PAGE_SIZE = 0;
+var RESULTS_PAGE_SIZE = 100;
 var _resultsLoadGeneration = 0;
+var _resultsReadController = null;
 var _selectedResultPaths = new Set();
 var _resultsEmptyRetryTimer = null;
 var _resultsEmptyRetryCount = 0;
@@ -1426,15 +1426,19 @@ function backtestTiming(name, started) {
 function cancelBacktestReads() {
   backtestReadEpoch++;backtestReads.forEach(function(controller){controller.abort();});backtestReads.clear();
 }
-function timedBacktestRead(load, timeout) {
+function timedBacktestRead(load, timeout, parentSignal) {
   var controller=new AbortController(),expired=false;
+  function abortRead(){controller.abort();}
+  if(parentSignal) {
+    if(parentSignal.aborted)abortRead();else parentSignal.addEventListener('abort',abortRead,{once:true});
+  }
   var timer=setTimeout(function(){expired=true;controller.abort();},timeout||15000);backtestReads.add(controller);
   return load(controller.signal).catch(function(error){
-    if(expired)throw new Error('Loading Backtest data timed out. Please try again.');throw error;
-  }).finally(function(){clearTimeout(timer);backtestReads.delete(controller);});
+    if(expired){var timeoutError=new Error('Loading Backtest data timed out. Please try again.');timeoutError.code='backtest_read_timeout';throw timeoutError;}throw error;
+  }).finally(function(){clearTimeout(timer);backtestReads.delete(controller);if(parentSignal)parentSignal.removeEventListener('abort',abortRead);});
 }
-function backtestResultRead(base,path) {
-  return timedBacktestRead(function(signal){return apiFetchFrom(base,path,{signal:signal});});
+function backtestResultRead(base,path,signal) {
+  return timedBacktestRead(function(signal){return apiFetchFrom(base,path,{signal:signal});},undefined,signal);
 }
 window.addEventListener('pagehide',function(){cancelBacktestReads();_resultsLoadGeneration++;clearTimeout(_resultsEmptyRetryTimer);_resultsEmptyRetryTimer=null;});
 window.addEventListener('pageshow',function(event){
@@ -6460,10 +6464,14 @@ function resultsForSelectedVersion(resultItems) {
 }
 
 function updateVersionBoundResultActions() {
-  var currentOnly = selectedResultsVersion() === backtestEditorAdapter.version;
+  var selected = new Set(getSelectedResults());
+  var selectedItems = results.filter(function(result) { return selected.has(result.path); });
+  var currentOnly = selected.size > 0 && selectedItems.length === selected.size && selectedItems.every(function(result) {
+    return result.backtest_version === backtestEditorAdapter.version;
+  });
   document.querySelectorAll('#ctx-results button:not([data-cross-version-action])').forEach(function(button) {
-    button.disabled = !currentOnly;
-    button.title = currentOnly ? '' : 'This action is available for ' + backtestEditorAdapter.version.toUpperCase() + ' results on this page.';
+    button.disabled = button.hidden || button.getAttribute('aria-busy') === 'true' || !currentOnly;
+    button.title = currentOnly ? '' : 'Select ' + backtestEditorAdapter.version.toUpperCase() + ' results to use this action on this page.';
   });
 }
 
@@ -6495,7 +6503,10 @@ function loadResults(filterName, loadOptions) {
     sourceUrl.searchParams.delete('compare_source');sourceUrl.searchParams.delete('result_compare');history.replaceState(null,'',sourceUrl);
   }
   var evaluation=loopEvaluationSelection();
-  if(evaluation)return loadLoopEvaluationResults(evaluation,typeof filterName==='string'?filterName:undefined,loadOptions);
+  if(evaluation){
+    if(_resultsReadController)_resultsReadController.abort();
+    return loadLoopEvaluationResults(evaluation,typeof filterName==='string'?filterName:undefined,loadOptions);
+  }
   var selectedFilter = typeof filterName === 'string' ? filterName : (_pendingResultFilter ||
     (document.getElementById('results-config-filter') || {}).value || '');
   if (backtestEditorAdapter.metadataDriven && currentPanel === 'results') {
@@ -6511,6 +6522,9 @@ function loadResults(filterName, loadOptions) {
   }
   var resultsStarted=performance.now();
   var loadGeneration = ++_resultsLoadGeneration;
+  if(_resultsReadController)_resultsReadController.abort();
+  var readController=new AbortController();_resultsReadController=readController;
+  var resultsByVersion = {v7:[],v8:[],v9:[]};
   var selectedVersion = selectedResultsVersion();
   var versions = selectedVersion === 'both' ? (backtestEditorAdapter.metadataDriven ? ['v7','v8','v9'] : ['v7','v8']) : [selectedVersion];
   if (typeof loadOptions.keepVisible === 'undefined') {
@@ -6531,9 +6545,17 @@ function loadResults(filterName, loadOptions) {
     hideResultsCountLabel('results-count-label');
   }
 
-  function renderLoadedPages() {
-    var applied = _applyResultsData(versions.reduce(function(all,version){return all.concat(resultsByVersion[version] || []);},[]), selectedFilter);
-    displayedResultPage = true;
+  function renderLoadedPages(paintNow) {
+    var combined=versions.reduce(function(all,version){return all.concat(resultsByVersion[version] || []);},[]);
+    var applied;
+    if(paintNow) {
+      applied=_applyResultsData(combined,selectedFilter);
+      displayedResultPage=true;
+    } else {
+      // Keep current data available to filters/actions without recreating a
+      // growing multi-thousand-row table after every small network page.
+      results=combined;applied=results;
+    }
     var loaded = versions.reduce(function(total, version) { return total + progress[version].loaded; }, 0);
     var totalsKnown = versions.every(function(version) { return Number.isFinite(progress[version].total); });
     var total = totalsKnown
@@ -6552,9 +6574,33 @@ function loadResults(filterName, loadOptions) {
 
   function waitForResultsPaint() {
     return new Promise(function(resolve) {
-      window.requestAnimationFrame(function() {
-        window.requestAnimationFrame(resolve);
+      var finished=false, frame=null;
+      var timer=window.setTimeout(finish,50);
+      function finish() {
+        if(finished)return;
+        finished=true;window.clearTimeout(timer);
+        if(frame!==null)window.cancelAnimationFrame(frame);
+        resolve();
+      }
+      // Occluded windows may stop animation frames even while visibilityState
+      // remains "visible". Painting must not indefinitely pause data loading.
+      frame=window.requestAnimationFrame(function() {
+        frame=window.requestAnimationFrame(finish);
       });
+    });
+  }
+
+  function readVersionPage(version,path,attempt) {
+    return backtestResultRead(backtestApiBase(version),path,readController.signal).catch(function(error){
+      var transient=error.code==='backtest_read_timeout' || error instanceof TypeError || [429,502,503,504].indexOf(error.status)>=0;
+      if(!transient || attempt>=2 || readController.signal.aborted || loadGeneration!==_resultsLoadGeneration)throw error;
+      return new Promise(function(resolve,reject){
+        var signal=readController.signal;
+        function abort(){clearTimeout(timer);signal.removeEventListener('abort',abort);reject(new DOMException('Cancelled','AbortError'));}
+        var timer=setTimeout(function(){signal.removeEventListener('abort',abort);resolve();},250*(attempt+1));
+        signal.addEventListener('abort',abort,{once:true});
+        if(signal.aborted)abort();
+      }).then(function(){return readVersionPage(version,path,attempt+1);});
     });
   }
 
@@ -6562,7 +6608,7 @@ function loadResults(filterName, loadOptions) {
     var path = '/results?offset=' + offset + '&limit=' + RESULTS_PAGE_SIZE;
     if (selectedFilter) path += '&name=' + encodeURIComponent(selectedFilter);
     if(version==='v8')path+='&snapshot='+encodeURIComponent(progress[version].snapshot||'new');
-    return backtestResultRead(backtestApiBase(version), path).then(function(d) {
+    return readVersionPage(version,path,0).then(function(d) {
       if (loadGeneration !== _resultsLoadGeneration) return;
       var page = (d.results || []).map(function(result) {
         return Object.assign({}, result, { backtest_version: version });
@@ -6575,7 +6621,7 @@ function loadResults(filterName, loadOptions) {
         ? Number(pagination.total)
         : progress[version].loaded;
       progress[version].hasMore = !!(pagination && pagination.has_more);
-      renderLoadedPages();
+      renderLoadedPages(offset===0 || !progress[version].hasMore || progress[version].loaded%1000===0);
       if (progress[version].hasMore) {
         var nextOffset = Number(pagination.next_offset);
         if (!Number.isFinite(nextOffset) || nextOffset <= offset) nextOffset = offset + RESULTS_PAGE_SIZE;
@@ -6618,12 +6664,20 @@ function loadResults(filterName, loadOptions) {
     return applied;
   }).catch(function(e) {
     if (loadGeneration !== _resultsLoadGeneration) return results;
+    readController.abort();
+    if(e.name==='AbortError')return results;
     if (!retainedVisible && !displayedResultPage) {
       var failedList = document.getElementById('results-list');
       if (failedList) failedList.textContent = 'Could not load results: ' + e.message;
+    } else {
+      if(displayedResultPage)_applyResultsData(results,selectedFilter);
+      var stoppedLabel=document.getElementById('results-count-label');
+      if(stoppedLabel){stoppedLabel.textContent='Loading stopped — '+resultsForSelectedVersion(results).length+' results available';stoppedLabel.title=e.message;stoppedLabel.style.display='';}
     }
     toast('Load results failed: ' + e.message, 'err');
     throw e;
+  }).finally(function(){
+    if(_resultsReadController===readController)_resultsReadController=null;
   });
 }
 
@@ -6992,6 +7046,7 @@ function renderResults() {
 
     _renderResultsTableInto(el, filtered, chartsEl, rth, { showVersion: true, showStrategy: true, allowV8Convert: !backtestEditorAdapter.isV8 && !backtestEditorAdapter.metadataDriven, groupValidation: true, columnContext: 'results', nativeV9: backtestEditorAdapter.metadataDriven });
     if (backtestEditorAdapter.metadataDriven) window.PBGuiBacktestV9.restoreResults();
+    updateVersionBoundResultActions();
   } catch (e) {
     if (el) el.innerHTML = '\x3Cdiv class="empty-state">Failed to render results: ' + esc(e.message || e) + '\x3C/div>';
     toast('Render results failed: ' + (e.message || e), 'err');
@@ -7195,7 +7250,10 @@ function setResultRowSelection(row, selected) {
     _rowDragSelecting = false;
     _rowDragMode = null;
     stopRowSelectAutoScroll();
-    if(changedSelection && backtestEditorAdapter.metadataDriven)window.PBGuiBacktestV9.rememberResults();
+    if(changedSelection) {
+      updateVersionBoundResultActions();
+      if(backtestEditorAdapter.metadataDriven)window.PBGuiBacktestV9.rememberResults();
+    }
   });
 })();
 
@@ -7415,11 +7473,15 @@ function deselectAllConfigs() {
 
 function selectAllResults() {
   document.querySelectorAll('#results-list .tbl tbody tr[data-path]').forEach(function(tr) { setResultRowSelection(tr, true); });
+  updateVersionBoundResultActions();
+  if(backtestEditorAdapter.metadataDriven)window.PBGuiBacktestV9.rememberResults();
 }
 
 function deselectAllResults() {
   _selectedResultPaths.clear();
   document.querySelectorAll('#results-list .tbl tbody tr[data-path]').forEach(function(tr) { setResultRowSelection(tr, false); });
+  updateVersionBoundResultActions();
+  if(backtestEditorAdapter.metadataDriven)window.PBGuiBacktestV9.rememberResults();
 }
 
 function getSelectedResults() {
@@ -7433,6 +7495,7 @@ function setSelectedResults(paths) {
   document.querySelectorAll('#results-list .tbl tbody tr[data-path]').forEach(function(tr) {
     setResultRowSelection(tr, _selectedResultPaths.has(tr.dataset.path));
   });
+  updateVersionBoundResultActions();
 }
 
 function selectAllArchiveResults() {
@@ -7995,7 +8058,8 @@ function priceMarketOptionValue(market) {
 }
 
 /* ── Chart rendering based on active icon buttons ── */
-function onResultActionsChanged() {
+function onResultActionsChanged(options) {
+  options=options||{};
   if (window.PBGuiBacktestV9 && window.PBGuiBacktestV9.active()) window.PBGuiBacktestV9.rememberResults();
   var chartsEl = _activeResultsCtx.chartsEl || document.getElementById('results-charts');
   var filtered = _activeResultsCtx.data || [];
@@ -8011,6 +8075,12 @@ function onResultActionsChanged() {
     else if (action === 'config') configIdxs.push(idx);
     else if (action === 'analysis') analysisIdxs.push(idx);
   });
+
+  var actionSignature=JSON.stringify([viewIdxs,plotIdxs,fillsIdxs,configIdxs,analysisIdxs].map(function(indices){
+    return indices.map(function(index){var row=filtered[index]||{};return [index,row.path||'',row.modified||''];});
+  }));
+  if(options.preserveExisting && chartsEl.firstElementChild && chartsEl.dataset.resultActionSignature===actionSignature)return;
+  chartsEl.dataset.resultActionSignature=actionSignature;
 
   if (!viewIdxs.length && !plotIdxs.length && !fillsIdxs.length && !configIdxs.length && !analysisIdxs.length) {
     chartsEl.style.display = 'none';
@@ -10494,9 +10564,9 @@ async function addResultToArchive() {
     toast('Failed: ' + e.message, 'err');
   } finally {
     if (button) {
-      button.disabled = false;
       button.removeAttribute('aria-busy');
       button.textContent = originalText || '🗄 Add to Archive';
+      updateVersionBoundResultActions();
     }
   }
 }

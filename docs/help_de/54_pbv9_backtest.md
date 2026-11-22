@@ -43,6 +43,23 @@ Stop/Restart betreffen ausschließlich den zugehörigen verwalteten Prozess. Das
 
 Diese Anbindung unterstützt lokale native PB9-Aufträge mit optionalem Queue-Autostart. VPS-Ausführung bleibt nicht verfügbar. Native Optimierung verwendet die gemeinsame Optimize-Seite; die Voraussetzungen für Cloud-Ausführung stehen im Optimize-Guide. Ein Backtest startet keinen Live-Trading-Bot.
 
+Unter **Results** funktionieren PB9-Aktionen auch mit Versionsfilter **All**, wenn
+die ausgewählten Zeilen zu PB9 gehören. Wähle ein Ergebnis für **Add to Run**,
+**Backtest**, **Optimize from Result** oder eines der Balance-Werkzeuge.
+**Add to Run** öffnet einen ungespeicherten, deaktivierten PB9-Run-Entwurf und
+startet keinen Handel. Bei gemischten Versionen bleiben **Compare** und
+**Delete Selected** verfügbar. Neue PB9-Ergebnis-Hüllen und ältere flache Configs
+verwenden denselben Metadaten- und Config-Leser, auch im Archiv. Anzeige und
+Übergaben schreiben keine Ergebnisdateien um.
+Ergebnisse werden automatisch in Seiten mit höchstens 100 Einträgen geladen.
+Dadurch bleiben native Aktionen nutzbar, während Ergebnisse einer anderen
+Version noch laden. Filterwechsel und Navigation brechen überholte Anfragen ab;
+verspätete Antworten können die aktuelle Ansicht nicht ersetzen.
+Große Tabellen werden gebündelt ergänzt, während der Ladezähler weiterläuft.
+Geöffnete Diagramme und Auswahl bleiben erhalten. Vorübergehend fehlgeschlagene
+Seitenanfragen werden automatisch bis zu zweimal wiederholt; Konfigurationsfehler
+werden sofort gemeldet.
+
 ## Mit einem PB8-Backtest beginnen
 
 Wähle unter **PBv8 → Backtest** bei einer gespeicherten Konfiguration oder einem lokalen Ergebnis **V9 — Open as PB9 Backtest**. PBGui nutzt den offiziellen Konverter deiner installierten PB9-Laufzeit und zeigt vor der Übernahme alle Best-effort-Änderungen und Warnungen. Risiko-Speicher und Metrikformeln können anders abgeleitet werden; teste das Ergebnis neu. PB8-Dateien werden nicht überschrieben und es startet kein Job automatisch.

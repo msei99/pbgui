@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import asyncio
 import gzip
 import json
 import os
@@ -120,6 +121,11 @@ def test_result_pages_reuse_owned_discovery_and_new_load_sees_new_files(tmp_path
         with pytest.raises(HTTPException) as denied:
             backtest_v8.get_results(offset=1, limit=1, snapshot=token, **wrong)
         assert denied.value.status_code == 409
+    monkeypatch.setattr(backtest_v8, '_results_root', lambda: root / 'changed-installation')
+    with pytest.raises(HTTPException) as changed_root:
+        backtest_v8.get_results(offset=1, limit=1, session=owner, snapshot=token)
+    assert changed_root.value.status_code == 409
+    monkeypatch.setattr(backtest_v8, '_results_root', lambda: root)
     fresh = backtest_v8.get_results(offset=0, limit=1, session=owner, snapshot='new')
     assert fresh['results'][0]['config_name'] == 'second' and scans == [None, None]
     backtest_v8._result_path_snapshots[token]['expires'] = 0
@@ -129,6 +135,148 @@ def test_result_pages_reuse_owned_discovery_and_new_load_sees_new_files(tmp_path
     with pytest.raises(HTTPException) as invalid:
         backtest_v8.get_results(session=owner, snapshot='../escape')
     assert invalid.value.status_code == 422
+
+
+def test_result_root_reads_current_configured_path_without_runtime_artifact_scan(tmp_path, monkeypatch):
+    """Result reads need only the configured directory, even when the runtime is unavailable."""
+    configured = [str(tmp_path / 'first')]
+    monkeypatch.setattr(backtest_v8, 'pb8dir', lambda: configured[0])
+
+    def unexpected_scan():
+        """Forbid readiness work when resolving a result directory."""
+        raise AssertionError('Result path lookup must not scan runtime artifacts')
+
+    monkeypatch.setattr(backtest_v8, 'pb8_runtime_status', unexpected_scan)
+    monkeypatch.setattr(backtest_v8, '_data_dir', lambda: tmp_path / 'data')
+    assert backtest_v8._results_root() == tmp_path / 'first' / 'backtests' / 'pbgui'
+    configured[0] = str(tmp_path / 'second')
+    assert backtest_v8._results_root() == tmp_path / 'second' / 'backtests' / 'pbgui'
+    configured[0] = ''
+    assert backtest_v8._backtests_root() == tmp_path / 'data' / '.pb8-unavailable'
+
+
+def test_active_pagination_can_finish_long_reads_but_idle_snapshots_expire(tmp_path, monkeypatch):
+    """A bounded live page sequence must not restart after an arbitrary wall-time limit."""
+    clock = [0.0]
+    paths = [tmp_path / 'config' / 'run' / 'analysis.json']
+    scans = []
+
+    def scan(name=None):
+        """Record discovery while avoiding any runtime filesystem access."""
+        scans.append(name)
+        return list(paths)
+
+    monkeypatch.setattr(backtest_v8, '_results_root', lambda: tmp_path)
+    monkeypatch.setattr(backtest_v8, '_result_analysis_paths', scan)
+    monkeypatch.setattr(backtest_v8, '_result_path_snapshots', backtest_v8.OrderedDict())
+    monkeypatch.setattr(backtest_v8.time, 'monotonic', lambda: clock[0])
+    owner = SimpleNamespace(user_id='fixture')
+    first, token = backtest_v8._result_page_paths(None, 'new', owner)
+    for now in (50, 100, 150, 200, 250):
+        clock[0] = now
+        page, reused = backtest_v8._result_page_paths(None, token, owner)
+        assert list(page) == first and reused == token
+    assert scans == [None]
+    clock[0] = 311
+    with pytest.raises(HTTPException) as expired:
+        backtest_v8._result_page_paths(None, token, owner)
+    assert expired.value.status_code == 409
+
+
+def test_result_discovery_scans_once_per_directory_and_excludes_links(tmp_path, monkeypatch):
+    """Recursive discovery retains ordering/containment without glob's duplicate scans."""
+    root = tmp_path / 'results'
+    for name, stamp in (('older', 100), ('newer/nested', 200)):
+        directory = root / name
+        directory.mkdir(parents=True)
+        analysis = directory / 'analysis.json'
+        analysis.write_text('{}')
+        os.utime(analysis, (stamp, stamp))
+    external = tmp_path / 'outside'
+    external.mkdir()
+    (external / 'analysis.json').write_text('{}')
+    (root / 'external-directory').symlink_to(external, target_is_directory=True)
+    (root / 'older' / 'linked-analysis').symlink_to(external / 'analysis.json')
+    (root / 'linked').mkdir()
+    (root / 'linked' / 'analysis.json').symlink_to(external / 'analysis.json')
+    (root / 'newer' / 'unrelated.txt').write_text('unrelated')
+    visited = []
+    scandir = os.scandir
+
+    def counted(directory):
+        """Count actual opens without changing the directory iterator contract."""
+        visited.append(Path(directory))
+        return scandir(directory)
+
+    monkeypatch.setattr(backtest_v8, '_results_root', lambda: root)
+    monkeypatch.setattr(backtest_v8.os, 'scandir', counted)
+    assert backtest_v8._result_analysis_paths() == [
+        root / 'newer' / 'nested' / 'analysis.json', root / 'older' / 'analysis.json']
+    assert len(visited) == len(set(visited)) == 5
+    assert external not in visited
+    visited.clear()
+    assert backtest_v8._result_analysis_paths('older') == [root / 'older' / 'analysis.json']
+    assert visited == [root / 'older']
+
+
+def test_result_discovery_worker_lifespan_is_owned_and_shutdown_is_idempotent(monkeypatch):
+    """Controller failures cannot skip reader shutdown or retain pagination snapshots."""
+    calls = []
+
+    class Controller:
+        """Represent an independent queue controller without starting real work."""
+
+        def start(self):
+            """Record the controller's start."""
+            calls.append('start')
+
+        async def stop(self):
+            """Exercise the shared cleanup failure path."""
+            raise RuntimeError('fixture controller stop failure')
+
+    class Reader:
+        """Own only the fixture reader lifecycle."""
+
+        def __init__(self):
+            calls.append('reader created')
+
+        def close(self):
+            """Record that no detached job process is touched."""
+            calls.append('reader closed')
+
+    monkeypatch.setattr(backtest_v8, '_worker', Controller())
+    monkeypatch.setattr(backtest_v8, '_batch_submitter', Controller())
+    monkeypatch.setattr(backtest_v8, '_cleanup_orphan_queue_snapshots', lambda: None)
+    monkeypatch.setattr(backtest_v8, '_clear_queue_item_cache', lambda: None)
+    monkeypatch.setattr(backtest_v8, 'ResultDiscoveryWorker', Reader)
+    monkeypatch.setattr(backtest_v8, '_result_discovery_worker', None)
+    monkeypatch.setattr(backtest_v8, '_result_discovery_closing', False)
+    monkeypatch.setattr(backtest_v8, '_result_path_snapshots', {'fixture': {}})
+    backtest_v8.startup()
+    backtest_v8.startup()
+    asyncio.run(backtest_v8.shutdown())
+    asyncio.run(backtest_v8.shutdown())
+    assert calls.count('reader created') == calls.count('reader closed') == 1
+    assert backtest_v8._result_discovery_worker is None
+    assert not backtest_v8._result_path_snapshots
+    with pytest.raises(HTTPException) as error:
+        backtest_v8._result_analysis_paths()
+    assert error.value.status_code == 503
+
+
+def test_result_discovery_busy_is_explicit_retryable_http_error(tmp_path, monkeypatch):
+    """A bounded reader rejects excess work without reporting an empty result set."""
+    from backtest_result_discovery import ResultDiscoveryUnavailable
+    monkeypatch.setattr(backtest_v8, '_results_root', lambda: tmp_path)
+
+    def busy(root, selected):
+        """Refuse a new read while both owned slots are occupied."""
+        raise ResultDiscoveryUnavailable('fixture busy')
+
+    monkeypatch.setattr(backtest_v8, '_result_discovery_worker', SimpleNamespace(discover=busy))
+    with pytest.raises(HTTPException) as error:
+        backtest_v8._result_analysis_paths()
+    assert error.value.status_code == 503
 
 
 def test_pb8_queue_websocket_has_canonical_and_legacy_routes() -> None:
@@ -2149,6 +2297,7 @@ def test_pb8_cache_cleanup_preserves_active_foreign_and_unknown_materialized_loc
     malformed = old_directory(materialized_root, "malformed", "{not-json")
 
     monkeypatch.setattr(backtest_v8, "pb8_runtime_status", lambda: {"pb8dir": str(pb8_dir)})
+    monkeypatch.setattr(backtest_v8, "pb8dir", lambda: str(pb8_dir))
     monkeypatch.setattr(backtest_v8.psutil, "pid_exists", lambda pid: pid == 111)
 
     result = backtest_v8._cleanup_pb8_caches(1)
@@ -2176,6 +2325,7 @@ def test_pb8_cache_cleanup_respects_active_materialized_operation_lock(tmp_path,
     old_time = time.time() - 3 * 86400
     os.utime(run_dir, (old_time, old_time))
     monkeypatch.setattr(backtest_v8, "pb8_runtime_status", lambda: {"pb8dir": str(pb8_dir)})
+    monkeypatch.setattr(backtest_v8, "pb8dir", lambda: str(pb8_dir))
     monkeypatch.setattr(backtest_v8.psutil, "pid_exists", lambda pid: pid == 111)
 
     result = backtest_v8._cleanup_pb8_caches(1)

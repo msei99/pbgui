@@ -812,7 +812,7 @@ def test_panel_navigation_closes_config_editor_sidebar_outside_configs() -> None
         const backtestShell = {{selectPanel(id) {{ selected.push(id); }}}};
         let currentPanel = 'configs';
         let editingConfig = null;
-        let _resultsEmptyRetryTimer = null, _resultsEmptyRetryCount = 0, _resultsLoadGeneration = 0;
+        let _resultsEmptyRetryTimer = null, _resultsEmptyRetryCount = 0, _resultsLoadGeneration = 0, _resultsReadController = null;
         let configs = [{{}}], results = [{{}}], archives = [{{}}], legacyResults = [{{}}];
         let selectedArchiveName = '';
         function hideEditorSidebar() {{ hidden += 1; }}
@@ -964,7 +964,7 @@ def test_queue_result_action_applies_filter_before_showing_results() -> None:
     assert completed.returncode == 0, completed.stderr or completed.stdout
 
 
-def test_results_load_in_one_compact_request_and_use_server_config_filter() -> None:
+def test_small_results_load_in_one_bounded_request_with_server_config_filter() -> None:
     """All compact result summaries load in one request while charts remain lazy."""
     source = (ROOT / "frontend" / "v7_backtest.html").read_text(encoding="utf-8")
     function = source[source.index("var backtestReads="):source.index("window.addEventListener('pagehide'",source.index("var backtestReads="))] + _extract_function(source, "loadResults")
@@ -983,9 +983,9 @@ def test_results_load_in_one_compact_request_and_use_server_config_filter() -> N
         const window = {{requestAnimationFrame(callback) {{ paintFrames += 1; setImmediate(callback); }}}};
         let results = [];
         let resultsByVersion = {{v7: [], v8: []}};
-        let RESULTS_PAGE_SIZE = 0;
+        let RESULTS_PAGE_SIZE = 100;
         let _pendingResultFilter = '';
-        let _resultsLoadGeneration = 0;
+        let _resultsLoadGeneration = 0, _resultsReadController = null;
         let _resultsEmptyRetryTimer = null;
         let _resultsEmptyRetryCount = 0;
         let currentPanel = 'results';
@@ -1018,7 +1018,7 @@ def test_results_load_in_one_compact_request_and_use_server_config_filter() -> N
           assert.deepEqual(appliedCounts, [2]);
           assert.equal(results.length, 2);
           assert.equal(requests.length, 1);
-          assert.match(requests[0], /offset=0&limit=0&name=target%20config&snapshot=new$/);
+          assert.match(requests[0], /offset=0&limit=100&name=target%20config&snapshot=new$/);
           assert.equal(paintFrames, 0);
           assert.equal(nodes['results-count-label'].textContent, '2 results');
         }}).catch(error => {{ console.error(error); finishTest(1); }});

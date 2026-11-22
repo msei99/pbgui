@@ -1,5 +1,14 @@
 # PB9 Run
 
+PB9 is optional and experimental. Updating PBGui does not install or start PB9.
+Before saving an enabled PB9 instance in an existing Cluster, update PBGui and
+its running Cluster processes on every active state replica and wait for their
+PB9 capability confirmation. This applies to instances assigned to the local
+master too. Only PB9 execution hosts need a Passivbot 9 installation. The shared
+operation stream cannot be read by PB9-unaware older PBGui versions afterwards.
+Remote/live-trading acceptance is still outstanding; see the PB9 development
+status linked from the repository README.
+
 Importing a config discards inactive strategy values from the previous document. Raw changes to the account or strategy tree also clear that cache; unrelated Raw edits keep it. Switching strategies within the same document keeps your edits. Deactivation and destructive changes are synchronized with local process starts.
 
 Open **PBv9 → Run** to manage PB9 live instances. The list and editor share the PB7/PB8 Run interface. PB9 uses its own source tree, Python environment, instance directory and backups.

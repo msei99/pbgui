@@ -2,6 +2,44 @@
 
 ## Development
 
+- Prepare PB9 for controlled testing from the regular PBGui branch. Label the
+  optional PB9 menu experimental and document the existing-Cluster rollout:
+  update PBGui protocol support on all active state replicas, install Passivbot 9
+  only on selected execution hosts, and retain all readiness/signature gates.
+  Remote live-trading acceptance and the latest worker's physical GPU check
+  remain outstanding; no host update or stable-release qualification is implied.
+
+- Bound shared Backtest Results requests to 100 rows and cancel replaced load
+  generations. Build missing index summaries in bounded chunks outside shared
+  database locks, with per-generation build ownership, source revalidation and
+  native cancellation. Slow PB8 cache misses no longer serialize PB9 result reads;
+  completed chunks survive a later source failure or cancellation. Read current
+  PB8 result paths in at most two isolated, API-owned stdlib readers so recursive
+  discovery does not compete with API threads; bound output/time, reject escaped
+  paths and reap readers on timeout and API shutdown. Coalesce identical in-flight
+  reads and verify warm cache pages in the same isolated reader using shared
+  fingerprints; missing or stale rows retain the existing index rebuild path.
+  Resolve the configured PB8 result root without repeatedly scanning runtime
+  artifacts; execution still uses its independent readiness checks.
+  Keep actively paged owner-bound path snapshots valid until loading finishes;
+  retain the 60-second idle expiry and fixed entry/path bounds instead of
+  restarting slow large lists after three minutes.
+  Do not pause page loading indefinitely when an occluded browser window stops
+  animation frames; keep the paint yield bounded by a short fallback timer.
+  Preserve unchanged open PB9 result diagrams while additional pages arrive,
+  instead of rebuilding all plots and restarting their reads for every page.
+  Batch large table updates and retry only transient failed page reads twice,
+  without duplicating already loaded rows or restarting the whole list.
+  No result files are changed.
+
+- Fix Backtest Results actions with the All version filter: enable native actions
+  from the selected rows' generation, keep mixed-generation handoffs blocked and
+  update action availability after selection, sorting, reload and deletion.
+  Read PB9 result-v1 envelopes through one shared config view for local/archive
+  summaries, price overlays, Run/Backtest/Optimize/balance handoffs and archive
+  rebacktests. Rebuild only PB9's outdated summary cache; retain artifact bytes and
+  PB7/PB8 cache entries. Cover real sidebar/row controls with isolated browser tests.
+
 - Fix PB9 Suite queue/Vast data preparation by renewing native optimizer source
   bindings after scenario overrides, dates and exchanges on disposable configs.
   Preserve authored configs and bounds; keep non-Suite exports independent of

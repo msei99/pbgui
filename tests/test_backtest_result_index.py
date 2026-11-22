@@ -5,10 +5,176 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
 import backtest_result_index
+
+
+def test_cold_pb8_builder_does_not_block_pb9_or_invalidation(tmp_path, monkeypatch):
+    """A slow source reader owns no shared database lock while unrelated work proceeds."""
+    monkeypatch.setattr(backtest_result_index, 'PBGDIR', tmp_path)
+    older, native = _result(tmp_path, 'pb8', 1.2), _result(tmp_path, 'pb9', 1.3)
+    entered, release = threading.Event(), threading.Event()
+    def slow(paths):
+        """Hold only PB8 build ownership until the other generation has completed."""
+        entered.set()
+        assert release.wait(5)
+        return _builder([])(paths)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        pending = pool.submit(backtest_result_index.load_indexed_results, 'v8', [older], slow)
+        try:
+            assert entered.wait(2)
+            result = pool.submit(backtest_result_index.load_indexed_results, 'v9', [native], _builder([])).result(timeout=2)
+            assert result[0]['gain'] == 1.3
+            pool.submit(backtest_result_index.invalidate_result, 'v8', older.parent).result(timeout=2)
+        finally:
+            release.set()
+        assert pending.result(timeout=2)[0]['gain'] == 1.2
+
+
+def test_concurrent_cold_reads_reuse_one_generation_build(tmp_path, monkeypatch):
+    """A waiting reader rechecks the cache instead of rebuilding the same artifacts."""
+    monkeypatch.setattr(backtest_result_index, 'PBGDIR', tmp_path)
+    path = _result(tmp_path, 'native', 1.3)
+    entered, release = threading.Event(), threading.Event()
+    calls = []
+    def slow(paths):
+        """Count source reads while another caller waits on version ownership."""
+        calls.append(list(paths)); entered.set()
+        assert release.wait(5)
+        return _builder([])(paths)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(backtest_result_index.load_indexed_results, 'v9', [path], slow)
+        try:
+            assert entered.wait(2)
+            second = pool.submit(backtest_result_index.load_indexed_results, 'v9', [path], slow)
+        finally:
+            release.set()
+        assert first.result(timeout=2) == second.result(timeout=2)
+    assert len(calls) == 1
+
+
+def test_interrupted_build_keeps_completed_chunks_and_retries_remainder(tmp_path, monkeypatch):
+    """A source failure cannot discard previously committed summary progress."""
+    monkeypatch.setattr(backtest_result_index, 'PBGDIR', tmp_path)
+    monkeypatch.setattr(backtest_result_index, '_BUILD_CHUNK_SIZE', 2)
+    paths = [_result(tmp_path, str(i), 1.2) for i in range(3)]
+    def incomplete(chunk):
+        """Fail the second source chunk without touching the first committed chunk."""
+        if chunk == paths[2:]:
+            raise ValueError('synthetic source failure')
+        return _builder([])(chunk)
+    with pytest.raises(ValueError, match='synthetic source failure'):
+        backtest_result_index.load_indexed_results('v8', paths, incomplete)
+    calls = []
+    assert len(backtest_result_index.load_indexed_results('v8', paths, _builder(calls))) == 3
+    assert calls == [['2']]
+
+
+def test_changed_source_during_build_is_not_cached_or_returned(tmp_path, monkeypatch):
+    """Metadata replacement during a source read cannot publish an obsolete summary."""
+    monkeypatch.setattr(backtest_result_index, 'PBGDIR', tmp_path)
+    path = _result(tmp_path, 'changed', 1.2)
+    def replace_source(paths):
+        """Replace the analysis after reading it, like concurrent result replacement."""
+        rows = _builder([])(paths)
+        replacement = path.with_suffix('.new')
+        replacement.write_text('{"gain":1.8}')
+        os.replace(replacement, path)
+        backtest_result_index.invalidate_result('v9', path.parent)
+        return rows
+    assert backtest_result_index.load_indexed_results('v9', [path], replace_source) == []
+    calls = []
+    assert backtest_result_index.load_indexed_results('v9', [path], _builder(calls))[0]['gain'] == 1.8
+    assert calls == [['changed']]
+
+
+def test_cancelled_build_releases_ownership_and_keeps_previous_progress(tmp_path, monkeypatch):
+    """Cancellation between chunks drains promptly and retains valid cached chunks."""
+    monkeypatch.setattr(backtest_result_index, 'PBGDIR', tmp_path)
+    monkeypatch.setattr(backtest_result_index, '_BUILD_CHUNK_SIZE', 1)
+    paths = [_result(tmp_path, str(i), 1.2) for i in range(3)]
+    cancelled = threading.Event()
+    def check():
+        """Use a caller-owned exception, without swallowing it as a cache failure."""
+        if cancelled.is_set():
+            raise RuntimeError('synthetic cancellation')
+    def build(chunk):
+        """Cancel the second build before its pending rows can be published."""
+        rows = _builder([])(chunk)
+        if chunk == paths[1:2]:
+            cancelled.set()
+        return rows
+    with pytest.raises(RuntimeError, match='synthetic cancellation'):
+        backtest_result_index.load_indexed_results('v9', paths, build, cancel_check=check)
+    calls = []
+    assert len(backtest_result_index.load_indexed_results('v9', paths, _builder(calls))) == 3
+    assert calls == [['1'], ['2']]
+
+
+@pytest.mark.parametrize('value', [float('nan'), float('inf'), -float('inf')])
+def test_uncacheable_scalar_keeps_other_results_and_only_retries_that_row(tmp_path, monkeypatch, value):
+    """Optional cache serialization must not fail the owner's whole result list."""
+    monkeypatch.setattr(backtest_result_index, 'PBGDIR', tmp_path)
+    notices = []
+    monkeypatch.setattr(backtest_result_index, '_log', lambda *args, **kwargs: notices.append(args))
+    paths = [_result(tmp_path, 'bad', 1.2), _result(tmp_path, 'good', 1.3)]
+    calls = []
+    def build(chunk):
+        """Keep a malformed source scalar isolated from the valid cache row."""
+        rows = _builder(calls)(chunk)
+        for row in rows:
+            if row['path'] == str(paths[0].parent):
+                row['gain'] = value
+        return rows
+    rows = backtest_result_index.load_indexed_results('v8', paths, build)
+    assert len(rows) == 2 and rows[1]['gain'] == 1.3
+    assert notices
+    calls.clear()
+    assert len(backtest_result_index.load_indexed_results('v8', paths, build)) == 2
+    assert calls == [['bad']]
+    with sqlite3.connect(backtest_result_index._db_path()) as db:
+        assert db.execute('SELECT result_path FROM result_summaries').fetchall() == [(str(paths[1].parent),)]
+
+
+def test_cache_upsert_names_columns_and_preserves_extension_columns(tmp_path, monkeypatch):
+    """A cache with additional optional metadata still accepts and reuses summaries."""
+    monkeypatch.setattr(backtest_result_index, 'PBGDIR', tmp_path)
+    connection = backtest_result_index._connect()
+    with connection:
+        connection.execute("ALTER TABLE result_summaries ADD COLUMN extension TEXT DEFAULT 'retained'")
+    connection.close()
+    path = _result(tmp_path, 'source', 1.2)
+    calls = []
+    for _ in range(2):
+        assert backtest_result_index.load_indexed_results('v9', [path], _builder(calls))[0]['gain'] == 1.2
+    assert calls == [['source']]
+    with sqlite3.connect(backtest_result_index._db_path()) as db:
+        assert db.execute('SELECT extension FROM result_summaries').fetchone()[0] == 'retained'
+
+
+def test_pb9_envelope_projection_invalidates_only_native_cached_summaries(tmp_path, monkeypatch):
+    """Old native summaries rebuild automatically while PB7/PB8 cached rows stay warm."""
+    monkeypatch.setattr(backtest_result_index, 'PBGDIR', tmp_path)
+    path = _result(tmp_path, 'native', 1.3)
+    signature = backtest_result_index.result_signature(path)
+    assert backtest_result_index.result_signature(path, version='v7') == signature
+    assert backtest_result_index.result_signature(path, version='v8') == signature
+    assert backtest_result_index.result_signature(path, version='v9') != signature
+    connection = backtest_result_index._connect()
+    with connection:
+        for version in ('v7', 'v8', 'v9'):
+            connection.execute('INSERT INTO result_summaries VALUES (?, ?, ?, ?, ?)',
+                (version, str(path.parent), signature, 0, json.dumps({'path': str(path.parent), 'gain': 0})))
+    connection.close()
+    calls = []
+    for version in ('v7', 'v8', 'v9'):
+        rows = backtest_result_index.load_indexed_results(version, [path], _builder(calls))
+        assert rows[0]['gain'] == (1.3 if version == 'v9' else 0)
+    assert calls == [['native']]
 
 
 @pytest.mark.parametrize('kind', ['file', 'directory', 'symlink', 'missing'])

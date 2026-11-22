@@ -738,7 +738,7 @@
       { page: 'v8_strategy_explorer', icon: '&#128065;', label: 'Strategy Explorer' },
       { page: 'v8_pareto_explorer',   icon: '&#9733;',   label: 'Pareto Explorer'   }
     ]},
-    { id: 'pbv9', label: 'PBv9', items: [
+    { id: 'pbv9', label: 'PBv9 (experimental)', items: [
       { page: 'v9_run', icon: '&#9654;', label: 'Run' },
       { page: 'v9_backtest', icon: '&#128202;', label: 'Backtest' },
       { page: 'v9_optimize', icon: '&#128269;', label: 'Optimize' },
@@ -1837,7 +1837,7 @@
     'system_services':    '/api/services/main_page',
     'system_db_tools':    '/api/db-tools/main_page',
     'system_storage':     '/api/storage/main_page',
-    'help':               '/app/help.html?v=1782',
+    'help':               '/app/help.html?v=1783',
     'v7_run':             '/api/v7/main_page',
     'v7_backtest':        '/api/backtest-v7/main_page',
     'v7_optimize':        '/api/optimize-v7/main_page',

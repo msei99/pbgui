@@ -40,6 +40,7 @@ from pb9_backtest_runtime import launch_environment, source_identity, require_ca
 from api.backtest_v8 import _launch_backtest_runner
 from pb9_runtime import inspect_pb9_runtime
 from pb9_result_helpers import load_equity_arrays, summarize_native_result
+from pb9_result_records import InvalidPB9ResultRecord, result_config_view
 from pb7_config import load_pb7_config, save_pb7_config
 from pb9_config_storage import PB9FileContext
 from pbgui_purefunc import PBGDIR, PBGUI_VERSION, PBGUI_SERIAL, load_ini_section, save_ini_section
@@ -466,6 +467,15 @@ def _result(path):
     return result
 
 
+def _result_config_view(document):
+    """Translate structural record errors only at the authenticated API boundary."""
+    try:
+        return result_config_view(document)
+    except InvalidPB9ResultRecord as exc:
+        _log(SERVICE, 'PB9 result envelope is invalid or unsupported', level='WARNING')
+        raise HTTPException(422, str(exc)) from None
+
+
 def _read_result(path):
     """Allow native read-only results in managed local storage or validated archives."""
     try:
@@ -481,7 +491,7 @@ def _read_result(path):
     directory = _safe(root, path)
     if not directory.is_dir():
         raise HTTPException(404, 'PB9 archived result not found')
-    config = _read(_safe(directory, 'config.json'))
+    config = _result_config_view(_read(_safe(directory, 'config.json')))
     schema = config.get('config_version')
     if not isinstance(schema, str) or generation_from_schema(schema) != 'pb9':
         raise HTTPException(422, 'Archived result does not belong to PB9')
@@ -500,7 +510,7 @@ def _summaries(paths):
     for analysis_path in paths:
         directory = _result(str(analysis_path.parent.relative_to(root)))
         analysis = _read(_safe(directory, 'analysis.json'), 8 * 1024 * 1024)
-        config = _read(_safe(directory, 'config.json'))
+        config = _result_config_view(_read(_safe(directory, 'config.json')))
         authored = _result_source(directory)
         arrays = _equity_arrays(directory) if _safe(directory, 'balance_and_equity.npz').is_file() else None
         items.append(summarize_native_result(directory, config, authored, analysis, arrays,
@@ -540,7 +550,7 @@ def _result_source(directory):
     for filename in ('pbgui.source.json', 'config.original.json', 'config.json'):
         path = _safe(directory, filename)
         if path.exists():
-            return _read(path)
+            return _result_config_view(_read(path))
     raise HTTPException(404, 'PB9 result source is unavailable')
 
 
@@ -822,7 +832,11 @@ def _operation(operation, cancel, payload=None):
             if offset < 0 or not 0 <= limit <= 100:
                 raise HTTPException(422, 'Invalid result page')
             selected = paths[offset:offset + (limit or 100)]
-            items = load_indexed_results('v9', selected, _summaries)
+            def check_result_read():
+                """Let cancelled reads release generation-owned build admission promptly."""
+                if cancel.is_set():
+                    raise PB9ConfigError('helper_cancelled')
+            items = load_indexed_results('v9', selected, _summaries, cancel_check=check_result_read)
             for item in items:
                 try:
                     reference = _result_reference(_result(item['path']))
@@ -848,7 +862,7 @@ def _operation(operation, cancel, payload=None):
         if operation == 'bt9_analysis':
             return _read(_safe(_read_result(args['path']), 'analysis.json'), 8 * 1024 * 1024)
         if operation == 'bt9_price':
-            config = _read(_safe(_read_result(args['path']), 'config.json'))
+            config = _result_config_view(_read(_safe(_read_result(args['path']), 'config.json')))
             try:
                 return build_market_price_payload(config, exchange=args['exchange'], coin=args['coin'],
                                                   max_points=args['max_points'])
@@ -857,10 +871,7 @@ def _operation(operation, cancel, payload=None):
                 raise HTTPException(400, str(exc)) from None
         if operation == 'bt9_result_config':
             directory = _read_result(args['path'])
-            original = _safe(directory, 'pbgui.source.json')
-            if not original.exists():
-                original = _safe(directory, 'config.original.json')
-            source = _read(original if original.exists() else _safe(directory, 'config.json'))
+            source = _result_source(directory)
             reference = _result_reference(directory)
             if reference:
                 source.setdefault('pbgui', {})['comparison_reference'] = reference

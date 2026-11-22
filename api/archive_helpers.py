@@ -22,6 +22,7 @@ from urllib.parse import quote
 
 from file_lock import advisory_file_lock
 from secure_files import read_regular_file_nofollow
+from pb9_result_records import result_config_view
 
 
 ARCHIVE_LAYOUT_ROOT = Path("pbgui") / "configs"
@@ -575,6 +576,7 @@ def directory_fingerprint(path: Path) -> str:
 
 def config_version_info(config: dict, *, fingerprint: str | None = None) -> dict:
     """Return normalized generation-neutral config version metadata for archive paths."""
+    config = result_config_view(config or {})
     value = (config or {}).get("config_version")
     raw_version = value if isinstance(value, str) else ""
     has_version = bool(_SAFE_VERSION_RE.fullmatch(raw_version))
@@ -717,7 +719,7 @@ def derive_backtest_archive_relative_path(result_dir: Path, archive_root: Path) 
     """Derive the new versioned archive-relative path for a backtest result."""
     source_root = _absolute_path(result_dir)
     _reject_symlink_components(source_root)
-    config = _read_json_object_nofollow(source_root / "config.json", source_root, required=True)
+    config = result_config_view(_read_json_object_nofollow(source_root / "config.json", source_root, required=True))
     _read_json_object_nofollow(source_root / "analysis.json", source_root, required=True)
     fingerprint = directory_fingerprint(result_dir)
     version = config_version_info(config, fingerprint=fingerprint)
@@ -872,7 +874,7 @@ def summarize_backtest_result(result_dir: Path, archive_root: Path) -> dict:
     result_dir = _validate_archive_path(result_dir, archive_root, require_exists=True)
     analysis_file = result_dir / "analysis.json"
     analysis = _read_json_object_nofollow(analysis_file, archive_root, required=True)
-    config = _read_json_object_nofollow(result_dir / "config.json", archive_root, required=True)
+    config = result_config_view(_read_json_object_nofollow(result_dir / "config.json", archive_root, required=True))
     version = config_version_info(config)
     if version['backtest_version'] == 'v9':
         from pb9_result_helpers import load_equity_arrays, summarize_native_result

@@ -1,15 +1,17 @@
 # GUI for Passivbot
 
-> **PB9 DEVELOPMENT BRANCH — UNFINISHED / NOT FULLY TESTED**
+> **PB9 SUPPORT — OPTIONAL / EXPERIMENTAL / NOT FULLY TESTED**
 >
-> `dev-pb9-integration` is an experimental development snapshot, not a stable
-> release. PB9 integration is incomplete. Full installation/update on real remote
+> PB9 integration is available for controlled testing and is incomplete.
+> Full installation/update on real remote
 > masters and VPS hosts, and GPU execution with the latest worker revision, have
 > **not been tested end to end**. Focused automated and isolated local tests do
 > not establish production readiness. Use only for controlled testing.
 > See [PB9 development status](docs/plans/pb9-development-status.md) for scope,
-> completed checks and open work. Switching to this branch does not install PB9
-> automatically.
+> completed checks, existing-Cluster rollout requirements and open work. Updating
+> PBGui does not install PB9 automatically. Only selected execution hosts need
+> Passivbot 9; all active Cluster state replicas need PB9-aware PBGui before the
+> first PB9 Cluster config is published.
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/Y8Y216Q3QS)
 

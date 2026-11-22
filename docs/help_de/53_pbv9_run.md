@@ -1,5 +1,15 @@
 # PB9 Run
 
+PB9 ist optional und experimentell. Ein PBGui-Update installiert oder startet
+PB9 nicht. Aktualisiere vor dem Speichern einer aktivierten PB9-Instanz im
+bestehenden Cluster PBGui und die laufenden Cluster-Prozesse aller aktiven
+Zustandsreplikate und warte auf deren PB9-Fähigkeitsbestätigung. Das gilt auch
+für die Zuweisung zum lokalen Master. Nur PB9-Ausführungshosts benötigen eine
+Passivbot-9-Installation. Ältere PBGui-Versionen ohne PB9-Unterstützung können
+den gemeinsamen Operationsstrom danach nicht lesen. Die praktische Remote-/
+Live-Trading-Abnahme steht noch aus; siehe den im Repository-README verlinkten
+PB9-Entwicklungsstand.
+
 Ein Config-Import verwirft zwischengespeicherte Strategiewerte der vorherigen Config. Raw-Änderungen am Konto oder Strategiebaum leeren diesen Cache ebenfalls; andere Raw-Änderungen behalten ihn. Beim Strategiewechsel innerhalb derselben Config bleiben Änderungen erhalten. Deaktivierung und destruktive Änderungen sind mit lokalen Prozessstarts koordiniert.
 
 Unter **PBv9 → Run** verwaltest du PB9-Live-Instanzen. Liste und Editor verwenden dieselbe Oberfläche wie PB7/PB8 Run. PB9 hat einen eigenen Quellbaum, eine eigene Python-Umgebung sowie getrennte Instanz- und Backup-Verzeichnisse.

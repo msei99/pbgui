@@ -1190,8 +1190,7 @@ def test_archive_reload_restores_search_coin_config_and_selected_row(backtest):
 
 def test_native_result_opens_shared_native_optimize_draft(backtest):
     """Use the real result action and draft contract without a legacy optimizer hop."""
-    page=backtest.page
-    expect(page.locator('#cfg-name')).to_have_value('fixture')
+    page, _, _, result = _comparison_fixture(backtest, linked=False)
     submitted=[]
     page.route('**/api/backtest-v9/results/config?*',lambda route:route.fulfill(json=backtest.config))
     def draft(route):
@@ -1200,12 +1199,223 @@ def test_native_result_opens_shared_native_optimize_draft(backtest):
         route.fulfill(json={'draft_id':'native-optimize-draft'})
     page.route('**/api/backtest-v9/optimize-draft',draft)
     page.route('**/api/optimize-v9/main_page?*',lambda route:route.fulfill(body='<html><body>Native Optimize draft</body></html>',content_type='text/html'))
-    page.evaluate("selectPanel('results'); window.getSelectedResults = function(){return ['fixture/combined/native-result'];};")
+    page.locator('#results-version-filter').select_option('both')
+    expect(page.locator('#results-list tr[data-path]')).to_have_count(2)
+    page.locator('#results-list tr[data-path="'+result['path']+'"]').click()
     page.locator('button[onclick="optimizeFromResult()"]').click()
     page.wait_for_url('**/api/optimize-v9/main_page?*')
     assert parse_qs(urlparse(page.url).query)['opt_draft_id']==['native-optimize-draft']
     assert submitted==[{'config':backtest.config}]
     assert backtest.unexpected==[]
+
+
+@pytest.mark.parametrize('action', ['run', 'backtest', 'balance', 'calc', 'archive'])
+def test_native_result_sidebar_actions_work_under_all_filter(backtest, action):
+    """Click real selected rows and sidebar buttons; no mocked selection bypasses gating."""
+    page, calls, _, result = _comparison_fixture(backtest, linked=False)
+    requests = []
+    def config_read(route):
+        """Record the selected generation and source, retaining native authored fields."""
+        requests.append(route.request.url)
+        route.fulfill(json=backtest.config)
+    page.route('**/api/backtest-v9/results/config?*', config_read)
+    page.route('**/api/v9/edit_page?*', lambda route: route.fulfill(content_type='text/html', body='<p>Run draft</p>'))
+    balance_drafts = []
+    def balance_draft(route):
+        """Only the shared balance projection leaves the native result boundary."""
+        balance_drafts.append(route.request.post_data_json)
+        route.fulfill(json={'draft_id': 'balance-fixture'})
+    page.route('**/api/balance-calc/draft', balance_draft)
+    page.route('**/api/balance-calc/main_page?*', lambda route: route.fulfill(content_type='text/html', body='<p>Balance draft</p>'))
+    page.locator('#results-version-filter').select_option('both')
+    expect(page.locator('#results-list tr[data-path]')).to_have_count(2)
+    page.locator('#results-list tr[data-path="'+result['path']+'"]').click()
+    actions = {'run': 'addToRun()', 'backtest': 'rebacktestSelected()',
+               'balance': 'goBalanceCalculatorFromResult()', 'calc': 'calcBalanceFromResult()',
+               'archive': 'addResultToArchive()'}
+    page.locator('#ctx-results button[onclick="'+actions[action]+'"]').click()
+    if action == 'run':
+        page.wait_for_url('**/api/v9/edit_page?*')
+        assert backtest.run_drafts[0]['config']['pbgui']['runtime'] == 'pb9'
+        assert backtest.run_drafts[0]['config']['pbgui']['enabled_on'] == 'disabled'
+        assert backtest.run_drafts[0]['config']['config_version'] == 'v9.0.0'
+    elif action == 'backtest':
+        expect(page.locator('#cfg-starting-balance')).to_have_value(str(backtest.config['backtest']['starting_balance']))
+        assert page.evaluate('editingConfig') == '__new__'
+    elif action == 'balance':
+        page.wait_for_url('**/api/balance-calc/main_page?*')
+        assert len(balance_drafts) == 1
+    elif action == 'calc':
+        expect(page.locator('#bcalc-res')).to_contain_text('123.00')
+        assert len(backtest.balance_requests) == 1
+    else:
+        page.wait_for_function("document.getElementById('btn-result-add-archive').getAttribute('aria-busy') === null")
+        assert backtest.archived == [{'results': [{'source_path': result['path'], 'backtest_version': 'v9'}]}]
+    if action != 'archive':
+        assert len(requests) == 1 and parse_qs(urlparse(requests[0]).query)['path'] == [result['path']]
+    assert backtest.saved == backtest.queued == []
+    assert backtest.errors == backtest.unexpected == []
+
+
+def test_result_action_gating_tracks_selection_sort_reload_and_mixed_versions(backtest):
+    """All view uses row ownership, restores selection, and keeps unsupported tools hidden."""
+    page, _, foreign, native = _comparison_fixture(backtest, linked=False)
+    page.locator('#results-version-filter').select_option('both')
+    expect(page.locator('#results-list tr[data-path]')).to_have_count(2)
+    button = page.locator('#ctx-results button[onclick="addToRun()"]')
+    expect(button).to_be_disabled()
+    page.locator('#results-list tr[data-path="'+native['path']+'"]').click()
+    expect(button).to_be_enabled()
+    page.locator('#results-list th').nth(0).click()
+    expect(button).to_be_enabled()
+    page.reload()
+    expect(page.locator('#results-version-filter')).to_have_value('both')
+    expect(button).to_be_enabled()
+    page.locator('#results-list tr[data-path="'+foreign['path']+'"]').click()
+    expect(button).to_be_disabled()
+    expect(page.locator('#ctx-results button[onclick="compareSelected()"]')).to_be_enabled()
+    page.locator('#results-list tr[data-path="'+native['path']+'"]').click()
+    expect(button).to_be_disabled()
+    page.get_by_role('button', name='Deselect', exact=True).click()
+    expect(button).to_be_disabled()
+    page.get_by_role('button', name='Select All', exact=True).click()
+    expect(button).to_be_disabled()
+    page.locator('#results-version-filter').select_option('v9')
+    expect(page.locator('#results-list tr[data-path]')).to_have_count(1)
+    expect(button).to_be_disabled()
+    page.locator('#results-list tr[data-path="'+native['path']+'"]').click()
+    expect(button).to_be_enabled()
+    for action in ('strategyExplorerFromResult()', 'optimizePresetFromResult()'):
+        hidden = page.locator('#ctx-results button[onclick="'+action+'"]')
+        expect(hidden).to_be_hidden()
+        expect(hidden).to_be_disabled()
+    assert backtest.errors == backtest.unexpected == []
+
+
+@pytest.mark.parametrize('action', ['analysis', 'config', 'plot', 'fills'])
+def test_native_result_row_artifact_buttons_use_native_endpoints(backtest, action):
+    """Real row icons render native JSON and image artifacts through their owning API."""
+    import base64
+    page, _, _, result = _comparison_fixture(backtest, linked=False)
+    reads = []
+    def artifact(route):
+        """Supply only isolated artifacts, recording every requested native endpoint."""
+        path = urlparse(route.request.url).path
+        reads.append(path)
+        if path.endswith('/analysis'):
+            route.fulfill(json={'sharpe_ratio_strategy_equity': 2.5})
+        elif path.endswith('/config'):
+            route.fulfill(json=backtest.config)
+        elif path.endswith('/files'):
+            route.fulfill(json={'files': ['balance_and_equity.png', 'fills_plots/HYPE.png']})
+        else:
+            route.fulfill(content_type='image/png', body=base64.b64decode(
+                'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a3ioAAAAASUVORK5CYII='))
+    for endpoint in ('analysis', 'config', 'files', 'image'):
+        page.route('**/api/backtest-v9/results/'+endpoint+'?*', artifact)
+    page.locator('#results-list tr[data-path="'+result['path']+'"] button[data-action="'+action+'"]').click()
+    if action == 'analysis':
+        expect(page.locator('#results-charts')).to_contain_text('sharpe_ratio_strategy_equity')
+        assert '/api/backtest-v9/results/analysis' in reads
+    elif action == 'config':
+        expect(page.locator('#results-charts')).to_contain_text('v9.0.0')
+        assert '/api/backtest-v9/results/config' in reads
+    else:
+        expect(page.locator('#results-charts img')).to_have_count(2 if action == 'plot' else 1)
+        page.wait_for_function("Array.from(document.querySelectorAll('#results-charts img')).every(image => image.complete && image.naturalWidth > 0)")
+        assert '/api/backtest-v9/results/files' in reads
+        assert '/api/backtest-v9/results/image' in reads
+    assert backtest.errors == backtest.unexpected == []
+
+
+def test_native_result_delete_uses_owning_endpoint_and_updates_list(backtest):
+    """Delete only an intercepted synthetic result and refresh the current All view automatically."""
+    page, _, _, result = _comparison_fixture(backtest, linked=False)
+    deleted = []
+    def native_results(route):
+        """Keep deletion entirely inside this browser fixture."""
+        if route.request.method == 'DELETE':
+            deleted.append(parse_qs(urlparse(route.request.url).query)['path'][0])
+            route.fulfill(json={'ok': True})
+        else:
+            route.fulfill(json={'results': [] if deleted else [result], 'pagination': {'has_more': False, 'total': 0 if deleted else 1}})
+    page.route('**/api/backtest-v9/results', native_results)
+    page.route('**/api/backtest-v9/results?*', native_results)
+    page.locator('#results-version-filter').select_option('both')
+    expect(page.locator('#results-list tr[data-path]')).to_have_count(2)
+    page.locator('#results-list tr[data-path="'+result['path']+'"]').click()
+    page.locator('#ctx-results button[onclick="deleteSelectedResults()"]').click()
+    page.locator('#modal-root').get_by_role('button', name='Delete', exact=True).click()
+    expect(page.locator('#results-list tr[data-path]')).to_have_count(1)
+    assert deleted == [result['path']]
+    expect(page.locator('#results-version-filter')).to_have_value('both')
+    expect(page.locator('#ctx-results button[onclick="addToRun()"]')).to_be_disabled()
+    assert backtest.errors == backtest.unexpected == []
+
+
+def test_all_results_load_in_bounded_pages_without_resetting_native_selection(backtest):
+    """An unfinished PB8 page cannot block a PB9 selection, chart or Run handoff."""
+    page, _, old, native = _comparison_fixture(backtest, linked=False)
+    page.wait_for_function('!_resultsReadController')
+    page.evaluate("""() => {
+      const fetch = window.fetch.bind(window);
+      window.__lateResultRequests = [];
+      window.fetch = function(url, options) {
+        if(String(url).includes('/api/backtest-v8/results?') && String(url).includes('offset=100')) {
+          window.__lateResultRequests.push({signal:options.signal,generation:_resultsLoadGeneration});
+        }
+        return fetch(url, options);
+      };
+    }""")
+    rows = [dict(old, path=old['path']+'-'+str(i), config_name='older-'+str(i)) for i in range(120)]
+    pending, requested = [], []
+    def older_page(route):
+        """Hold the second PB8 page while the real UI remains usable."""
+        query = parse_qs(urlparse(route.request.url).query)
+        offset, limit = int(query.get('offset', ['0'])[0]), int(query.get('limit', ['0'])[0])
+        requested.append((offset, limit, query.get('snapshot', [''])[0]))
+        assert limit == 100
+        if offset:
+            pending.append(route)
+        else:
+            route.fulfill(json={'results': rows[:100], 'pagination': {
+                'total': 120, 'has_more': True, 'next_offset': 100, 'snapshot': 'a'*32}})
+    page.route('**/api/backtest-v8/results?*', older_page)
+    page.route('**/api/backtest-v9/results/analysis?*', lambda route: route.fulfill(json={'sharpe_ratio_strategy_equity': 2.5}))
+    page.locator('#results-version-filter').select_option('both')
+    expect(page.locator('#results-list tr[data-path]')).to_have_count(101)
+    row = page.locator('#results-list tr[data-path="'+native['path']+'"]')
+    row.click()
+    row.locator('button[data-action="analysis"]').click()
+    expect(page.locator('#results-charts')).to_contain_text('sharpe_ratio_strategy_equity')
+    expect(page.locator('#ctx-results button[onclick="addToRun()"]')).to_be_enabled()
+    page.locator('#results-filter').fill('converted')
+    expect(page.locator('#results-list tr[data-path]')).to_have_count(1)
+    page.evaluate("window.__retainedResultPanel=document.getElementById('results-charts').firstElementChild")
+    assert 1 <= len(pending) <= 2, requested
+    signals = page.evaluate('window.__lateResultRequests.map(item=>({aborted:item.signal.aborted,generation:item.generation}))')
+    assert len(signals) == len(pending)
+    assert all(item['aborted'] for item in signals[:-1]), signals
+    pending.pop().fulfill(json={'results': rows[100:], 'pagination': {
+        'total': 120, 'has_more': False, 'next_offset': 120, 'snapshot': 'a'*32}})
+    expect(page.locator('#results-count-label')).to_contain_text('121')
+    assert page.evaluate("document.getElementById('results-charts').firstElementChild===window.__retainedResultPanel"), 'Paging must preserve the existing chart/JSON panel DOM'
+    expect(page.locator('#results-filter')).to_have_value('converted')
+    expect(page.locator('#results-list tr.selected')).to_have_count(1)
+    assert row.locator('button[data-action="analysis"]').evaluate("element=>element.classList.contains('active')")
+    expect(page.locator('#results-charts')).to_contain_text('sharpe_ratio_strategy_equity')
+    expect(page.locator('#ctx-results button[onclick="addToRun()"]')).to_be_enabled()
+    assert requested[:2] == [(0, 100, 'new'), (100, 100, 'a'*32)]
+    # A focus/visibility update may start one fresh load; every page stays bounded
+    # and uses its discovery snapshot rather than switching to an unbounded read.
+    assert len(requested) <= 4
+    assert all(limit == 100 and (offset == 0 or snapshot == 'a'*32)
+               for offset, limit, snapshot in requested)
+    # A cleared panel must be rebuilt even if its saved source/action signature
+    # still matches; preservation applies only while the existing panel exists.
+    page.evaluate("document.getElementById('results-charts').replaceChildren();window.PBGuiBacktestV9.restoreResults()")
+    expect(page.locator('#results-charts')).to_contain_text('sharpe_ratio_strategy_equity')
+    assert backtest.errors == backtest.unexpected == []
 
 
 @pytest.mark.parametrize('is_new',[False,True])
