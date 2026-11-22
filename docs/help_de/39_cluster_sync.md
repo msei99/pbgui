@@ -223,6 +223,15 @@ Checkpoint unabhängig bestätigen, die Credential-Protocol-v2-Migration muss
 versiegelt sein und der Checkpoint-Reducer muss dem Full Replay entsprechen. Ein
 Policy-Konflikt pausiert jede Löschung automatisch.
 
+Bei `compact v2 reducer basis does not match full replay` müssen die bestehenden
+Checkpoint- und Operationsdateien erhalten bleiben. Betroffene ältere Versionen
+können nach Empfängeränderungen Abhängigkeiten verschlüsselter Zugangsdaten aus
+der kompakten Historie auslassen. Der korrigierte Koordinator erhält diese
+Abhängigkeiten und Migrationsbestätigungen; der exakte Vergleich mit der
+vollständigen Historie bleibt Pflicht. Die normale Wartung versucht den
+Checkpoint-Aufbau erneut. Manuelles Löschen oder erzwungene Aktivierung ist
+nicht nötig. Andere Zustandsabweichungen pausieren die Bereinigung weiterhin.
+
 Operationen nach einem Checkpoint sind signiert und an dessen Checkpoint-ID
 gebunden. Ein Node hinter gelöschter Historie installiert zuerst den bestätigten
 Checkpoint und die benötigten Blobs. Einen divergierenden alten Tail lehnt

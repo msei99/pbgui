@@ -2394,6 +2394,8 @@ def _build_reducer_state(
     )
     if latest_freeze is not None:
         selected[str(latest_freeze["op_id"])] = latest_freeze
+    for operation in _v2_basis_dependencies(operations, expected_v2, latest_freeze):
+        selected[str(operation["op_id"])] = operation
     latest_states: dict[str, dict[str, Any]] = {}
     for operation in operations:
         if str(operation.get("op") or "") != "SET_CMC_KEY_STATE":
@@ -2434,6 +2436,40 @@ def _build_reducer_state(
         "v2_basis_operations": v2_basis,
         "retention_policy_basis_operations": policy_basis,
     }
+
+
+def _v2_basis_dependencies(
+    operations: list[dict[str, Any]],
+    expected: Mapping[str, Any],
+    freeze: Mapping[str, Any] | None,
+) -> list[dict[str, Any]]:
+    """Retain recipient ancestry and ACKs not named by materialized op_id fields.
+
+    Recipient changes belong to provider lifetimes: keep the current lifetime
+    and any already received future lifetime, including temporarily unreachable
+    branches which a tail operation can connect. Older provider lifetimes are
+    obsolete. Migration ACKs are last-write projections per node and freeze;
+    preserve current/future freezes without retaining superseded ACK history.
+    """
+    providers = {
+        str(secret_id): int(record.get("generation") or 0)
+        for field in ("secrets", "secret_tombstones")
+        for secret_id, record in (expected.get(field) or {}).items()
+    }
+    generation = int((freeze or {}).get("freeze_generation") or 0)
+    recipients = []
+    acknowledgements: dict[tuple[str, str, int], dict[str, Any]] = {}
+    for operation in sorted(operations, key=_operation_order):
+        kind = str(operation.get("op") or "")
+        if kind == "UPDATE_SECRET_RECIPIENTS":
+            if int(operation.get("provider_generation") or 0) >= providers.get(str(operation["secret_id"]), 0):
+                recipients.append(operation)
+        elif kind in {"WRITER_FREEZE_ACK", "CREDENTIAL_INVENTORY_ACK", "CREDENTIAL_MATERIALIZATION_ACK"}:
+            ack_generation = int(operation.get("freeze_generation") or 0)
+            if ack_generation >= generation:
+                node_id = str(operation.get("node_id") or operation["actor"])
+                acknowledgements[(kind, node_id, ack_generation)] = operation
+    return [*recipients, *acknowledgements.values()]
 
 
 def _verify_reducer_state(
@@ -2492,7 +2528,7 @@ def _collect_op_ids(value: Any) -> set[str]:
     result: set[str] = set()
     if isinstance(value, Mapping):
         for key, item in value.items():
-            if str(key) == "op_id" and isinstance(item, str) and item:
+            if str(key) in {"op_id", "recipient_op_id"} and isinstance(item, str) and item:
                 result.add(item)
             else:
                 result.update(_collect_op_ids(item))

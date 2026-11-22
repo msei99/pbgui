@@ -217,6 +217,14 @@ the same checkpoint, credential protocol v2 migration must be sealed, and the
 checkpoint reducer must match full replay. A conflict automatically pauses
 deletion.
 
+If retention reports `compact v2 reducer basis does not match full replay`,
+keep the existing checkpoint and operation files. Affected older versions can
+omit credential-recipient dependencies from the compact history after recipient
+updates. The corrected coordinator retains those dependencies and migration
+acknowledgements, and still requires exact full-replay equivalence. Normal
+maintenance retries checkpoint creation; no manual deletion or forced activation
+is required. A different state mismatch continues to pause cleanup safely.
+
 Operations after a checkpoint are signed and bound to its checkpoint ID. A
 node behind deleted history installs the proven checkpoint and required blobs
 before syncing the tail. PBGui rejects a divergent stale tail instead of
