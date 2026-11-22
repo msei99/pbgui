@@ -2091,7 +2091,8 @@ FILL_SUMMARY_RE = re.compile(r'\[fill\]\s+(\d+)\s+fills,\s+pnl=([+-]?(?:\d+\.?\d
 FILL_PNL_RE = re.compile(r'\bpnl=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
 FILL_FEE_RE = re.compile(r'\bfee=([+-]?(?:\d+\.?\d*|\d*\.\d+))\b')
 FILL_EVENT_TS_RE = re.compile(r'\[fill\]\s+(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z\b')
-SYNC_EXCLUDE_FILES = {'approved_coins.json', 'config_run.json', 'ignored_coins.json', 'running_version.txt'}
+# Keep identical to master.cluster_state.SYNC_EXCLUDE_FILES (standalone remote script).
+SYNC_EXCLUDE_FILES = {'approved_coins.json', 'config_run.json', 'ignored_coins.json', 'monitor.json', 'monitor_cache.json', 'running_version.txt'}
 PB8_PNL_CACHE_VERSION = 2
 HISTORY_WINDOW_HOURS = 24 * 28
 

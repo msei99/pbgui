@@ -2054,6 +2054,54 @@ def test_embedded_instance_collector_remains_valid_python() -> None:
     assert "'history': bot_history" in monitor_mod.INSTANCE_COLLECT_SCRIPT
 
 
+@pytest.mark.parametrize("runtime", ["7", "8", "9"])
+def test_collector_manifest_matches_cluster_with_local_monitor_files(tmp_path, runtime):
+    """Telemetry files cannot block an unchanged config; real edits still block."""
+    import hashlib
+    from master.cluster_state import SYNC_EXCLUDE_FILES
+
+    prefix = 'python3 -u -c "\n'
+    tree = ast.parse(monitor_mod.INSTANCE_COLLECT_SCRIPT[len(prefix):-2])
+    selected = [
+        node for node in tree.body
+        if (isinstance(node, ast.FunctionDef)
+            and node.name in {"_config_manifest_hash", "_cluster_gate_status"})
+        or (isinstance(node, ast.Assign)
+            and any(isinstance(t, ast.Name) and t.id == "SYNC_EXCLUDE_FILES" for t in node.targets))
+    ]
+    namespace = {"os": os, "hashlib": hashlib, "json": json}
+    exec(compile(ast.Module(body=selected, type_ignores=[]), "<manifest-collector>", "exec"), namespace)
+    instance = tmp_path / "instance"
+    instance.mkdir()
+    config = instance / "config.json"
+    config.write_text('{"live": {"user": "synthetic-account"}}')
+    if runtime == "9":
+        (instance / "pbgui.json").write_text('{"runtime": "pb9"}')
+    expected = compute_config_manifest_hash(build_config_manifest(instance))
+    # Mirrors all four affected PB7 directories on manibot60, plus runtime caches.
+    for filename in SYNC_EXCLUDE_FILES:
+        (instance / filename).write_text('{"local": "telemetry"}')
+    key = "instances" if runtime == "7" else f"pb{runtime}_instances"
+    tombstones = "tombstones" if runtime == "7" else f"pb{runtime}_tombstones"
+    cluster = {
+        "configured": True, "pb9_configured": True, "desired_loaded": True,
+        "cluster_id": "test-cluster", "desired_cluster_id": "test-cluster", "node_id": "test-node",
+        key: {"instance": {"desired_state": "running", "assigned_host": "test-node",
+                            "config_manifest_hash": expected, "version": "1"}},
+    }
+
+    def gate(version="1"):
+        """Use the same embedded gate that processes local and SSH snapshots."""
+        return namespace["_cluster_gate_status"]("instance", str(instance), version, cluster, key, tombstones)
+
+    assert gate()["cluster_gate"] == "allowed"
+    assert set(namespace["SYNC_EXCLUDE_FILES"]) == set(SYNC_EXCLUDE_FILES)
+    assert namespace["_config_manifest_hash"](str(instance)) == expected
+    assert gate("2")["cluster_gate"] == "version_mismatch"
+    config.write_text('{"live": {"user": "changed-account"}}')
+    assert gate()["cluster_gate"] == "manifest_mismatch"
+
+
 def test_embedded_pb8_pnl_uses_fill_timestamp_and_skips_batch_summaries() -> None:
     """PB8 startup history must not become today's PnL based on its log timestamp."""
 

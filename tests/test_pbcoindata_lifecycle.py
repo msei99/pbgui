@@ -7,6 +7,7 @@ import configparser
 import json
 from pathlib import Path
 import subprocess
+import sys
 import time
 from types import SimpleNamespace
 
@@ -59,6 +60,129 @@ def demand(consumer, processes=None):
         process_iter=lambda: processes if processes is not None else [consumer.process],
         config_loader=lambda path: json.loads(path.read_text()),
     )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_default_consumer_loader_needs_no_native_pb7_pipeline(consumer, monkeypatch, enabled):
+    """A lean PBGui environment can inspect demand without importing bot dependencies."""
+    import pb7_config
+
+    calls = []
+
+    def unavailable_pipeline():
+        """Simulate the missing native dependencies on a VPS runner."""
+        calls.append(1)
+        raise pb7_config.PB7ConfigurationError("No module named numpy")
+
+    monkeypatch.setattr(pb7_config, "_get_pb7_config_api", unavailable_pipeline)
+    payload = {"pbgui": {"dynamic_ignore": enabled}, "live": {"user": "account"}}
+    for path in (consumer.desired, consumer.runtime):
+        path.write_text(json.dumps(payload))
+    account_path = consumer.root / "pb7" / "api-keys.json"
+    account_path.parent.mkdir()
+    account_path.write_text(json.dumps({"account": {"exchange": "bybit", "key": "synthetic-secret"}}))
+
+    snapshot = lifecycle.consumer_snapshot(
+        consumer.root, str(account_path.parent), process_iter=lambda: [consumer.process],
+    )
+    assert snapshot == lifecycle.ConsumerSnapshot(
+        "ACTIVE" if enabled else "IDLE", True, frozenset({"bybit"} if enabled else ()),
+    )
+    assert calls == []
+    assert "synthetic-secret" not in repr(snapshot)
+
+
+@pytest.mark.parametrize("raw", [
+    "{", "[]", "null", '{"pbgui": []}', '{"pbgui": null}',
+    '{"pbgui": {"dynamic_ignore": "false"}}', '{"live": []}',
+])
+def test_default_consumer_loader_keeps_invalid_metadata_unknown(consumer, raw):
+    """Malformed metadata must never justify unloading the daemon."""
+    consumer.desired.write_text(raw)
+    snapshot = lifecycle.consumer_snapshot(
+        consumer.root, str(consumer.root / "pb7"), process_iter=lambda: [consumer.process],
+    )
+    assert snapshot.demand == "UNKNOWN"
+    assert not snapshot.complete
+
+
+def test_consumer_metadata_projection_returns_only_demand_fields(tmp_path):
+    """Unrelated bot settings and synthetic credentials never leave the reader."""
+    from pb7_config import load_pb7_consumer_metadata
+
+    path = tmp_path / "config.json"
+    payload = {
+        "pbgui": {"dynamic_ignore": True, "note": "private-note"},
+        "live": {"user": "account", "unrelated": "synthetic-secret"},
+        "bot": {"invalid-native-setting": "not used by demand inspection"},
+    }
+    path.write_text(json.dumps(payload), encoding="utf-8-sig")
+    metadata = load_pb7_consumer_metadata(path)
+    assert metadata == {"pbgui": {"dynamic_ignore": True}, "live": {"user": "account"}}
+    assert "private-note" not in repr(metadata) and "synthetic-secret" not in repr(metadata)
+    path.write_text("{}")
+    assert load_pb7_consumer_metadata(path) == {"pbgui": {"dynamic_ignore": False}, "live": {"user": None}}
+
+
+def test_oversized_consumer_metadata_stays_unknown(consumer):
+    """Bound metadata inspection and retain conservative demand on oversized files."""
+    consumer.desired.write_text(json.dumps({"note": "x" * (4 * 1024 * 1024)}))
+    assert lifecycle.consumer_demand(
+        consumer.root, str(consumer.root / "pb7"), process_iter=lambda: [consumer.process],
+    ) == "UNKNOWN"
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_consumer_import_and_snapshot_without_bot_dependencies(consumer, enabled):
+    """A fresh process imports and scans with all three missing bot packages blocked."""
+    payload = {"pbgui": {"dynamic_ignore": enabled}, "live": {"user": "account"}}
+    for path in (consumer.desired, consumer.runtime):
+        path.write_text(json.dumps(payload))
+    pb7 = consumer.root / "pb7"
+    pb7.mkdir()
+    (pb7 / "api-keys.json").write_text(json.dumps({"account": {"exchange": "bybit"}}))
+    script = '''
+import json, pathlib, sys
+from types import SimpleNamespace
+sys.path.insert(0, sys.argv[1])
+for name in ('numpy', 'portalocker', 'dateutil'):
+    sys.modules[name] = None
+import pbcoindata_lifecycle as lifecycle
+root = pathlib.Path(sys.argv[2])
+process = SimpleNamespace(
+    cmdline=lambda: ['python', str(root / 'pb7/src/main.py'), str(root / 'data/run_v7/test-bot/config_run.json')],
+    cwd=lambda: str(root),
+)
+snapshot = lifecycle.consumer_snapshot(root, str(root / 'pb7'), process_iter=lambda: [process])
+assert 'config.load' not in sys.modules and 'config_utils' not in sys.modules
+assert all(sys.modules[name] is None for name in ('numpy', 'portalocker', 'dateutil'))
+print(json.dumps({'demand': snapshot.demand, 'complete': snapshot.complete, 'exchanges': sorted(snapshot.exchanges)}))
+'''
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", script, str(Path(__file__).resolve().parents[1]), str(consumer.root)],
+        cwd=consumer.root, env={"HOME": str(consumer.root)},
+        capture_output=True, text=True, check=True, timeout=15,
+    )
+    assert json.loads(result.stdout) == {
+        "demand": "ACTIVE" if enabled else "IDLE", "complete": True,
+        "exchanges": ["bybit"] if enabled else [],
+    }
+
+
+def test_absent_gui_metadata_matches_native_pb7_default(tmp_path, pb7_config_runtime):
+    """Native normalization does not activate Dynamic Ignore when GUI metadata is absent."""
+    from pb7_config import load_pb7_config, load_pb7_consumer_metadata
+
+    payload = pb7_config_runtime.call("template")
+    payload.pop("pbgui", None)
+    payload["live"]["user"] = "account"
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps(payload))
+    native = load_pb7_config(path)
+    metadata = load_pb7_consumer_metadata(path)
+    assert native.get("pbgui", {}).get("dynamic_ignore", False) is False
+    assert metadata["pbgui"]["dynamic_ignore"] is False
+    assert metadata["live"]["user"] == native["live"]["user"] == "account"
 
 
 @pytest.mark.parametrize("desired,runtime,expected", [

@@ -365,6 +365,32 @@ def prepare_pb7_config_dict(
     return _restore_raw_backtest_end_date(finalized, source)
 
 
+def load_pb7_consumer_metadata(path: str | Path) -> dict:
+    """Read only demand metadata from a GUI-authored PB7 JSON config.
+
+    Lifecycle inspection does not normalize or execute a bot config. Keep this
+    narrow reader here, separate from the native config pipeline, so a lean
+    PBGui runner needs no PB7 Python dependencies to observe local consumers.
+    Callers must validate that the path belongs to their local runtime root.
+    Invalid input raises; it must never be treated as proof that demand is idle.
+    """
+    with Path(path).open("r", encoding="utf-8-sig") as handle:
+        source = handle.read(4 * 1024 * 1024 + 1)
+    if len(source) > 4 * 1024 * 1024:
+        raise ValueError("Consumer configuration exceeds metadata inspection limit")
+    payload = json.loads(source)
+    if not isinstance(payload, dict):
+        raise ValueError("Consumer configuration must be an object")
+    metadata = payload.get("pbgui", {})
+    live = payload.get("live", {})
+    if not isinstance(metadata, dict) or not isinstance(live, dict):
+        raise ValueError("Consumer metadata sections must be objects")
+    dynamic_ignore = metadata.get("dynamic_ignore", False)
+    if type(dynamic_ignore) is not bool:
+        raise ValueError("Invalid dynamic_ignore metadata")
+    return {"pbgui": {"dynamic_ignore": dynamic_ignore}, "live": {"user": live.get("user")}}
+
+
 def load_pb7_config(
     path: str | Path,
     *,

@@ -31,6 +31,8 @@ Der VPS Monitor ist das Echtzeit-Operations-Dashboard für alle konfigurierten V
 
 Auf jedem VPS läuft `pbgui-monitor-agent.service`. Der Service misst den lokalen Host einmal und schreibt Cache-Dateien für alle verbundenen PBGui-Master. Der VPS Monitor verwendet ausschließlich diesen Monitor-Agent-Cache. Bei fehlenden, veralteten oder ungültigen Cache-Daten gibt es keinen direkten Collector-Fallback.
 
+Die Manifest-Prüfung einer Instanz verwendet dieselben Dateiausschlüsse wie Cluster/PBRun. Lokale Telemetrie in `monitor.json` und `monitor_cache.json` zählt nicht als Konfigurationsänderung. Tatsächliche Konfigurations- und Versionsabweichungen werden weiterhin als blockiert angezeigt; die Prüfung startet oder stoppt keine Bots.
+
 Der kanonische Live-Stream ist:
 
 ```text

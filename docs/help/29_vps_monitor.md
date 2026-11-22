@@ -31,6 +31,8 @@ Open **VPSMonitor alerts** in the top navigation. Instance alerts name every exc
 
 Each VPS runs `pbgui-monitor-agent.service`. It measures the local host once and writes cache files for all connected PBGui masters. VPS Monitor consumes only this monitor-agent cache; there is no direct collector fallback when a cache is missing, stale, or invalid.
 
+Instance manifest checks use the same file exclusions as Cluster/PBRun. Local `monitor.json` and `monitor_cache.json` telemetry does not count as a configuration change. Actual configuration edits and version mismatches still appear as blocked; this check does not start or stop bots.
+
 The canonical live stream is:
 
 ```text

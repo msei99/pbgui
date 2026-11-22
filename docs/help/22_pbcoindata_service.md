@@ -73,6 +73,8 @@ Click the PBCoinData card on the Services overview (or use the sidebar) to open 
 
 ## Self-heal cycle
 
+Consumer detection reads only `pbgui.dynamic_ignore` and `live.user` from the local GUI-authored JSON files. It does not import or normalize the native PB7 configuration, so bot-only Python dependencies are not required in PBGui's environment for this check. Malformed or incomplete metadata remains unknown rather than permitting an automatic stop.
+
 On an explicitly configured slave, the automatic daemon refreshes only exchanges used by running local PB7 bots with Dynamic Ignore enabled. It checks every matching process, compares `config.json` and `config_run.json`, and resolves `live.user` through the local PB7 account projection. Only exchange names are retained in the selection; credentials are never included in lifecycle metadata or logs. Missing/unreadable accounts, differing desired/runtime values, unknown processes or unsupported exchanges retain full exchange coverage. A known active consumer still prevents unloading even when exchange coverage is incomplete.
 
 The same selection applies to self-heal and scheduled market, copy-trading, mapping and price requests. A newly needed exchange with an expired mapping interval is refreshed in the next daemon cycle, without shifting the existing global schedule; fresh mappings can be reused. Retry backoff remains per exchange when consumers leave and return. Shared CMC listings/metadata keep their existing intervals. Masters and direct Coin Data UI jobs retain full exchange access, including individual refreshes.

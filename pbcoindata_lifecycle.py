@@ -10,7 +10,7 @@ import time
 import psutil
 
 from logging_helpers import human_log as _log
-from pb7_config import load_pb7_config
+from pb7_config import load_pb7_consumer_metadata
 from pbgui_purefunc import load_ini_snapshot
 
 SERVICE = "PBCoinData"
@@ -44,7 +44,7 @@ def consumer_snapshot(root: Path, pb7_dir: str = "", *, process_iter=None, confi
     except Exception as exc:
         _log(SERVICE, f"Consumer runtime path unavailable: {type(exc).__name__}", level="WARNING")
         return ConsumerSnapshot(UNKNOWN, False, frozenset())
-    loader = config_loader or load_pb7_config
+    loader = config_loader or load_pb7_consumer_metadata
     unknown = False
     active = False
     exchanges = set()

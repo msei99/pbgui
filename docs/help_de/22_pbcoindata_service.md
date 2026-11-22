@@ -73,6 +73,8 @@ Klicke auf die PBCoinData-Kachel in der Services-Übersicht (oder nutze die Side
 
 ## Self-Heal-Zyklus
 
+Die Verbrauchererkennung liest nur `pbgui.dynamic_ignore` und `live.user` aus den lokal von PBGui geschriebenen JSON-Dateien. Sie importiert oder normalisiert keine native PB7-Konfiguration; reine Bot-Abhängigkeiten müssen dafür nicht in der PBGui-Python-Umgebung installiert sein. Fehlerhafte oder unvollständige Metadaten bleiben unbekannt und erlauben keinen automatischen Stop.
+
 Auf ausdrücklich konfigurierten Slaves aktualisiert der automatische Daemon nur Exchanges laufender lokaler PB7-Bots mit aktiviertem Dynamic Ignore. Er prüft alle passenden Prozesse, vergleicht `config.json` und `config_run.json` und ordnet `live.user` über die lokale PB7-Account-Projektion zu. Die Auswahl enthält nur Exchange-Namen; Credentials gelangen weder in Lifecycle-Metadaten noch Logs. Fehlende oder unlesbare Accounts, abweichende Soll-/Laufzeitwerte, unbekannte Prozesse oder nicht unterstützte Exchanges führen zur vollständigen Exchange-Auswahl. Ein bekannter aktiver Verbraucher verhindert das Entladen auch bei unvollständiger Exchange-Erkennung.
 
 Dieselbe Auswahl gilt für Self-Heal und geplante Markt-, Copy-Trading-, Mapping- und Preisabrufe. Eine neu benötigte Exchange mit abgelaufenem Mapping-Intervall wird im nächsten Daemon-Zyklus nachgeholt, ohne den bestehenden globalen Zeitplan zu verschieben; aktuelle Mappings können weiterverwendet werden. Das Retry-Backoff bleibt pro Exchange erhalten, wenn Verbraucher verschwinden und zurückkehren. Gemeinsame CMC-Listings und Metadaten behalten ihre bisherigen Intervalle. Master und direkte Coin-Data-UI-Aufträge behalten vollständigen Exchange-Zugriff einschließlich einzelner Aktualisierungen.
