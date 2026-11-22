@@ -36,6 +36,7 @@ from cluster_sync_command import (
     _materialize_v7_configs,
     _validate_sealed_blob_payload,
 )
+from cluster_credentials import ClusterCredentialError
 from cmc_leases import ClusterMailbox
 from credential_reconciler import reconcile_pending_credentials
 from credential_migration import (
@@ -70,6 +71,7 @@ from master.cluster_state import (
 )
 from secure_files import atomic_write_private_bytes, ensure_private_directory_tree
 from master.cluster_ssh_keys import ensure_cluster_ssh_key
+from master.cluster_capabilities import capability_evidence, merge_capability_evidence, verified_capability_flags
 from master.cluster_checkpoint import (
     ClusterCheckpointError,
     activate_checkpoint,
@@ -792,6 +794,7 @@ class ClusterSyncWorker:
             if not isinstance(nodes.get(node_id), dict)
             or normalize_node_sync_mode(nodes[node_id]) != "reachable"
             or not str(nodes[node_id].get("ssh_host") or "").strip()
+            or not _peer_topology_allows(local_node_id, nodes.get(local_node_id) or {}, node_id, nodes[node_id], nodes)[0]
         ]
         if unavailable:
             return {"status": "blocked", "blockers": [f"replica_unreachable:{node_id}" for node_id in unavailable]}
@@ -870,7 +873,6 @@ class ClusterSyncWorker:
     def _sync_peers(self, identity: dict[str, Any], materialized: dict[str, Any]) -> list[dict[str, Any]]:
         """Synchronize with all currently known reachable peers."""
 
-        materialized = _reconcile_coordinator_sync_peers(self.cluster_root, identity, materialized)
         cluster_nodes = materialized.get("cluster_nodes") if isinstance(materialized, dict) else {}
         nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
         nodes = nodes if isinstance(nodes, dict) else {}
@@ -882,7 +884,6 @@ class ClusterSyncWorker:
             self._blob_recovery_cursors.pop(stale_peer_id, None)
         results_by_peer: dict[str, dict[str, Any]] = {}
         pending: list[tuple[str, dict[str, Any]]] = []
-        capability_probes: dict[str, str] = {}
         for peer_id in sorted(nodes):
             peer = nodes.get(peer_id) if isinstance(nodes.get(peer_id), dict) else {}
             if str(peer_id) == local_node_id:
@@ -903,18 +904,9 @@ class ClusterSyncWorker:
                 nodes,
             )
             if not allowed:
-                # A master must verify every active replica before publishing PB8
-                # operations, even when full replication uses a different route.
-                # Passive VPS nodes must still never initiate extra SSH fanout.
-                if (
-                    str(local_node.get("role") or "").strip() == "master"
-                    and peer.get("enabled") is not False
-                    and peer.get("state_replica") is not False
-                ):
-                    capability_probes[str(peer_id)] = reason
-                else:
-                    results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=True, status="topology_skipped", reason=reason)
-                    continue
+                results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=True, status="topology_skipped", reason=reason)
+                self._peer_backoff.pop(str(peer_id), None)
+                continue
             if not str(peer.get("ssh_host") or "").strip():
                 results_by_peer[str(peer_id)] = _peer_result(peer_id, peer, ok=False, status="config_error", reason="reachable peer has no ssh_host")
                 continue
@@ -964,8 +956,6 @@ class ClusterSyncWorker:
                         load_local_ops,
                         load_local_blob_hashes,
                         local_vector,
-                        **({"capability_only": True, "topology_reason": capability_probes[peer_id]}
-                           if peer_id in capability_probes else {}),
                     ): peer_id
                     for peer_id, peer in pending
                 }
@@ -973,6 +963,14 @@ class ClusterSyncWorker:
                     peer_id = future_map[future]
                     results_by_peer[peer_id] = future.result()
 
+        try:
+            verified = verified_capability_flags(self.cluster_root)
+        except (OSError, ValueError, ClusterStateError, ClusterCredentialError) as exc:
+            _log(SERVICE, f"Relayed capability evidence unavailable: {type(exc).__name__}", level="WARNING")
+            verified = {}
+        for peer_id, result in results_by_peer.items():
+            if result.get("status") in {"topology_skipped", "outbound_only"} and peer_id in verified:
+                result.update(verified[peer_id])
         return [results_by_peer[str(peer_id)] for peer_id in sorted(nodes) if str(peer_id) != local_node_id and str(peer_id) in results_by_peer]
 
     def _sync_peer_with_backoff(
@@ -985,26 +983,15 @@ class ClusterSyncWorker:
         load_local_ops: Callable[[], list[dict[str, Any]]],
         load_local_blob_hashes: Callable[[], dict[str, list[str]]],
         local_vector: dict[str, int],
-        *,
-        capability_only: bool = False,
-        topology_reason: str = "",
     ) -> dict[str, Any]:
         """Synchronize one peer and update its retry backoff."""
 
         backoff = self._peer_backoff.get(str(peer_id)) or {}
         try:
-            if capability_only:
-                result = self._probe_peer_capability(peer, local_node_id, cluster_id, topology_reason)
-            else:
-                result = self._sync_peer(
-                    peer,
-                    local_node_id,
-                    cluster_id,
-                    local_materialized,
-                    load_local_ops,
-                    load_local_blob_hashes,
-                    local_vector,
-                )
+            result = self._sync_peer(
+                peer, local_node_id, cluster_id, local_materialized,
+                load_local_ops, load_local_blob_hashes, local_vector,
+            )
             self._peer_backoff.pop(str(peer_id), None)
             return result
         except Exception as exc:
@@ -1019,36 +1006,6 @@ class ClusterSyncWorker:
             result = _peer_result(str(peer_id), peer, ok=False, status="error", reason=str(exc))
             result["retry_delay"] = delay
             return result
-
-    def _probe_peer_capability(
-        self, peer: dict[str, Any], local_node_id: str, cluster_id: str, reason: str,
-    ) -> dict[str, Any]:
-        """Verify a topology-skipped replica without exchanging operations or blobs.
-
-        Use the existing authenticated SSH transport and bounded worker pool.
-        A topology skip alone never establishes support: both identities and an
-        explicit advertised capability must come from a successful peer reply.
-        """
-        hello = self.peer_client.run(peer, local_node_id, "hello")
-        if hello.get("ok") is not True:
-            raise ClusterSyncWorkerError("peer capability handshake failed")
-        if str(hello.get("cluster_id") or "") != cluster_id:
-            raise ClusterSyncWorkerError("peer belongs to another cluster")
-        if str(hello.get("node_id") or "") != str(peer.get("node_id") or ""):
-            raise ClusterSyncWorkerError("peer node_id does not match cluster_nodes")
-        capabilities = hello.get("capabilities")
-        result = _peer_result(str(peer.get("node_id") or ""), peer, ok=True,
-                              status="topology_skipped", reason=reason)
-        result.update({
-            "capability_only": True,
-            "capability_checked_at": int(time.time()),
-            "pb9_capability": supports_cluster_operation("UPSERT_PB9_CONFIG", capabilities) if isinstance(capabilities, list) else None,
-            "pb8_capability": (
-                supports_cluster_operation("UPSERT_PB8_CONFIG", capabilities)
-                if isinstance(capabilities, list) else None
-            ),
-        })
-        return result
 
     def _sync_peer(
         self,
@@ -1240,7 +1197,29 @@ class ClusterSyncWorker:
             "retention_cleanup": _compact_retention_cleanup(hello.get("retention_cleanup")),
             "last_seen": int(time.time()),
         })
+        self._exchange_capability_evidence(peer, local_node_id, cluster_id, hello)
         return base_result
+
+    def _exchange_capability_evidence(self, peer: dict, local_node_id: str, cluster_id: str, hello: dict) -> None:
+        """Relay signed public evidence only along an already allowed normal sync."""
+        envelope = hello.get("capability_evidence")
+        if not isinstance(envelope, dict) or envelope.get("version") != 1:
+            return  # Old peers retain their direct authenticated hello behavior.
+        try:
+            merge_capability_evidence(self.cluster_root, envelope)
+            outgoing = capability_evidence(self.cluster_root)
+            reply = self.peer_client.run(
+                peer, local_node_id, "put-capability-evidence", payload=json.dumps(outgoing, separators=(",", ":")),
+            )
+            if (not isinstance(reply, dict) or reply.get("ok") is not True or reply.get("cluster_id") != cluster_id
+                    or reply.get("node_id") != peer.get("node_id")):
+                raise ClusterSyncWorkerError("Capability exchange identity mismatch")
+            merge_capability_evidence(self.cluster_root, reply.get("capability_evidence"))
+        except (OSError, ValueError, TypeError, RecursionError, subprocess.SubprocessError,
+                ClusterStateError, ClusterCredentialError, ClusterSyncWorkerError) as exc:
+            # A relay failure cannot invalidate successful direct synchronization,
+            # but it must never manufacture support for an uncontacted replica.
+            _log(SERVICE, f"Capability evidence exchange unavailable: {type(exc).__name__}", level="WARNING")
 
     def _reconcile_peer_checkpoint(
         self,
@@ -1936,7 +1915,17 @@ class SshClusterPeerClient:
     def run(self, peer: dict[str, Any], local_node_id: str, command_text: str, payload: str | bytes | None = None) -> dict[str, Any]:
         """Run one Cluster Sync command on *peer* and parse its JSON response."""
 
-        command = self._ssh_command(peer, local_node_id, command_text)
+        identity = read_local_identity(self.cluster_root)
+        nodes = ((read_materialized_state(self.cluster_root).get("cluster_nodes") or {}).get("nodes") or {})
+        peer_id = str(peer.get("node_id") or "")
+        current_peer, local = nodes.get(peer_id), nodes.get(local_node_id)
+        if (identity.get("node_id") != local_node_id or not isinstance(local, dict)
+                or not isinstance(current_peer, dict) or _peer_sync_mode(current_peer) != "reachable"):
+            raise ClusterSyncWorkerError("Cluster SSH target or local identity is unavailable")
+        allowed, reason = _peer_topology_allows(local_node_id, local, peer_id, current_peer, nodes)
+        if not allowed:
+            raise ClusterSyncWorkerError("Cluster outbound SSH denied: " + reason)
+        command = self._ssh_command(current_peer, local_node_id, command_text)
         input_data = payload
         text_mode = not isinstance(input_data, bytes)
         completed = subprocess.run(
@@ -2093,76 +2082,6 @@ def _peer_sync_mode(peer: dict[str, Any]) -> str:
     return normalize_node_sync_mode(peer)
 
 
-def _reconcile_coordinator_sync_peers(
-    cluster_root: Path,
-    identity: dict[str, Any],
-    materialized: dict[str, Any],
-) -> dict[str, Any]:
-    """Add fully joined replicas missing from the coordinator's explicit topology."""
-
-    cluster_nodes = materialized.get("cluster_nodes") if isinstance(materialized, dict) else {}
-    nodes = cluster_nodes.get("nodes") if isinstance(cluster_nodes, dict) else {}
-    nodes = nodes if isinstance(nodes, dict) else {}
-    local_node_id = str(identity.get("node_id") or "")
-    local_node = nodes.get(local_node_id) if isinstance(nodes.get(local_node_id), dict) else {}
-    if str(local_node.get("role") or "").strip() != "master":
-        return materialized
-    coordinator_id = min(
-        (
-            str(node_id)
-            for node_id, node in nodes.items()
-            if isinstance(node, dict)
-            and node.get("enabled", True) is not False
-            and node.get("state_replica", True) is not False
-            and str(node.get("role") or "").strip() == "master"
-        ),
-        default="",
-    )
-    explicit = local_node.get("sync_peers")
-    if coordinator_id != local_node_id or not isinstance(explicit, list):
-        return materialized
-    known = {str(item) for item in explicit if str(item)}
-    if not any(
-        str(node_id) != local_node_id
-        and isinstance(node, dict)
-        and _peer_sync_mode(node) == "reachable"
-        and bool(str(node.get("ssh_host") or "").strip())
-        and bool(str(node.get("cluster_ssh_fingerprint") or "").strip())
-        and str(node_id) not in known
-        for node_id, node in nodes.items()
-    ):
-        return materialized
-
-    with advisory_file_lock(Path(cluster_root) / ".append_sequence"):
-        current = rebuild_materialized_state(cluster_root, write=False)
-        current_nodes = ((current.get("cluster_nodes") or {}).get("nodes") or {})
-        current_local = current_nodes.get(local_node_id) if isinstance(current_nodes.get(local_node_id), dict) else {}
-        current_explicit = current_local.get("sync_peers")
-        if not isinstance(current_explicit, list):
-            return current
-        peers = list(dict.fromkeys(str(item) for item in current_explicit if str(item)))
-        known = set(peers)
-        missing = sorted(
-            str(node_id)
-            for node_id, node in current_nodes.items()
-            if str(node_id) != local_node_id
-            and isinstance(node, dict)
-            and _peer_sync_mode(node) == "reachable"
-            and bool(str(node.get("ssh_host") or "").strip())
-            and bool(str(node.get("cluster_ssh_fingerprint") or "").strip())
-            and str(node_id) not in known
-        )
-        if not missing:
-            return current
-        append_operation(
-            cluster_root,
-            "UPDATE_NODE",
-            {"node_id": local_node_id, "sync_peers": [*peers, *missing]},
-        )
-        _log(SERVICE, f"Added {len(missing)} fully joined replica(s) to coordinator sync topology")
-        return rebuild_materialized_state(cluster_root)
-
-
 def _is_stale_mailbox_error(exc: BaseException) -> bool:
     """Return whether mailbox delivery raced expiry or recipient collection."""
 
@@ -2180,13 +2099,17 @@ def _peer_topology_allows(
     """Return whether this node should actively contact *peer* by default."""
 
     local_role = str((local_node or {}).get("role") or "").strip()
-    if local_role == "master" and str((peer or {}).get("role") or "").strip() == "vps":
-        return True, "master syncs directly with VPS peer"
+    if local_role not in {"master", "vps"} or _peer_sync_mode(local_node) == "disabled":
+        return False, "local node is disabled or has an unknown role"
     explicit = local_node.get("sync_peers") if isinstance(local_node, dict) else None
+    if "sync_peers" in local_node and not isinstance(explicit, list):
+        return False, "invalid explicit sync_peers"
     if isinstance(explicit, list):
         if str(peer_id) in {str(item) for item in explicit}:
             return True, "explicit sync peer"
         return False, "peer is not in sync_peers"
+    if local_role == "master" and str((peer or {}).get("role") or "").strip() == "vps":
+        return True, "master syncs directly with VPS peer"
     if local_role == "master":
         coordinator_id = min(
             (

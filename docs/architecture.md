@@ -11,6 +11,8 @@
 
 ## Existing boundaries
 
+- Automatic PBCluster SSH enforces explicit outbound peer lists at dispatch and again at transport against current membership, including VPS targets and checkpoint coordination. Explicit lists are never widened implicitly. Optional bounded public capability evidence is self-signed with the existing node key and relayed only over permitted connections; PB8/PB9 publication revalidates current membership, key and the original two-minute expiry. A relay cannot renew evidence or authorize an additional SSH route. Unknown/negative support stays fail-closed during mixed-version rollout.
+
 - PB8/PB9 Run share native lifecycle, Cluster transport/reconciliation, instance telemetry, logs and exact stop transport. PB9 operations are signed before any checkpoint and use separate desired-state/tombstone maps. Native config and the private GUI sidecar form a verified complete bundle; publication can roll back before a durable operation exists. Remote destructive actions require a newly validated generation-aware stopped observation; rehydrated cache state cannot authorize them. Existing local PB9 bundles require explicit manifest-bound adoption.
 
 - PB8 and PB9 Optimize share the instance-owned `api/optimize_engine.py` and one Vanilla JS page. Generation profiles isolate paths, caches, locks, controllers and process identities; the PB8 module remains a compatibility facade. The native adapter validates authored PB9 configs without flattening inheritance. Temporary editor projections never become execution inputs. Resume identity uses native effective policy, including coin overrides, independently of resource allocation.

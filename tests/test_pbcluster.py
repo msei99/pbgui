@@ -22,6 +22,7 @@ from master.cluster_state import (
     ensure_local_identity,
     rebuild_materialized_state,
     read_local_identity,
+    read_materialized_state,
     write_operation,
 )
 from master.cluster_sync_worker import (
@@ -875,8 +876,8 @@ def test_cluster_sync_worker_skips_vps_peer_without_explicit_topology(tmp_path: 
     assert status["peers"][0]["status"] == "topology_skipped"
 
 
-def test_coordinator_adds_fully_joined_replica_to_explicit_topology(tmp_path: Path) -> None:
-    """The coordinator automatically picks up a joined replica omitted during onboarding."""
+def test_coordinator_preserves_explicit_topology_after_replica_join(tmp_path: Path) -> None:
+    """Joining a reachable replica cannot silently expand an explicit allowlist."""
 
     cluster_root = default_cluster_root(tmp_path)
     ensure_local_identity(cluster_root, role="master", pbname="master-a", cluster_id=CLUSTER_ID, node_id=NODE_ID)
@@ -902,11 +903,11 @@ def test_coordinator_adds_fully_joined_replica_to_explicit_topology(tmp_path: Pa
     materialized = rebuild_materialized_state(cluster_root)
     identity = read_local_identity(cluster_root)
 
-    reconciled = cluster_sync_worker._reconcile_coordinator_sync_peers(cluster_root, identity, materialized)
-    repeated = cluster_sync_worker._reconcile_coordinator_sync_peers(cluster_root, identity, reconciled)
-
-    assert reconciled["cluster_nodes"]["nodes"][NODE_ID]["sync_peers"] == [NODE_B]
-    assert repeated["state_vector"] == reconciled["state_vector"]
+    worker = ClusterSyncWorker(tmp_path, peer_client=_FailingPeerClient())
+    results = worker._sync_peers(identity, materialized)
+    assert results[0]["status"] == "topology_skipped"
+    assert read_materialized_state(cluster_root)["cluster_nodes"]["nodes"][NODE_ID]["sync_peers"] == []
+    assert read_materialized_state(cluster_root)["state_vector"] == materialized["state_vector"]
 
 
 def test_secondary_master_honors_explicit_master_peers_and_syncs_vps_directly() -> None:
@@ -936,11 +937,11 @@ def test_secondary_master_honors_explicit_master_peers_and_syncs_vps_directly() 
     assert coordinator_allowed is True
     assert runner_allowed is True
     assert secondary_allowed is True
-    assert runner_reason == "master syncs directly with VPS peer"
+    assert runner_reason == "explicit sync peer"
 
 
-def test_secondary_master_skips_unlisted_coordinator_but_syncs_vps() -> None:
-    """A configured secondary never contacts an unlisted coordinator and still contacts VPS nodes."""
+def test_secondary_master_skips_unlisted_coordinator_and_vps() -> None:
+    """An explicit list excludes unlisted masters and VPS nodes alike."""
 
     coordinator = {"node_id": NODE_ID, "role": "master", "enabled": True}
     secondary = {"node_id": NODE_B, "role": "master", "enabled": True, "sync_peers": [NODE_C]}
@@ -957,7 +958,7 @@ def test_secondary_master_skips_unlisted_coordinator_but_syncs_vps() -> None:
 
     assert coordinator_allowed is False
     assert coordinator_reason == "peer is not in sync_peers"
-    assert runner_allowed is True
+    assert runner_allowed is False
 
 
 def test_mailbox_sync_ignores_message_removed_after_index(tmp_path: Path) -> None:

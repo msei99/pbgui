@@ -49,6 +49,7 @@ from master.cluster_state import (
     rebuild_materialized_state,
 )
 from master.cluster_sync_worker import push_pb8_activation
+from master.cluster_capabilities import verified_capability_flags
 from pb8_config import (
     _runtime_fingerprint,
     PB8ConfigurationError,
@@ -1018,8 +1019,16 @@ def _ensure_pb8_cluster_rollout_ready(identity: dict[str, Any], *, runtime: str 
     } if isinstance(peers, list) else {}
     blockers = []
     status_fresh = finished_at > 0 and abs(time.time() - finished_at) <= 120
+    verified_relay = {}
+    if any(peer.get("capability_source") == "signed_relay" for peer in peers_by_id.values()):
+        try:
+            verified_relay = verified_capability_flags(cluster_root if cluster_root is not None else _cluster_root())
+        except Exception as exc:
+            _log(SERVICE, f"Relayed Cluster capability verification failed: {type(exc).__name__}", level="WARNING")
     for node_id, node in sorted(required_nodes.items()):
         peer = peers_by_id.get(node_id, {})
+        if peer.get("capability_source") == "signed_relay":
+            peer = {**peer, runtime + "_capability": verified_relay.get(node_id, {}).get(runtime + "_capability")}
         host = str(node.get("pbname") or node.get("hostname") or node_id)
         if not status_fresh:
             blockers.append(f"{host}: Cluster sync status is missing or older than two minutes. "
@@ -1033,7 +1042,8 @@ def _ensure_pb8_cluster_rollout_ready(identity: dict[str, Any], *, runtime: str 
                             "Update PBGui on this replica, then wait for automatic sync.")
         elif peer.get(runtime + "_capability") is not True:
             blockers.append(f"{host}: no {label} capability confirmation is available yet. "
-                            "Wait for the automatic Cluster handshake; if this persists, check Cluster Sync.")
+                            "Wait for automatic sync through allowed peers. Restricted routes need updated "
+                            "peers with fresh signed capability evidence; check Cluster Sync and clock synchronization.")
     if blockers:
         raise HTTPException(
             status_code=409,

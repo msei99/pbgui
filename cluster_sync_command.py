@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from logging_helpers import human_log as _log
+from master.cluster_capabilities import capability_evidence, merge_capability_evidence, MAX_BYTES as MAX_CAPABILITY_BYTES
 
 SERVICE = "ClusterSync"
 
@@ -146,8 +147,8 @@ READ_VERBS = frozenset({
     "join-state-vector",
     "join-get-ops",
 })
-WRITE_VERBS = frozenset({"join", "join-hello", "join-checkpoint", "join-register", "put-op", "put-ops", "repair-op-gap", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "rebuild", "materialize-v7", "materialize-v8", "materialize-v9", "materialize-api-keys", "materialize-credentials", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", *MAILBOX_PUT_VERBS, *MAILBOX_ACK_VERBS})
-STDIN_VERBS = frozenset({"join-checkpoint", "join-register", "put-op", "put-ops", "repair-op-gap", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", "missing-blobs", *MAILBOX_PUT_VERBS})
+WRITE_VERBS = frozenset({"put-capability-evidence", "join", "join-hello", "join-checkpoint", "join-register", "put-op", "put-ops", "repair-op-gap", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "rebuild", "materialize-v7", "materialize-v8", "materialize-v9", "materialize-api-keys", "materialize-credentials", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", *MAILBOX_PUT_VERBS, *MAILBOX_ACK_VERBS})
+STDIN_VERBS = frozenset({"put-capability-evidence", "join-checkpoint", "join-register", "put-op", "put-ops", "repair-op-gap", "put-blob", "put-blobs", "put-secret-blob", "put-sealed-blob", "apply-bundle", "prepare-checkpoint", "commit-checkpoint", "install-checkpoint", "missing-blobs", *MAILBOX_PUT_VERBS})
 SUPPORTED_VERBS = READ_VERBS | WRITE_VERBS
 
 
@@ -343,6 +344,16 @@ def run_command(
 
     _verify_remote_node(root, remote_node, allow_join=False)
 
+    if verb == "put-capability-evidence":
+        _require_arity(tokens, 1)
+        envelope = _read_json_payload(stdin_data, MAX_CAPABILITY_BYTES)
+        try:
+            accepted = merge_capability_evidence(root, envelope)
+            evidence = capability_evidence(root)
+        except (OSError, ValueError, ClusterCredentialError, ClusterStateError) as exc:
+            raise ClusterSyncCommandError("Capability evidence unavailable") from exc
+        return {"ok": True, "cluster_id": cluster_id, "node_id": identity["node_id"],
+                "accepted": accepted, "capability_evidence": evidence}
     if verb == "handshake":
         payload = _hello_payload(root, identity, remote_node)
         materialized = _read_materialized_snapshot(root)
@@ -696,6 +707,8 @@ def _read_stdin_for_command(command_text: str) -> bytes:
     tokens = _parse_command(command_text)
     if tokens[0] not in STDIN_VERBS:
         return b""
+    if tokens[0] == "put-capability-evidence":
+        return sys.stdin.buffer.read(MAX_CAPABILITY_BYTES + 1)
     return sys.stdin.buffer.read(max(MAX_CONFIG_BLOB_BATCH_BYTES, MAX_CONFIG_BLOB_BYTES, MAX_OPERATION_BATCH_BYTES, MAX_APPLY_BUNDLE_BYTES, MAX_CHECKPOINT_BYTES) + 1)
 
 
@@ -753,6 +766,10 @@ def _hello_payload(cluster_root: Path, identity: dict[str, Any], remote_node: st
         })
     except Exception as exc:
         payload["cluster_ssh_error"] = str(exc)
+    try:
+        payload["capability_evidence"] = capability_evidence(cluster_root)
+    except (OSError, ValueError, ClusterCredentialError, ClusterStateError) as exc:
+        _log(SERVICE, f"Capability evidence unavailable: {type(exc).__name__}", level="WARNING")
     return payload
 
 
