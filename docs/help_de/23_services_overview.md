@@ -116,3 +116,5 @@ Mit Escape schließt sich der aktive Hilfe-, Preis-, Ergebnis-, CMC-Schlüssel- 
 Der Preisdialog aktualisiert Preise automatisch alle fünf Sekunden und Altersangaben jede Sekunde, ohne Textauswahl und Scrollposition zurückzusetzen. Im ausgeblendeten Browser-Tab pausieren die Aktualisierungen und starten bei der Rückkehr sofort wieder. Gleichzeitige Nutzer teilen einen Server-Snapshot für bis zu drei Sekunden.
 
 Ändert sich die Code-Version während eines Neustarts, führt PBGui nach Verfügbarkeit der neuen API einmalig einen weiteren Neustart durch. Die Fortschrittsanzeige nennt Dienste, die noch mit älterem Code laufen. Dauerhafte Fehler bleiben sichtbar, statt Dienste wiederholt neu zu starten.
+
+Remote-Updates von PBGui und Branch-Wechsel starten PBData neu, wenn der Dienst bereits lief. Seine bestehende Autostart-Einstellung bleibt erhalten. Inaktives PBData wird durch das Update nicht gestartet.

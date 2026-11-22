@@ -7,6 +7,7 @@ PYTHON_BIN=""
 ENABLE_SERVICES="vps-monitor,api,pbcluster,pbrun,pbdata,pbcoindata,monitor-agent"
 START_SERVICES=true
 DISABLE_EXCLUDED=true
+PRESERVE_PBDATA=false
 PRESERVE_STATE=false
 CHANGED=false
 UNIT_FILES_CHANGED=false
@@ -65,6 +66,7 @@ Options:
   --enable LIST               Comma-separated services to enable. Default: vps-monitor,api,pbcluster,pbrun,pbdata,pbcoindata,monitor-agent.
   --no-start                  Enable services but do not start/restart them now.
   --no-disable-excluded       Do not stop/disable services missing from --enable.
+  --no-disable-pbdata         Preserve optional PBData state when excluded from --enable.
   --preserve-state            Update unit files without changing enabled or active states.
   -h, --help                  Show help.
 EOF
@@ -78,6 +80,7 @@ while [[ $# -gt 0 ]]; do
     --enable) ENABLE_SERVICES="$2"; shift 2 ;;
     --no-start) START_SERVICES=false; shift ;;
     --no-disable-excluded) DISABLE_EXCLUDED=false; shift ;;
+    --no-disable-pbdata) PRESERVE_PBDATA=true; shift ;;
     --preserve-state) PRESERVE_STATE=true; START_SERVICES=false; DISABLE_EXCLUDED=false; shift ;;
     -h|--help) usage; exit 0 ;;
     *) err "Unknown option: $1"; usage; exit 2 ;;
@@ -179,6 +182,12 @@ write_unit() {
   local exec_start_pre="${4:-}"
   local kill_mode="${5:-mixed}"
   local unit_dependencies="${6:-}"
+  local restart_limits=""
+  local restart_prevent=""
+  if [[ "$unit_name" == "pbgui-pbcoindata.service" ]]; then
+    restart_limits=$'\nStartLimitIntervalSec=300\nStartLimitBurst=5'
+    restart_prevent=$'\nRestartPreventExitStatus=78'
+  fi
   local unit_path="$unit_dir/$unit_name"
   local temp_path
   temp_path="$(mktemp "$unit_dir/.${unit_name}.tmp.XXXXXX")"
@@ -187,7 +196,7 @@ write_unit() {
 [Unit]
 Description=$description
 After=network-online.target
-Wants=network-online.target
+Wants=network-online.target$restart_limits
 $unit_dependencies
 
 [Service]
@@ -195,7 +204,7 @@ Type=simple
 WorkingDirectory=$PBGUI_DIR
 $exec_start_pre
 ExecStart=$PYTHON_BIN -u $PBGUI_DIR/$script_name
-Restart=on-failure
+Restart=on-failure$restart_prevent
 RestartSec=5
 KillSignal=SIGTERM
 KillMode=$kill_mode
@@ -306,6 +315,9 @@ disable_service_if_excluded() {
   local unit="pbgui-$service.service"
   local enabled_state
   local active_state
+  if [[ "$service" == pbdata && "$PRESERVE_PBDATA" == true ]]; then
+    return 0
+  fi
   if service_requested "$service"; then
     return 0
   fi

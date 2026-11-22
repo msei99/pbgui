@@ -3243,11 +3243,11 @@ def test_pbgui_code_update_playbooks_sync_systemd_units(playbook_path: str) -> N
     assert "--no-start" in playbook
     assert "failed_when: false" not in systemd_setup_block
     if playbook_path == "vps-update-pb.yml":
-        assert "setup/vps_service_control.sh restart PBCluster PBCoinData PBMonitorAgent" in playbook
+        assert "setup/vps_service_control.sh restart PBCluster PBData PBCoinData PBMonitorAgent" in playbook
         assert "Restart PBRun after PBGui-only update" in playbook
         assert "when: not (pb7_update_required | default(false) | bool)" in playbook
     else:
-        assert "setup/vps_service_control.sh restart PBCluster PBRun PBCoinData PBMonitorAgent" in playbook
+        assert "setup/vps_service_control.sh restart PBCluster PBRun PBData PBCoinData PBMonitorAgent" in playbook
     assert "setup/vps_service_control.sh restart PBCluster PBRun PBRemote PBCoinData" not in playbook
 
 
@@ -4420,3 +4420,14 @@ def test_migration_reinterprets_existing_agent_evidence_without_autostart_requir
     assert result['migration_complete'] is (case == 'disabled')
     assert result['migration_needed'] is (case != 'disabled')
     assert raw['migration_complete'] is False
+
+
+@pytest.mark.parametrize("playbook_path", ["vps-update-pbgui.yml", "vps-switch-pbgui-branch.yml", "vps-update-pb.yml"])
+def test_remote_pbgui_updates_restart_active_pbdata_without_changing_autostart(playbook_path):
+    """Remote updates refresh existing PBData while keeping its optional state."""
+    source = Path(playbook_path).read_text(encoding="utf-8")
+    handlers = source.split("  handlers:", 1)[1]
+    assert "--no-disable-pbdata" in handlers
+    restart = next(line for line in handlers.splitlines() if "script: setup/vps_service_control.sh restart PBCluster" in line)
+    assert " PBData " in restart
+    assert "pbdata" not in next(line for line in source.splitlines() if "pbgui_enabled_services:" in line)

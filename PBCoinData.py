@@ -1,7 +1,7 @@
 # Direct service entry: acquire the shared lifetime guard before any heavy import.
 if __name__ == "__main__":
     from pathlib import Path as _GuardPath
-    from pbcoindata_guard import acquire_daemon as _acquire_daemon
+    from pbcoindata_guard import acquire_service_daemon as _acquire_daemon
     _DAEMON_GUARD = _acquire_daemon(_GuardPath.cwd())
 
 import psutil

@@ -231,13 +231,13 @@
 
     - name: Sync PBGui systemd user services
       command:
-        argv: "{{ ['/bin/bash', install_dir + '/pbgui/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', install_dir + '/pbgui', '--python', install_dir + '/venv_pbgui/bin/python', '--enable', pbgui_enabled_services | join(','), '--no-start'] + ([] if pbgui_credential_capability_known else ['--no-disable-excluded']) }}"
+        argv: "{{ ['/bin/bash', install_dir + '/pbgui/setup/setup_systemd.sh', '--user', user, '--pbgui-dir', install_dir + '/pbgui', '--python', install_dir + '/venv_pbgui/bin/python', '--no-disable-pbdata', '--enable', pbgui_enabled_services | join(','), '--no-start'] + ([] if pbgui_credential_capability_known else ['--no-disable-excluded']) }}"
       register: systemd_setup_result
       changed_when: systemd_setup_result.rc == 0
       listen: "restart pbgui"
 
-    - name: Restart PBCluster, PBRun, PBCoinData and PBMonitorAgent
-      script: setup/vps_service_control.sh restart PBCluster PBRun PBCoinData PBMonitorAgent
+    - name: Restart PBCluster, PBRun, PBData, PBCoinData and PBMonitorAgent
+      script: setup/vps_service_control.sh restart PBCluster PBRun PBData PBCoinData PBMonitorAgent
       environment:
         PBGUI_DIR: "{{ install_dir }}/pbgui"
         PBGUI_PYTHON: "{{ install_dir }}/venv_pbgui/bin/python"

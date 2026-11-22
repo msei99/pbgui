@@ -215,6 +215,7 @@ if can_use_systemd; then
     done
     sleep 12
     failed=0
+    failure_status=1
     for unit in "${units[@]}"; do
       active_state="$(run_as_service_user systemctl --user show "$unit" --property=ActiveState --value 2>/dev/null || true)"
       sub_state="$(run_as_service_user systemctl --user show "$unit" --property=SubState --value 2>/dev/null || true)"
@@ -238,9 +239,12 @@ if can_use_systemd; then
         --property=LoadState,UnitFileState,ActiveState,SubState,Result,ExecMainStatus,NRestarts,FragmentPath,NeedDaemonReload >&2 || true
       run_as_service_user systemctl --user status "$unit" --no-pager -l >&2 || true
       failed=1
+      if [[ "$unit" == pbgui-pbcoindata.service && "$active_state" == failed && "$result_state" == exit-code && "$exec_status" == 78 ]]; then
+        failure_status=78
+      fi
     done
     if [[ "$failed" -ne 0 ]]; then
-      exit 1
+      exit "$failure_status"
     fi
   fi
   exit 0

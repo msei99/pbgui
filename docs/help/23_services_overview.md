@@ -116,3 +116,5 @@ Press Escape to close the active Services Monitor Help, Prices, result, CMC key,
 The Prices dialog updates prices automatically every five seconds and ages every second, preserving text selection and scroll position. Updates pause while the browser tab is hidden and resume immediately on return. Concurrent viewers share a server snapshot for up to three seconds.
 
 If the code version changes during a restart, PBGui performs one follow-up restart after the replacement API is available. The progress display identifies services still running older code. Persistent failures remain visible instead of repeatedly restarting services.
+
+Remote PBGui updates and branch switches restart PBData when it was already running, while preserving its existing autostart setting. An inactive PBData is not started by the update.

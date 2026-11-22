@@ -403,7 +403,9 @@ def snapshot(root, *, singleton_owned=False, observation=None):
                     and any(g.root == Path(root).resolve() and g.fd is not None for g in guard_protocol._LIFETIME_GUARDS)):
                 continue
             if status == "unknown":
-                return {"status": "unknown", "pid": record["pid"], "error": "PBCoinData publication lifetime is unconfirmed"}
+                error = ("PBCoinData registration and sidecar disagree; referenced PID is live or its exit is unconfirmed"
+                         if record.get("identity_conflict") else "PBCoinData publication lifetime is unconfirmed")
+                return {"status": "unknown", "pid": record["pid"], "error": error}
             if status == "active":
                 active.append(record)
         if not active:
@@ -763,6 +765,8 @@ def _observed_records(observation, identity):
         if classification == 'retired': continue
         if (classification != 'active' or identity is None or record['pid'] != identity.pid
                 or not identities_match(identity, ProcessIdentity(record['pid'],record.get('create_time',0)))):
+            if record.get('identity_conflict'):
+                raise ProcessStateError('PBCoinData registration and sidecar disagree; referenced PID is live or its exit is unconfirmed')
             raise ProcessStateError('Conflicting PBCoinData publication during observation')
         active.append(record)
     return active

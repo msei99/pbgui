@@ -114,7 +114,7 @@ case "$command" in
         *ActiveState*) printf '%s\n' "$active" ;;
         *SubState*) [[ "$active" == active ]] && printf 'running\n' || printf '%s\n' "$active" ;;
         *Result*) [[ "$active" == failed ]] && printf 'exit-code\n' || printf 'success\n' ;;
-        *ExecMainStatus*) [[ "$active" == failed ]] && printf '1\n' || printf '0\n' ;;
+        *ExecMainStatus*) [[ "$active" == failed ]] && printf '%s\n' "${FAKE_EXEC_STATUS:-1}" || printf '0\n' ;;
       esac
     else
       active="$(state_for "$unit")"
@@ -182,6 +182,9 @@ if [[ -n "${FAKE_CRASH_LOOP_UNIT:-}" ]]; then
 fi
 if [[ -n "${FAKE_IDLE_COIN_DATA:-}" ]]; then
   printf 'inactive\n' > "$FAKE_SYSTEMD_STATE/active/pbgui-pbcoindata.service"
+fi
+if [[ -n "${FAKE_FATAL_COIN_DATA:-}" ]]; then
+  printf 'failed\n' > "$FAKE_SYSTEMD_STATE/active/pbgui-pbcoindata.service"
 fi
 """,
     )
@@ -267,6 +270,13 @@ def test_setup_systemd_first_run_then_idempotent_second_run(tmp_path: Path) -> N
     assert "KillMode=process" in pbrun_source
     assert "TimeoutStopSec=30" in pbrun_source
     assert "KillMode=mixed" in (unit_dir / "pbgui-monitor-agent.service").read_text(encoding="utf-8")
+    coindata_source = (unit_dir / "pbgui-pbcoindata.service").read_text(encoding="utf-8")
+    assert "StartLimitIntervalSec=300" in coindata_source
+    assert "StartLimitBurst=5" in coindata_source
+    assert "RestartPreventExitStatus=78" in coindata_source
+    assert "RestartPreventExitStatus" not in pbrun_source
+    assert "Wants=network-online.target\n\n\n[Service]" in pbrun_source
+    assert "Restart=on-failure\nRestartSec=5" in pbrun_source
     first_inode = unit_path.stat().st_ino
     calls_path.write_text("", encoding="utf-8")
     second = _run_setup(env, pbgui_dir, python_bin)
@@ -814,3 +824,46 @@ def test_purge_terminates_and_verifies_every_removed_runtime_pattern(
         if target.poll() is None:
             target.kill()
             target.wait(timeout=3)
+
+
+@pytest.mark.parametrize("active", ["active", "inactive"])
+@pytest.mark.parametrize("enabled", ["enabled", "disabled"])
+def test_setup_preserves_optional_pbdata_on_remote_update(tmp_path, active, enabled):
+    """Unit reconciliation leaves both PBData runtime and autostart untouched."""
+    env, app, python, calls = _fake_systemd_environment(tmp_path)
+    initial = _run_setup(env, app, python)
+    assert initial.returncode == 0, initial.stderr
+    state = Path(env["FAKE_SYSTEMD_STATE"])
+    (state / "active" / "pbgui-pbdata.service").write_text(active + "\n")
+    enabled_file = state / "enabled" / "pbgui-pbdata.service"
+    if enabled == "enabled":
+        enabled_file.touch()
+    else:
+        enabled_file.unlink(missing_ok=True)
+    calls.write_text("")
+    argv = ["bash", str(SETUP_SCRIPT), "--user", "agent-user", "--pbgui-dir", str(app),
+            "--python", str(python), "--enable", "monitor-agent", "--no-start", "--no-disable-pbdata"]
+    result = subprocess.run(argv, env=env, cwd=ROOT, text=True, capture_output=True)
+    assert result.returncode == 0, result.stderr
+    mutations = [line for line in calls.read_text().splitlines()
+                 if "pbgui-pbdata.service" in line and any(" " + action + " " in line for action in ["start", "stop", "restart", "enable", "disable", "reset-failed"])]
+    assert mutations == []
+    assert (state / "active" / "pbgui-pbdata.service").read_text().strip() == active
+    assert enabled_file.exists() == (enabled == "enabled")
+
+
+def test_service_control_reports_permanent_coindata_failure_without_batch_retry(tmp_path):
+    """Exit 78 remains visible to Ansible, which must fail without repeating other restarts."""
+    env, app, python, calls = _fake_systemd_environment(tmp_path)
+    result = _run_setup(env, app, python)
+    assert result.returncode == 0, result.stderr
+    env.update(PBGUI_USER="agent-user", PBGUI_DIR=str(app), PBGUI_PYTHON=str(python),
+               PBGUI_CREDENTIAL_ACTIVE="true", FAKE_FATAL_COIN_DATA="1", FAKE_EXEC_STATUS="78")
+    result = subprocess.run(["bash", str(ROOT / "setup/vps_service_control.sh"), "restart", "PBCoinData"],
+                            env=env, cwd=ROOT, text=True, capture_output=True)
+    assert result.returncode == 78, result.stdout + result.stderr
+    assert "status=78" in result.stdout
+    for name in ["vps-update-pbgui.yml", "vps-update-pb.yml"]:
+        source = (ROOT / name).read_text()
+        assert "until: (pbgui_process_health.rc | default(-1)) in [0, 78]" in source
+        assert "failed_when: (pbgui_process_health.rc | default(-1)) != 0" in source

@@ -18,6 +18,10 @@ PROTOCOL = 2
 _LIFETIME_GUARDS = []
 
 
+class StartupBlockedError(RuntimeError):
+    """Require explicit resolution of an existing or unconfirmed ownership fence."""
+
+
 def process_observation(pid="self"):
     """Read state and lifetime together; comm can itself contain spaces and parentheses."""
     wanted = os.getpid() if pid == "self" else pid
@@ -238,8 +242,11 @@ def read_publications(root):
             numeric.update(sidecar)
         if registration is not None and registration["pid"] == numeric["pid"]:
             if sidecar is not None and abs(sidecar["create_time"] - registration["create_time"]) >= 0.01:
-                raise ValueError("PBCoinData registration and sidecar disagree")
-            numeric.update({k: v for k, v in registration.items() if k != "kind"})
+                # Keep both historical lifetimes: absence can retire them, but
+                # a live/recycled PID must never resolve a contradictory identity.
+                numeric["identity_conflict"] = registration["identity_conflict"] = True
+            else:
+                numeric.update({k: v for k, v in registration.items() if k != "kind"})
         records.append(numeric)
     elif sidecar is not None:
         records.append({**sidecar, "kind": "sidecar"})
@@ -327,6 +334,8 @@ def publication_state(root, record, *, current_time=creation_time, foreign=None)
         observed = current_time(record["pid"])
         if type(observed) not in (int, float) or not math.isfinite(observed) or observed <= 0:
             return "unknown"
+        if record.get("identity_conflict"):
+            return "unknown"
         expected = record.get("create_time")
         if expected is not None and record.get("boot_id") is not None and not old_boot and abs(observed - expected) < 0.01:
             first = process_observation(record["pid"])
@@ -365,6 +374,8 @@ def _check_existing_publications(root):
     bundle = read_publications(root)
     for record in bundle["records"]:
         if publication_state(root, record) != "retired":
+            if record.get("identity_conflict"):
+                raise StartupBlockedError("PBCoinData registration and sidecar disagree; referenced PID is live or its exit is unconfirmed")
             raise RuntimeError("Existing live or unresolved PBCoinData publication prevents direct start")
     return bundle["files"]
 
@@ -400,3 +411,18 @@ def acquire_daemon(root):
     previous = _retire_compatibility_files(root, previous)
     publish(guard, "starting", expected_files=previous)
     return guard
+
+
+def acquire_service_daemon(root):
+    """Expose persistent ownership failures without an endless systemd retry loop."""
+    try:
+        return acquire_daemon(root)
+    except StartupBlockedError as exc:
+        try:
+            from logging_helpers import human_log
+            human_log(SERVICE, f"Startup blocked: {exc}", level="ERROR",
+                      meta={"operation": "startup_guard"})
+        except Exception:
+            import sys
+            sys.stderr.write(f"PBCoinData startup blocked: {exc}\n")
+        raise SystemExit(78) from exc
