@@ -88,6 +88,20 @@ def acquire_master_update_lock(pbgui_dir: Path) -> MasterUpdateLease:
     )
 
 
+def acquire_master_restart_lock(pbgui_dir: Path) -> MasterUpdateLease:
+    """Exclude source updates during API restart without excluding runtime readers.
+
+    Restart never checks out or builds bot sources. Installers and branch changes
+    keep acquire_master_update_lock's exclusive barrier; native launches retain
+    their own source-read leases independently of the API lifecycle.
+    """
+    return _acquire_master_lock(
+        pbgui_dir,
+        fcntl.LOCK_SH if fcntl is not None else 0,
+        "A local installation or update is running. Wait for it to finish before restarting PBGui.",
+    )
+
+
 def acquire_master_runtime_lock(pbgui_dir: Path) -> MasterUpdateLease:
     """Protect a short PB8 runtime launch from a concurrent local-master update."""
     return _acquire_master_lock(

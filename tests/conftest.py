@@ -33,6 +33,27 @@ def isolate_test_logs(tmp_path, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def isolate_restart_display_owner(monkeypatch):
+    """Give each API test its own read worker and join its executor at teardown."""
+    server = sys.modules.get("PBApiServer")
+    if server is None:
+        yield
+        return
+    from api.restart_status_reader import RestartStatusReader
+    reader = RestartStatusReader(
+        lambda: server._restart_status_payload(),
+        lambda: (server._read_serial(), tuple(server._runtime_restart_reasons)),
+    )
+    monkeypatch.setattr(server, '_restart_status_reader', reader)
+    monkeypatch.setattr(server, '_api_shutdown_started', False)
+    try:
+        yield
+    finally:
+        if reader.pool is not None:
+            reader.pool.shutdown(wait=True)
+
+
+@pytest.fixture(autouse=True)
 def skip_production_startup_migrations(monkeypatch):
     """Prevent ordinary lifespan tests from touching runtime migration state."""
     monkeypatch.setenv("PBGUI_SKIP_STARTUP_MIGRATIONS", "1")

@@ -109,7 +109,9 @@ Settings saves are locked while pending. Validation errors identify the affected
 
 The navigation Restart action shows progress immediately after confirmation and ignores duplicate clicks. PBGui reconnects automatically and verifies that a new API instance is running before reloading the current page. A lost restart response is checked without automatically submitting another restart.
 
-If protected work such as a PB9 inspection is running, the confirmed restart is queued on the server. The progress view shows what it is waiting for and continues automatically as soon as the work finishes. New PB9 inspections wait until after the restart. Reloading the browser restores the pending restart display at the current URL; another click is unnecessary. Running detached backtests and optimizers continue independently.
+Restart uses the established direct workflow: PBGui checks protected work, schedules the outdated local services through systemd, and confirms success only after scheduling. The browser then reconnects and verifies the replacement API. Active protected work, including PB9 inspections, returns a concrete reason instead of queuing an unverified restart. There is no deferred restart queue. Detached bot, backtest and optimizer processes remain independently owned.
+
+PBCoinData ownership verification accepts coherent NAS automounts unrelated to its evidence paths. Ambiguous mounts over protected paths still report Unknown. Hidden tabs release their navigation status stream and reconnect automatically when shown.
 
 Press Escape to close the active Services Monitor Help, Prices, result, CMC key, or CMC authority dialog. A CMC dialog remains open while its mutation is in progress.
 
@@ -118,3 +120,15 @@ The Prices dialog updates prices automatically every five seconds and ages every
 If the code version changes during a restart, PBGui performs one follow-up restart after the replacement API is available. The progress display identifies services still running older code. Persistent failures remain visible instead of repeatedly restarting services.
 
 Remote PBGui updates and branch switches restart PBData when it was already running, while preserving its existing autostart setting. An inactive PBData is not started by the update.
+
+Each reconnect status request has a five-second deadline; an unanswered request is retried automatically instead of freezing the progress indicator.
+
+Restart closes disposable GET event streams before the API drains connections. Credential checks still run; unchanged private files retain their metadata so valid scan evidence can be reused. AI action recovery remains mandatory before readiness; only retention cleanup of terminal records runs afterward.
+
+API restart uses a shared source-read barrier: background config reads can continue, while real installations and source updates retain their exclusive barrier. Interrupted analysis recovery runs before unrelated controller warmups; approved-action replay still completes before readiness.
+
+Both restart entry points use the live API instance. While an accepted restart drains connections, new GET polls receive a temporary 503 with Retry-After; the browser reconnects automatically.
+
+The status display samples current operation owners; the restart action additionally checks persisted recovery and deployment gates before accepting the handoff.
+
+Browser tabs share passive restart-status checks. The short display cache is invalidated when the code serial or runtime restart reasons change; restart actions still run their complete checks afresh. Slow display checks return a temporary retry response instead of holding every tab open. Pareto analysis and exchange WebSocket dependencies load on first use rather than during the API import.

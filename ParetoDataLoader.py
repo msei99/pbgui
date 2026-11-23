@@ -9,7 +9,6 @@ import copy
 import heapq
 import msgpack
 import numpy as np
-import pandas as pd
 from typing import Dict, List, Tuple, Optional, Any, Iterator
 from dataclasses import dataclass
 import json
@@ -2881,7 +2880,7 @@ class ParetoDataLoader:
         """Get a config by its config_index"""
         return next((c for c in self.configs if c.config_index == config_index), None)
     
-    def to_dataframe(self, pareto_only: bool = False) -> pd.DataFrame:
+    def to_dataframe(self, pareto_only: bool = False) -> "pd.DataFrame":
         """
         Convert configs to pandas DataFrame for easy analysis
         
@@ -2891,6 +2890,8 @@ class ParetoDataLoader:
         Returns:
             DataFrame with all metrics and parameters
         """
+        import pandas as pd
+
         configs = self.get_pareto_configs() if pareto_only else self.get_all_configs()
         
         if not configs:

@@ -21,7 +21,6 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import HTMLResponse
 import numpy as np
-import pandas as pd
 
 from api.auth import SessionToken, require_auth
 from ParetoDataLoader import ParetoDataLoader
@@ -1794,6 +1793,8 @@ def _build_bounds_rows(bounds_info: dict) -> list[dict]:
 
 
 def _build_parameter_heatmap(loader: ParetoDataLoader, *, top_n: int = 20, bounds_info: dict | None = None) -> dict:
+    import pandas as pd
+
     df = loader.to_dataframe(pareto_only=False)
     if df.empty:
         return {"traces": [], "layout": {"title": "No data available"}}
@@ -2160,6 +2161,8 @@ def _build_scenario_statistics(loader: ParetoDataLoader, *, metric: str) -> list
 
 
 def _build_evolution_chart(loader: ParetoDataLoader, *, metric: str, window: int, show_all: bool, hide_outliers: bool, improvement_threshold_pct: float = 1.0) -> dict:
+    import pandas as pd
+
     all_df = loader.to_dataframe(pareto_only=False)
     if all_df.empty or metric not in all_df.columns:
         return {"traces": [], "layout": {"title": "No data available"}}

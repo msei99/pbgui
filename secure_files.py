@@ -305,18 +305,44 @@ def copy_private_file(source: Path, destination: Path) -> None:
     atomic_write_private_bytes(Path(destination), Path(source).read_bytes())
 
 
+def _harden_private_file_if_needed(path: Path, info=None) -> None:
+    """Preserve unchanged owned files' ctime while retaining legacy repair checks."""
+    if info is None:
+        try:
+            info = path.lstat()
+        except FileNotFoundError:
+            return
+    if stat.S_ISLNK(info.st_mode):
+        raise RuntimeError(f"Refusing security-sensitive symlink: {path}")
+    if (stat.S_ISREG(info.st_mode) and os.name == "posix" and info.st_uid == os.geteuid()
+            and stat.S_IMODE(info.st_mode) == PRIVATE_FILE_MODE):
+        return
+    secure_private_file(path)
+
+
 def harden_private_tree(root: Path) -> None:
-    """Repair an existing sensitive directory tree to owner-only permissions."""
+    """Repair a sensitive tree without changing already-private file metadata."""
     root = Path(root)
     if not root.exists():
         return
-    ensure_private_directory(root)
-    for item in root.rglob("*"):
-        _reject_symlink(item)
-        if item.is_dir():
-            ensure_private_directory(item)
-        elif item.is_file():
-            secure_private_file(item)
+    pending = [root]
+    while pending:
+        directory = pending.pop()
+        ensure_private_directory(directory)
+        with os.scandir(directory) as iterator:
+            entries = list(iterator)
+        for entry in entries:
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            path = Path(entry.path)
+            if stat.S_ISLNK(info.st_mode):
+                raise RuntimeError(f"Refusing security-sensitive symlink: {path}")
+            if stat.S_ISDIR(info.st_mode):
+                pending.append(path)
+            elif stat.S_ISREG(info.st_mode):
+                _harden_private_file_if_needed(path, info)
 
 
 def harden_sensitive_paths(
@@ -332,7 +358,7 @@ def harden_sensitive_paths(
         pbgui_root / "data" / "auth" / "secrets.toml",
         legacy_secrets,
     ):
-        secure_private_file(path)
+        _harden_private_file_if_needed(path)
     if legacy_secrets.exists():
         ensure_private_directory(legacy_secrets.parent)
 
@@ -346,9 +372,9 @@ def harden_sensitive_paths(
         harden_private_tree(path)
 
     if pb7_root is not None:
-        secure_private_file(Path(pb7_root) / "api-keys.json")
+        _harden_private_file_if_needed(Path(pb7_root) / "api-keys.json")
 
     if aws_root is not None and Path(aws_root).exists():
         aws_root = ensure_private_directory(Path(aws_root))
-        secure_private_file(aws_root / "credentials")
-        secure_private_file(aws_root / "config")
+        _harden_private_file_if_needed(aws_root / "credentials")
+        _harden_private_file_if_needed(aws_root / "config")

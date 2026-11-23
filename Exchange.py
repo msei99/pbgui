@@ -1,5 +1,4 @@
 import ccxt
-import ccxt.pro as ccxt_pro
 import bitget_uta
 from exchange_open_orders import fetch_account_open_orders
 from User import User
@@ -16,6 +15,38 @@ from pbgui_purefunc import PBGDIR
 from logging_helpers import human_log as _log
 
 SERVICE = "Exchange"
+
+
+def _load_ccxt_pro():
+    """Import WebSocket implementations only when a client is actually requested."""
+    import ccxt.pro as module
+    return module
+
+
+def __getattr__(name):
+    """Retain the existing module export for callers inspecting ccxt_pro explicitly."""
+    if name == "ccxt_pro":
+        return _load_ccxt_pro()
+    raise AttributeError(name)
+
+
+async def _load_ccxt_pro_owned():
+    """Keep the first WebSocket import off the loop and join it on cancellation."""
+    import asyncio
+    task = asyncio.create_task(asyncio.to_thread(_load_ccxt_pro), name="ccxt-pro-import")
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                break
+        if not task.cancelled():
+            task.exception()
+        raise
 
 
 def _serialize_bitget_client(method):
@@ -523,6 +554,7 @@ class Exchange:
                 cls._shared_ws_owners.setdefault(key, set()).add(owner)
                 return client
             ex_id = "kucoinfutures" if id == "kucoin" else id
+            ccxt_pro = await _load_ccxt_pro_owned()
             if not hasattr(ccxt_pro, ex_id):
                 return None
             kwargs = {'enableRateLimit': True, 'timeout': DEFAULT_CCXT_TIMEOUT_MS, 'options': {'defaultType': 'swap'}}
@@ -722,6 +754,7 @@ class Exchange:
                         except Exception:
                             pass
                         return None
+                ccxt_pro = await _load_ccxt_pro_owned()
                 if not hasattr(ccxt_pro, ex_id):
                     return None
                 kwargs = {'enableRateLimit': True, 'timeout': DEFAULT_CCXT_TIMEOUT_MS, 'options': {'defaultType': 'swap'}}

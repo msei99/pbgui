@@ -28,8 +28,12 @@ import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path, PurePath
 import re
-from time import sleep, time_ns
+from time import monotonic, sleep, time_ns
 from uuid import uuid4
+
+# The script and lazy service imports must share the live app, leases and owners.
+if __name__ == "__main__":
+    sys.modules["PBApiServer"] = sys.modules[__name__]
 
 _PBGUI_ROOT = Path(__file__).resolve().parent
 try:
@@ -43,6 +47,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocke
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, StreamingResponse
 from api.http_compression import ConditionalStaticFiles, HTTPCompressionMiddleware
+from api.read_stream_lifecycle import ReadStreamMiddleware, ReadStreamOwner
+from api.restart_status_reader import RestartStatusReader, RestartStatusUnavailable
 
 from secure_files import harden_sensitive_paths
 from api_pid_handoff import (
@@ -79,6 +85,7 @@ from ai_chat import shutdown as ai_chat_shutdown
 from ai_capabilities import (
     restart_block_reason as ai_restart_block_reason,
     startup as ai_capabilities_startup,
+    prepare_startup as ai_capabilities_prepare_startup,
 )
 from api.api_keys import router as api_keys_router
 from api.dashboard import router as dashboard_router, shutdown as dashboard_shutdown
@@ -148,7 +155,7 @@ from logging_helpers import (
     set_service_min_level,
 )
 from file_lock import advisory_file_lock
-from master_update_lock import MasterUpdateBusyError, acquire_master_update_lock
+from master_update_lock import MasterUpdateBusyError, acquire_master_restart_lock
 from service_lifecycle_lock import ServiceLifecycleBusyError, acquire_service_lifecycle_lock
 from startup_migrations import run_startup_migrations
 from credential_migration import (
@@ -186,16 +193,14 @@ _runtime_restart_reasons: list[str] = []
 _sse_subscribers: list[tuple[asyncio.Queue, asyncio.AbstractEventLoop]] = []
 _SSE_CLOSE = object()
 _api_restart_lease = None
-_server_restart_task = None
 _api_restart_handoff_task = None
-_server_restart_request: dict = {}
+_read_stream_owner = ReadStreamOwner()
+_api_shutdown_started = False
 
 
 def _api_restart_pending() -> bool:
-    """Close admission while a requested restart waits for existing work."""
-    return _api_restart_lease is not None or (
-        _server_restart_task is not None and not _server_restart_task.done()
-    )
+    """Close native admission while the existing restart reservation is held."""
+    return _api_restart_lease is not None
 
 
 loop8_configure_restart_gate(_api_restart_pending)
@@ -334,8 +339,37 @@ def _restart_status_payload() -> dict:
         "restart_services": restart_services,
         "vast_activity": vast_activity,
         "restart_inspection_error": str(runtime_state.get("inspection_error") or ""),
-        "restart_request": dict(_server_restart_request),
     }
+
+
+_restart_status_reader = RestartStatusReader(
+    lambda: _restart_status_payload(),
+    lambda: (_read_serial(), tuple(_runtime_restart_reasons)),
+)
+
+
+def _start_restart_reads():
+    """Reopen the API-owned stream and passive status inspection owners together."""
+    if _api_shutdown_started:
+        return
+    _restart_status_reader.start()
+    _read_stream_owner.start()
+
+
+async def _close_restart_reads():
+    """Release streams and join their shared read worker before process shutdown."""
+    try:
+        await _read_stream_owner.close()
+    finally:
+        await _restart_status_reader.close()
+
+
+async def _read_restart_status():
+    """Expose a bounded passive inspection; action admission always stays fresh."""
+    try:
+        return await _restart_status_reader.read()
+    except RestartStatusUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc), headers={"Retry-After": "1"}) from exc
 
 
 def mark_runtime_restart_required(reason: str) -> None:
@@ -369,8 +403,8 @@ def _close_server_status_streams() -> None:
                 _sse_subscribers.remove((queue, loop))
 
 
-async def _restart_block_state() -> tuple[bool, str]:
-    """Return whether API restart should wait for API-owned mutable operations."""
+def _restart_memory_block_reason() -> str:
+    """Sample local operation owners synchronously immediately before handoff."""
     from api.cluster import restart_block_reason as cluster_restart_block_reason
     from api.coin_data import restart_block_reason as coin_data_restart_block_reason
     from api.db_tools import restart_block_reason as db_tools_restart_block_reason
@@ -390,29 +424,45 @@ async def _restart_block_state() -> tuple[bool, str]:
             pareto_restart_block_reason(),
             vps_manager_restart_block_reason(),
             vast_guard_restart_block_reason(),
-            profit_sweep_restart_block_reason(),
-            ai_restart_block_reason(),
             loop8_restart_block_reason(),
             pb9_restart_block_reason(app),
-            credential_migration_restart_block_reason(Path(PBGDIR)),
         )
         if reason
     ]
-    if local_reasons:
-        return True, "; ".join(local_reasons)
+    return "; ".join(local_reasons)
+
+async def _restart_block_state() -> tuple[bool, str]:
+    """Validate operation ownership and persisted safety gates before restart."""
+    reason = _restart_memory_block_reason()
+    if reason:
+        return True, reason
+
+    def persisted_reasons():
+        """Read persisted safety gates without blocking the API event loop."""
+        return [reason for reason in (
+            profit_sweep_restart_block_reason(),
+            ai_restart_block_reason(),
+            credential_migration_restart_block_reason(Path(PBGDIR)),
+        ) if reason]
+
+    disk_reasons, interrupted = await _finish_restart_worker(persisted_reasons)
+    if interrupted:
+        raise asyncio.CancelledError
+    if disk_reasons:
+        return True, "; ".join(disk_reasons)
     try:
         from api.vps_manager import get_service_instance as get_vps_manager_service
-        deploy_state = await asyncio.wait_for(
-            asyncio.to_thread(get_vps_manager_service().active_vps_deploy_summary),
-            timeout=2.0,
-        )
-    except asyncio.TimeoutError:
-        _log(SERVICE, "[restart] timed out while inspecting active VPS deploys", level="WARNING")
-        return True, "Could not verify whether a VPS or master update is still active. Retry shortly."
+        deploy_state, interrupted = await _finish_restart_worker(
+            get_vps_manager_service().active_vps_deploy_summary)
+        if interrupted:
+            raise asyncio.CancelledError
     except Exception as exc:
         _log(SERVICE, f"[restart] failed to inspect active VPS deploys: {exc}", level="WARNING")
         return True, "Could not verify whether a VPS or master update is still active. Retry shortly."
-    restart_blocked = bool(deploy_state.get("active")) if isinstance(deploy_state, dict) else False
+    if not isinstance(deploy_state, dict) or type(deploy_state.get("active")) is not bool:
+        _log(SERVICE, "[restart] malformed active VPS deploy inspection", level="ERROR")
+        return True, "Could not verify whether a VPS or master update is still active. Retry shortly."
+    restart_blocked = deploy_state["active"]
     restart_block_reason = str(deploy_state.get("summary") or "") if restart_blocked and isinstance(deploy_state, dict) else ""
     return restart_blocked, restart_block_reason
 
@@ -606,6 +656,26 @@ def _systemd_owns_current_api() -> bool:
     return props.get("ActiveState") == "active" and main_pid == os.getpid()
 
 
+def _close_read_streams_for_systemd_restart() -> None:
+    """Join disposable streams on their owning loop from a restart worker."""
+    loop = _read_stream_owner.loop
+    if loop is not None and loop.is_running():
+        async def drain():
+            """Close streams and record only static names of remaining HTTP reads."""
+            await _close_restart_reads()
+            pending = _read_stream_owner.pending_operations()
+            if pending:
+                _log(SERVICE, "[restart] remaining read operations", level="INFO", meta={"operations": pending})
+        asyncio.run_coroutine_threadsafe(drain(), loop).result()
+
+
+def _resume_read_streams_after_failed_restart() -> None:
+    """Allow ordinary reconnects when scheduling rejected the restart."""
+    loop = _read_stream_owner.loop
+    if loop is not None and loop.is_running():
+        loop.call_soon_threadsafe(_start_restart_reads)
+
+
 def _restart_current_api_systemd_unit(service_units=(), *, monitor_handoff: bool | None = None) -> bool:
     """Restart stale PBGui daemons and API when systemd owns this process."""
     if not _systemd_owns_current_api():
@@ -618,10 +688,14 @@ def _restart_current_api_systemd_unit(service_units=(), *, monitor_handoff: bool
         if not prepared:
             raise RuntimeError(f"Could not prepare persistent VPS monitor: {prepare_output}")
         _log(SERVICE, "[restart] prepared persistent VPS monitor systemd unit", level="INFO")
-    ok, output = _queue_current_api_systemd_restart(service_units, monitor_handoff=monitor_handoff)
-    if not ok:
-        _log(SERVICE, f"[restart] systemd restart scheduling failed: {output}", level="ERROR")
-        raise RuntimeError(output or "Could not schedule systemd restart")
+    _close_read_streams_for_systemd_restart()
+    try:
+        ok, output = _queue_current_api_systemd_restart(service_units, monitor_handoff=monitor_handoff)
+        if not ok:
+            raise RuntimeError(output or "Could not schedule systemd restart")
+    except BaseException:
+        _resume_read_streams_after_failed_restart()
+        raise
     _log(SERVICE, f"[restart] queued systemd restart for {_API_SYSTEMD_UNIT}: {output}", level="WARNING")
     return True
 
@@ -843,18 +917,30 @@ async def _worker_watchdog_loop() -> None:
             _log(SERVICE, f"[watchdog] unexpected error: {e}", level="ERROR")
 
 
+def _startup_step(label, function, *args, **kwargs):
+    """Measure mandatory startup steps without logging configuration or secrets."""
+    started = monotonic()
+    try:
+        return function(*args, **kwargs)
+    finally:
+        _log(SERVICE, f"[startup-timing] {label}", level="INFO",
+             meta={"duration_seconds": round(monotonic() - started, 3)})
+
+
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
     """FastAPI lifespan: startup and graceful shutdown of VPS monitoring."""
     from credential_process_registry import ProcessCapabilityHeartbeat
 
-    global _vps_monitor, _vps_monitor_in_process
+    global _vps_monitor, _vps_monitor_in_process, _api_shutdown_started
+    _api_shutdown_started = False
+    _start_restart_reads()
     capability_heartbeat = ProcessCapabilityHeartbeat(Path(PBGDIR), SERVICE)
     capability_heartbeat.__enter__()
     _runtime_restart_reasons.clear()
     try:
         configured_pb7 = str(load_ini("main", "pb7dir") or "").strip()
-        harden_sensitive_paths(
+        _startup_step("private-permissions", harden_sensitive_paths,
             _PBGUI_ROOT,
             Path(configured_pb7) if configured_pb7 else None,
             Path.home() / ".aws",
@@ -864,7 +950,7 @@ async def _lifespan(app: FastAPI):
         raise
     _setup_api_logging()
     try:
-        bootstrap_local_legacy_credentials(Path(PBGDIR))
+        _startup_step("credential-bootstrap", bootstrap_local_legacy_credentials, Path(PBGDIR))
     except Exception as exc:
         _log(
             SERVICE,
@@ -874,7 +960,7 @@ async def _lifespan(app: FastAPI):
         )
     startup_migrations_skipped = False
     try:
-        migration_result = run_startup_migrations(Path(PBGDIR))
+        migration_result = _startup_step("schema-migrations", run_startup_migrations, Path(PBGDIR))
         startup_migrations_skipped = bool(migration_result.get("skipped"))
         if migration_result["completed"]:
             _log(SERVICE, f"[startup-migrations] completed: {', '.join(migration_result['completed'])}", level="INFO")
@@ -882,7 +968,8 @@ async def _lifespan(app: FastAPI):
         _log(SERVICE, f"[startup-migrations] failed and will retry: {exc}", level="ERROR")
     try:
         if not startup_migrations_skipped:
-            credential_result = run_credential_migration(Path(PBGDIR))
+            credential_result = _startup_step("credential-migration", run_credential_migration, Path(PBGDIR),
+                                            timing_callback=lambda timings: _log(SERVICE, "[startup-timing] credential-scan", level="INFO", meta=timings))
             if credential_result.get("phase") == "complete":
                 _log(SERVICE, "[credential-migration] complete", level="INFO")
             elif credential_result.get("blocker_reason"):
@@ -904,7 +991,7 @@ async def _lifespan(app: FastAPI):
             )
         _log(SERVICE, f"[credential-migration] failed and will retry: {reason}", level="ERROR")
     try:
-        credential_reconciliation = reconcile_pending_credentials(Path(PBGDIR))
+        credential_reconciliation = _startup_step("credential-reconciliation", reconcile_pending_credentials, Path(PBGDIR))
         if credential_reconciliation.get("status") == "pending":
             _log(SERVICE, "[credential-reconciler] pending remote acknowledgements", level="INFO")
     except Exception as exc:
@@ -967,22 +1054,29 @@ async def _lifespan(app: FastAPI):
             await monitor.start()
             _log(SERVICE, "[lifespan] deferred startup complete", level="INFO")
 
-        bt7_startup()
-        bt8_startup()
-        bt9_startup()
-        opt7_startup()
-        opt8_startup()
-        opt9_startup()
-        coin_data_startup()
-        ohlcv_preload_startup()
-        vps_manager_startup()
-        vast_startup()
-        market_data_startup()
-        strategy_explorer_v8_startup()
-        profit_sweep_startup()
-        storage_startup()
+        ai_started = monotonic()
+        await ai_capabilities_prepare_startup()
+        _log(SERVICE, "[startup-timing] ai-analysis-recovery", level="INFO",
+             meta={"duration_seconds": round(monotonic() - ai_started, 3)})
+        _startup_step("bt7_startup", bt7_startup)
+        _startup_step("bt8_startup", bt8_startup)
+        _startup_step("bt9_startup", bt9_startup)
+        _startup_step("opt7_startup", opt7_startup)
+        _startup_step("opt8_startup", opt8_startup)
+        _startup_step("opt9_startup", opt9_startup)
+        _startup_step("coin_data_startup", coin_data_startup)
+        _startup_step("ohlcv_preload_startup", ohlcv_preload_startup)
+        _startup_step("vps_manager_startup", vps_manager_startup)
+        _startup_step("vast_startup", vast_startup)
+        _startup_step("market_data_startup", market_data_startup)
+        _startup_step("strategy_explorer_v8_startup", strategy_explorer_v8_startup)
+        _startup_step("profit_sweep_startup", profit_sweep_startup)
+        _startup_step("storage_startup", storage_startup)
+        ai_started = monotonic()
         await ai_capabilities_startup()
-        loop8_startup()
+        _log(SERVICE, "[startup-timing] ai-recovery", level="INFO",
+             meta={"duration_seconds": round(monotonic() - ai_started, 3)})
+        _startup_step("loop8_startup", loop8_startup)
         pb9_startup(app, restart_pending=_api_restart_pending, install_signal_hooks=True)
 
         lifecycle_tasks = [
@@ -992,7 +1086,9 @@ async def _lifespan(app: FastAPI):
         ]
         yield  # app runs here
     finally:
+        _api_shutdown_started = True
         await _shutdown_requested_restart()
+        await _close_restart_reads()
         for task in lifecycle_tasks:
             if not task.done():
                 task.cancel()
@@ -1147,6 +1243,7 @@ async def redirect_unauthenticated_page(request: Request, call_next):
 
 # Register last so rejected browser requests never reach URL-based request logging.
 app.add_middleware(BrowserOriginMiddleware)
+app.add_middleware(ReadStreamMiddleware, owner=_read_stream_owner)
 
 app.include_router(auth_router, prefix="/api/auth", tags=["auth"])
 app.include_router(pb9_router, prefix="/api/pb9", tags=["pb9"])
@@ -1750,7 +1847,7 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
     async def event_gen():
         try:
             # Send initial state immediately
-            payload = await asyncio.to_thread(_restart_status_payload)
+            payload = await _read_restart_status()
             payload["auth"] = auth_runtime_status()
             last_sent = json.dumps(payload, sort_keys=True)
             yield f"data: {json.dumps(payload)}\n\n"
@@ -1765,7 +1862,7 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
                 except asyncio.TimeoutError:
                     pass
 
-                payload = await asyncio.to_thread(_restart_status_payload)
+                payload = await _read_restart_status()
                 payload["auth"] = auth_runtime_status()
                 current_state = json.dumps(payload, sort_keys=True)
                 if force_send or current_state != last_sent:
@@ -1774,7 +1871,7 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
                 else:
                     # keepalive comment so proxies don't close the connection
                     yield ": keepalive\n\n"
-        except (GeneratorExit, asyncio.CancelledError):
+        except (GeneratorExit, asyncio.CancelledError, HTTPException):
             pass
         finally:
             if subscriber in _sse_subscribers:
@@ -1792,9 +1889,10 @@ async def server_status_stream(session: SessionToken = Depends(require_auth)):
 
 @app.get("/api/server-status")
 async def server_status(session: SessionToken = Depends(require_auth)):
-    """Return current restart-detector state for nav fallback checks."""
-    restart_blocked, restart_block_reason = await _restart_block_state()
-    payload = await asyncio.to_thread(_restart_status_payload)
+    """Read display state; full persisted admission checks belong to restart actions."""
+    restart_block_reason = _restart_memory_block_reason()
+    restart_blocked = bool(restart_block_reason)
+    payload = await _read_restart_status()
     return {
         **payload,
         "restart_blocked": restart_blocked,
@@ -1825,7 +1923,7 @@ def _acquire_api_restart_leases():
     try:
         leases.append(acquire_service_lifecycle_lock(Path(PBGDIR), "all-services", "restart", timeout=5.0))
         leases.append(acquire_service_lifecycle_lock(Path(PBGDIR), "api-server", "restart", timeout=5.0))
-        leases.append(acquire_master_update_lock(Path(PBGDIR)))
+        leases.append(acquire_master_restart_lock(Path(PBGDIR)))
         return tuple(leases)
     except Exception:
         for lease in reversed(leases):
@@ -1887,218 +1985,136 @@ def _prepare_direct_api_replacement(*, console: bool):
     return replacement
 
 
+async def _finish_restart_worker(function, *args, **kwargs):
+    """Drain one owned synchronous step, including repeated request cancellation."""
+    worker = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    interrupted = False
+    while True:
+        try:
+            return await asyncio.shield(worker), interrupted
+        except asyncio.CancelledError:
+            if worker.cancelled():
+                raise
+            interrupted = True
+
+
 @app.post("/api/server-restart")
 async def server_restart(session: SessionToken = Depends(require_auth)):
-    """Remember one restart request independently of the requesting browser."""
-    global _server_restart_task
-    if not _api_restart_pending():
-        _set_restart_request("waiting", "Waiting for protected work to finish…")
-        _server_restart_task = asyncio.create_task(
-            _run_requested_restart(), name="requested-service-restart"
-        )
-    return {
-        "ok": True,
-        "api_instance_id": _api_instance_id,
-        "restart_request": dict(_server_restart_request),
-    }
-
-
-def _set_restart_request(state: str, reason: str = "") -> None:
-    """Publish a complete restart snapshot to polling and SSE consumers."""
-    global _server_restart_request
-    snapshot = {
-        "state": state, "reason": reason, "api_instance_id": _api_instance_id,
-    }
-    if snapshot == _server_restart_request:
-        return
-    _server_restart_request = snapshot
-    for queue, loop in list(_sse_subscribers):
-        try:
-            loop.call_soon_threadsafe(queue.put_nowait, None)
-        except RuntimeError:
-            pass  # subscriber loop is already closing
-
-
-async def _run_requested_restart() -> None:
-    """Own the wait until safe handoff; retain failures for the progress view."""
+    """Validate and schedule the direct restart before acknowledging the GUI."""
+    global _api_restart_lease, _api_restart_handoff_task
+    leases = ()
+    replacement = None
+    handed_off = False
     try:
-        await _perform_server_restart()
-    except asyncio.CancelledError:
+        leases, interrupted = await _finish_restart_worker(_acquire_api_restart_leases)
+        if interrupted:
+            raise asyncio.CancelledError
+        restart_lease = leases[-1]
+        _api_restart_lease = restart_lease
+        restart_blocked, reason = await _restart_block_state()
+        if restart_blocked:
+            raise HTTPException(status_code=409, detail="Cannot restart PBGui services: " + (
+                reason or "An API-owned mutable operation is still running."))
+        restart_state, interrupted = await _finish_restart_worker(_restart_status_payload)
+        if interrupted:
+            raise asyncio.CancelledError
+        requested_units = {
+            str(item.get("unit") or "")
+            for item in restart_state.get("restart_services") or []
+            if str(item.get("unit") or "") != _API_SYSTEMD_UNIT
+        }
+        stale_units = [str(item["unit"]) for item in _RUNTIME_SYSTEMD_SERVICES
+                       if str(item["unit"]) in requested_units]
+        stale_units.extend(sorted(unit for unit in requested_units
+                                  if unit.startswith("pbgui-vast-") and unit not in stale_units))
+        restart_labels = [str(item.get("label") or item.get("service") or "")
+                          for item in restart_state.get("restart_services") or []]
+        _log(SERVICE, "[restart] managed service restart requested by user: " + (
+            ", ".join(restart_labels) or "API only"), level="WARNING")
+        # Inspect operation owners again after awaited disk/status checks.
+        reason = _restart_memory_block_reason()
+        if reason:
+            raise HTTPException(status_code=409, detail=f"Cannot restart PBGui services: {reason}")
+        # Detach before scheduling: no fallible ownership transition follows acceptance.
+        _detach_api_restart_lifecycle_leases(leases)
+        scheduled, interrupted = await _finish_restart_worker(_restart_current_api_systemd_unit, stale_units)
+        if stale_units and not scheduled:
+            raise HTTPException(status_code=409, detail="Managed daemon restarts require the systemd user service installation")
+        if not scheduled:
+            if interrupted:
+                raise asyncio.CancelledError
+            replacement, interrupted = await _finish_restart_worker(_prepare_direct_api_replacement, console=True)
+            if interrupted:
+                raise asyncio.CancelledError
+
+        async def _do_restart():
+            """Own accepted handoff until shutdown, failure or the systemd watchdog."""
+            global _api_restart_lease
+            signalled = False
+            try:
+                await asyncio.sleep(0.3)
+                _close_server_status_streams()
+                await _close_restart_reads()
+                if scheduled:
+                    await asyncio.sleep(_SYSTEMD_RESTART_WATCHDOG_SECONDS)
+                    _log(SERVICE, "[restart] scheduled systemd handoff did not stop the API; restart reservation released", level="ERROR")
+                    return
+                await asyncio.sleep(0)
+                if replacement is None:
+                    raise RuntimeError("Replacement API acknowledgement is missing")
+                # Signal is a nonblocking exact-identity operation. Do not admit new
+                # work between SIGTERM and the lifespan's shutdown cleanup.
+                signal_exact_process(replacement.old_identity, signal.SIGTERM)
+                signalled = True
+                await asyncio.Future()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                _log(SERVICE, f"[restart] handoff failed: {exc}", level="ERROR", meta={"traceback": traceback.format_exc()})
+            finally:
+                try:
+                    if replacement is not None and not signalled:
+                        await _finish_restart_worker(cancel_api_replacement, replacement)
+                finally:
+                    if _api_restart_lease is restart_lease:
+                        _api_restart_lease = None
+                    _release_api_restart_leases(leases)
+                    if not signalled and not asyncio.current_task().cancelling():
+                        _start_restart_reads()
+
+        _api_restart_handoff_task = asyncio.create_task(_do_restart(), name="api-restart-handoff")
+        handed_off = True
+        return {"ok": True, "message": "Restarting PBGui services...",
+                "api_instance_id": _api_instance_id, "restart_services": restart_labels}
+    except HTTPException:
         raise
+    except (ServiceLifecycleBusyError, MasterUpdateBusyError, ApiPidOwnershipError) as exc:
+        raise HTTPException(status_code=409, detail=f"Cannot restart PBGui services: {exc}") from exc
     except Exception as exc:
-        reason = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
-        _set_restart_request("failed", reason)
-        _log(SERVICE, "[restart] requested restart failed", level="ERROR",
-             meta={"reason": reason, "traceback": traceback.format_exc()})
+        _log(SERVICE, f"[restart] preparation failed: {exc}", level="ERROR", meta={"traceback": traceback.format_exc()})
+        raise HTTPException(status_code=500, detail=f"Could not prepare PBGui restart: {exc}") from exc
+    finally:
+        if not handed_off:
+            try:
+                if replacement is not None:
+                    await _finish_restart_worker(cancel_api_replacement, replacement)
+            finally:
+                if leases and _api_restart_lease is leases[-1]:
+                    _api_restart_lease = None
+                _release_api_restart_leases(leases)
 
 
 async def _shutdown_requested_restart() -> None:
-    """Drain API-owned restart preparation and its handoff watchdog on shutdown."""
-    global _server_restart_task, _api_restart_handoff_task, _server_restart_request
-    request = _server_restart_task
-    if request is not None and request is not asyncio.current_task():
-        # Once scheduling starts, finish the handoff before draining its
-        # watchdog; a cancelled thread could otherwise leave an unowned child.
-        if not request.done() and _server_restart_request.get("state") != "restarting":
-            request.cancel()
-        await asyncio.gather(request, return_exceptions=True)
-    handoff = _api_restart_handoff_task
-    if handoff is not None and handoff is not asyncio.current_task():
-        if not handoff.done():
-            handoff.cancel()
-        await asyncio.gather(handoff, return_exceptions=True)
-    _server_restart_task = None
+    """Join the accepted restart handoff during API shutdown."""
+    global _api_restart_handoff_task
+    task = _api_restart_handoff_task
+    if task is not None and task is not asyncio.current_task():
+        # Let a just-created handoff establish its finally block before cancelling.
+        await asyncio.sleep(0)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
     _api_restart_handoff_task = None
-    _server_restart_request = {}
-
-
-async def _perform_server_restart():
-    """Restart stale managed PBGui daemons, then restart the API coordinator."""
-    global _api_restart_lease, _api_restart_handoff_task
-    while True:
-        acquisition = asyncio.create_task(asyncio.to_thread(_acquire_api_restart_leases))
-        try:
-            leases = await asyncio.shield(acquisition)
-            break
-        except asyncio.CancelledError:
-            # A worker cannot be cancelled mid-lock acquisition. Drain it and
-            # release any leases it acquired before letting shutdown continue.
-            try:
-                acquired = await acquisition
-            except Exception:
-                pass
-            else:
-                await asyncio.to_thread(_release_api_restart_leases, acquired)
-            raise
-        except (ServiceLifecycleBusyError, MasterUpdateBusyError) as exc:
-            _set_restart_request("waiting", str(exc))
-            await asyncio.sleep(0.5)
-        except Exception as exc:
-            _log(SERVICE, f"[restart] could not reserve lifecycle: {exc}", level="ERROR")
-            raise HTTPException(status_code=500, detail=f"Could not reserve PBGui restart: {exc}") from exc
-    restart_lease = leases[-1]
-    # Close AI admission before any awaited blocker inspection or handoff work.
-    _api_restart_lease = restart_lease
-    try:
-        while True:
-            restart_blocked, restart_block_reason = await _restart_block_state()
-            if not restart_blocked:
-                break
-            _set_restart_request("waiting", restart_block_reason or "Protected work is still running.")
-            await asyncio.sleep(0.5)
-    except BaseException:
-        if _api_restart_lease is restart_lease:
-            _api_restart_lease = None
-        await asyncio.to_thread(_release_api_restart_leases, leases)
-        raise
-    try:
-        restart_state = await asyncio.to_thread(_restart_status_payload)
-    except BaseException:
-        if _api_restart_lease is restart_lease:
-            _api_restart_lease = None
-        await asyncio.to_thread(_release_api_restart_leases, leases)
-        raise
-    requested_stale_units = {
-        str(item.get("unit") or "")
-        for item in restart_state.get("restart_services") or []
-        if str(item.get("unit") or "") != _API_SYSTEMD_UNIT
-    }
-    stale_units = [
-        str(item["unit"])
-        for item in _RUNTIME_SYSTEMD_SERVICES
-        if str(item["unit"]) in requested_stale_units
-    ]
-    stale_units.extend(sorted(unit for unit in requested_stale_units
-                              if unit.startswith('pbgui-vast-') and unit not in stale_units))
-    restart_labels = [
-        str(item.get("label") or item.get("service") or "")
-        for item in restart_state.get("restart_services") or []
-    ]
-
-    _log(
-        SERVICE,
-        f"[restart] managed service restart requested by user: {', '.join(restart_labels) or 'API only'}",
-        level="WARNING",
-    )
-    _set_restart_request("restarting", "Restarting PBGui services…")
-
-    try:
-        systemd_restart_scheduled = await asyncio.to_thread(_restart_current_api_systemd_unit, stale_units)
-    except Exception as exc:
-        if _api_restart_lease is restart_lease:
-            _api_restart_lease = None
-        await asyncio.to_thread(_release_api_restart_leases, leases)
-        _log(SERVICE, f"[restart] could not schedule safe systemd restart: {exc}", level="ERROR")
-        raise HTTPException(status_code=500, detail=f"Could not schedule safe PBGui restart: {exc}") from exc
-    if stale_units and not systemd_restart_scheduled:
-        if _api_restart_lease is restart_lease:
-            _api_restart_lease = None
-        await asyncio.to_thread(_release_api_restart_leases, leases)
-        raise HTTPException(status_code=409, detail="Managed daemon restarts require the systemd user service installation")
-    replacement = None
-    if not systemd_restart_scheduled:
-        try:
-            replacement = await asyncio.to_thread(_prepare_direct_api_replacement, console=True)
-        except ApiPidOwnershipError as exc:
-            if _api_restart_lease is restart_lease:
-                _api_restart_lease = None
-            await asyncio.to_thread(_release_api_restart_leases, leases)
-            raise HTTPException(status_code=409, detail=f"Cannot restart PBGui services: {exc}") from exc
-        except Exception as exc:
-            if _api_restart_lease is restart_lease:
-                _api_restart_lease = None
-            await asyncio.to_thread(_release_api_restart_leases, leases)
-            _log(SERVICE, f"[restart] replacement acknowledgement failed: {exc}", level="ERROR")
-            raise HTTPException(status_code=500, detail=f"Could not start replacement API: {exc}") from exc
-
-    async def _do_restart():
-        global _api_restart_lease
-        try:
-            await asyncio.sleep(0.3)  # let response reach the client first
-            if systemd_restart_scheduled:
-                await asyncio.sleep(_SYSTEMD_RESTART_WATCHDOG_SECONDS)
-                if _api_restart_lease is restart_lease:
-                    _api_restart_lease = None
-                    await asyncio.to_thread(_release_api_restart_leases, leases)
-                    _set_restart_request("failed", "Scheduled restart did not stop the API.")
-                    _log(SERVICE, "[restart] scheduled systemd handoff did not stop the API; restart reservation released", level="ERROR")
-                return
-            _close_server_status_streams()
-            await asyncio.sleep(0)
-            if replacement is None:
-                raise RuntimeError("Replacement API acknowledgement is missing")
-            await asyncio.to_thread(signal_exact_process, replacement.old_identity, signal.SIGTERM)
-        except Exception as exc:
-            _set_restart_request("failed", str(exc))
-            _log(SERVICE, f"[restart] failed after restart reservation: {exc}", level="ERROR", meta={"traceback": traceback.format_exc()})
-            if _api_restart_lease is restart_lease:
-                _api_restart_lease = None
-            try:
-                if replacement is not None:
-                    await asyncio.to_thread(cancel_api_replacement, replacement)
-            except Exception as cleanup_exc:
-                _log(SERVICE, f"[restart] replacement cleanup failed: {cleanup_exc}", level="ERROR")
-            finally:
-                await asyncio.to_thread(_release_api_restart_leases, leases)
-
-    try:
-        _detach_api_restart_lifecycle_leases(leases)
-        _api_restart_handoff_task = asyncio.create_task(_do_restart(), name="api-restart-handoff")
-    except Exception:
-        if _api_restart_lease is restart_lease:
-            _api_restart_lease = None
-        try:
-            if replacement is not None:
-                await asyncio.to_thread(cancel_api_replacement, replacement)
-        finally:
-            await asyncio.to_thread(_release_api_restart_leases, leases)
-        raise
-    return {
-        "ok": True,
-        "message": "Restarting PBGui services...",
-        "api_instance_id": _api_instance_id,
-        "restart_services": restart_labels,
-    }
 
 
 class PBApiServer:

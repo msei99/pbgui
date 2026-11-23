@@ -184,6 +184,8 @@ class AICapabilityService:
         self.loaded_proposal_owners: set[str] = set()
         self.execution_tasks: set[asyncio.Task] = set()
         self.analysis_tasks: set[asyncio.Task] = set()
+        self._maintenance_task: asyncio.Task | None = None
+        self._startup_recovery_prepared = False
         self.state_lock = asyncio.Lock()
         self.semaphore = asyncio.Semaphore(4)
         self.approval_semaphore = asyncio.Semaphore(_MAX_ACTIVE_APPROVALS)
@@ -215,14 +217,35 @@ class AICapabilityService:
         if self.analysis_only(owner, conversation_id):
             raise AICapabilityError("This chat contains web research and is analysis-only. PBGui actions and code execution are disabled.")
 
-    async def startup(self) -> None:
-        """Recover approved durable actions before accepting new approval work."""
+    async def prepare_startup(self) -> None:
+        """Recover interrupted analyses before unrelated controller warmups compete."""
+        if self._startup_recovery_prepared:
+            return
         await self._to_thread_uncancellable(self._interrupt_python_analyses)
+        self._startup_recovery_prepared = True
+
+    async def startup(self) -> None:
+        """Recover approved actions before readiness, after their controllers exist."""
+        await self.prepare_startup()
         await self._to_thread_uncancellable(self._recover_journals)
-        await self._to_thread_uncancellable(self._prune_durable_state)
+        if self._maintenance_task is None or self._maintenance_task.done():
+            self._maintenance_task = asyncio.create_task(self._startup_maintenance(), name="ai-retention-cleanup")
+
+    async def _startup_maintenance(self) -> None:
+        """Prune only terminal retained records without delaying API readiness."""
+        try:
+            await self._to_thread_uncancellable(self._prune_durable_state)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            _log(SERVICE, f"AI retention cleanup failed: {type(exc).__name__}", level="ERROR")
 
     async def shutdown(self) -> None:
         """Cancel disposable analyses and await every API-owned approval task."""
+        maintenance, self._maintenance_task = self._maintenance_task, None
+        if maintenance is not None:
+            maintenance.cancel()
+            await asyncio.gather(maintenance, return_exceptions=True)
         analyses = list(self.analysis_tasks)
         for task in analyses:
             task.cancel()
@@ -233,6 +256,7 @@ class AICapabilityService:
             await asyncio.gather(*(asyncio.shield(task) for task in mutable), return_exceptions=True)
         self.analysis_tasks.clear()
         self.execution_tasks.clear()
+        self._startup_recovery_prepared = False
 
     def capability_registry(self, owner: str | None = None) -> dict[str, Any]:
         """Return effect-aware descriptors available to one owner."""
@@ -6181,6 +6205,11 @@ def restart_block_reason(root: Path | None = None) -> str:
         label = "action" if incomplete == 1 else "actions"
         return f"{incomplete} approved AI PB8 {label} require durable recovery"
     return ""
+
+
+async def prepare_startup() -> None:
+    """Prepare analysis recovery before API-owned controller warmups start."""
+    await get_ai_capability_service().prepare_startup()
 
 
 async def startup() -> None:

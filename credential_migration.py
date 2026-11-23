@@ -6,6 +6,7 @@ import configparser
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from time import monotonic
 import hashlib
 import hmac
 import io
@@ -169,6 +170,7 @@ class CredentialMigrationCoordinator:
         self.store = credential_store or CredentialStore(self.root / "data" / "credentials")
         self._configured_pb7_root = _lexical_absolute(pb7_root) if pb7_root else None
         self._transient_sources: dict[str, _Source] = {}
+        self.scan_timings: dict[str, float] = {}
         ensure_private_directory_tree(self.migration_root, self.backup_root)
 
     def run(self) -> dict[str, Any]:
@@ -1271,7 +1273,10 @@ class CredentialMigrationCoordinator:
     def _scan_for_legacy_values(self, state: dict[str, Any]) -> list[str]:
         """Scan forbidden fields for both legacy names and imported sentinel values."""
 
+        started = monotonic()
         sentinels = self._known_migration_sentinels(state)
+        self.scan_timings = {"sentinels_seconds": round(monotonic() - started, 3)}
+        started = monotonic()
         findings: list[str] = []
         ini_path = self.root / "pbgui.ini"
         if ini_path.is_file():
@@ -1307,13 +1312,18 @@ class CredentialMigrationCoordinator:
                 "_projection_generation" in tradfi and "_source_fingerprint" in tradfi
             ):
                 findings.append("PB7 api-keys.json:legacy tradfi")
+        self.scan_timings["legacy_sources_seconds"] = round(monotonic() - started, 3)
+        started = monotonic()
         findings.extend(
             self._scan_managed_files(
                 sentinels,
                 cache_scope=self._managed_scan_cache_scope(state, sentinels),
             )
         )
+        self.scan_timings["managed_files_seconds"] = round(monotonic() - started, 3)
+        started = monotonic()
         findings.extend(self._scan_owned_process_argv(sentinels))
+        self.scan_timings["process_argv_seconds"] = round(monotonic() - started, 3)
         return sorted(set(findings))
 
     def _managed_scan_cache_scope(self, state: Mapping[str, Any], sentinels: set[str]) -> str:
@@ -1422,6 +1432,33 @@ class CredentialMigrationCoordinator:
             sentinels.update(_legacy_backup_values(path.read_bytes()))
         return sentinels
 
+    def _managed_scan_files(self, root: Path, suffixes=None):
+        """Visit regular files without following links or repeatedly resolving paths."""
+        excluded = tuple(str(_lexical_absolute(path)) for path in (self.store.root, self.backup_root))
+        prefixes = tuple(path.rstrip(os.sep) + os.sep for path in excluded)
+        pending = [str(root)]
+        while pending:
+            directory = pending.pop()
+            with os.scandir(directory) as iterator:
+                entries = list(iterator)
+            for entry in entries:
+                if any(entry.path == base or entry.path.startswith(prefix)
+                       for base, prefix in zip(excluded, prefixes)):
+                    continue
+                try:
+                    if entry.is_symlink():
+                        continue
+                    if entry.is_dir(follow_symlinks=False):
+                        pending.append(entry.path)
+                    elif entry.is_file(follow_symlinks=False):
+                        if suffixes is not None and os.path.splitext(entry.name)[1].lower() not in suffixes:
+                            continue
+                        info = entry.stat(follow_symlinks=False)
+                        if stat.S_ISREG(info.st_mode):
+                            yield entry.path, info
+                except FileNotFoundError:
+                    continue
+
     def _scan_managed_files(self, sentinels: set[str], *, cache_scope: str = "") -> list[str]:
         """Scan only PBGui-managed logs, task metadata, and Cluster blobs."""
 
@@ -1452,18 +1489,7 @@ class CredentialMigrationCoordinator:
         for managed_root, label, suffixes in roots:
             if not managed_root.is_dir() or managed_root.is_symlink():
                 continue
-            for path in sorted(managed_root.rglob("*")):
-                if path.is_symlink() or not path.is_file():
-                    continue
-                if _path_is_below(path, self.store.root) or _path_is_below(path, self.backup_root):
-                    continue
-                if suffixes is not None and path.suffix.lower() not in suffixes:
-                    continue
-                try:
-                    file_stat = path.stat()
-                except OSError:
-                    continue
-                cache_key = str(path)
+            for cache_key, file_stat in self._managed_scan_files(managed_root, suffixes):
                 signature = [
                     int(file_stat.st_dev),
                     int(file_stat.st_ino),
@@ -1475,6 +1501,7 @@ class CredentialMigrationCoordinator:
                 if previous_signature == signature:
                     current_files[cache_key] = signature
                     continue
+                path = Path(cache_key)
                 if label == "managed-log":
                     if _file_contains_any(path, encoded):
                         findings.append(f"{self._relative_source_name(path)}:{label}")
@@ -1515,7 +1542,7 @@ class CredentialMigrationCoordinator:
                     self.managed_scan_cache_path,
                     json.dumps(cache_payload, sort_keys=True, separators=(",", ":")) + "\n",
                 )
-        return findings
+        return sorted(findings)
 
     def _scan_owned_process_argv(self, sentinels: set[str]) -> list[str]:
         """Inspect argv only for current-user processes tied to this PBGui checkout."""
@@ -1645,7 +1672,7 @@ class CredentialMigrationCoordinator:
             state["operation_ids"].append(operation_id)
 
 
-def run_credential_migration(pbgdir: Path | str | None = None) -> dict[str, Any]:
+def run_credential_migration(pbgdir: Path | str | None = None, *, timing_callback=None) -> dict[str, Any]:
     """Run or resume the local credential migration coordinator."""
 
     coordinator = CredentialMigrationCoordinator(pbgdir)
@@ -1676,7 +1703,10 @@ def run_credential_migration(pbgdir: Path | str | None = None) -> dict[str, Any]
     from credential_rolling_bootstrap import bootstrap_local_legacy_credentials
 
     bootstrap_local_legacy_credentials(pbgdir)
-    return coordinator.run()
+    result = coordinator.run()
+    if timing_callback is not None:
+        timing_callback(dict(coordinator.scan_timings))
+    return result
 
 
 def local_legacy_credential_inventory(

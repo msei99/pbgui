@@ -14,6 +14,18 @@ import api.services as services
 import PBApiServer
 
 
+@pytest.fixture(autouse=True)
+def isolated_restart_observations(tmp_path, monkeypatch):
+    """Never acquire production locks or inspect real financial restart state."""
+    monkeypatch.setattr(PBApiServer, 'PBGDIR', str(tmp_path))
+    (tmp_path / 'setup').mkdir()
+    (tmp_path / 'setup' / 'setup_systemd.sh').write_text('# isolated test placeholder\n')
+    monkeypatch.setattr(PBApiServer, '_restart_memory_block_reason', lambda: '')
+    for name in ('profit_sweep_restart_block_reason', 'ai_restart_block_reason',
+                 'credential_migration_restart_block_reason'):
+        monkeypatch.setattr(PBApiServer, name, lambda *args: '')
+
+
 def test_local_services_registry_includes_pbcluster() -> None:
     """Local Services API exposes PBCluster with its systemd unit and PID file."""
 
@@ -1189,7 +1201,7 @@ def test_lifespan_startup_failure_still_runs_all_shutdown_hooks(monkeypatch, tmp
         lambda *_args: {"skipped": False, "completed": []},
     )
 
-    def fail_credential_migration(*_args):
+    def fail_credential_migration(*_args, **_kwargs):
         raise RuntimeError("credential recovery required")
 
     monkeypatch.setattr(PBApiServer, "run_credential_migration", fail_credential_migration)

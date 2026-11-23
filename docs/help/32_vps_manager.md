@@ -1,5 +1,7 @@
 # VPS Manager
 
+The Wheel update warning verifies the installed source commit and Rust binary against the deployment receipt; it does not mean a new Passivbot version was published. Legacy flat and package-layout Rust copies are accepted together only when every copy matches the receipt. No files are removed to clear the indicator.
+
 Installed systemd services count as migrated even when stopped or autostart is disabled. Use the existing Services Start/Stop and Enable/Disable controls to manage those states; they do not require another migration. Missing required units or remaining legacy startup files still require migration.
 
 Starting Update Linux or another VPS command saves its required settings locally; it does not implicitly apply firewall or swap changes. Only the explicit Apply/Save configuration action may start Apply VPS Config.
@@ -37,6 +39,9 @@ The main view shows a table with all servers (Master + VPS) and their current st
 | **PBGui / PBGui Branch / PBGui GitHub** | Installed version, branch, and whether it matches GitHub origin |
 | **PB7 / PB7 Branch / PB7 GitHub** | PB7 version, branch, and whether it matches GitHub origin. When PB7 is not installed, all three columns show **-** without a warning icon. |
 | **PB8 / PB8 Branch / PB8 GitHub** | PB8 version, branch, and whether it matches the current upstream PB8 revision |
+| **PB9 / PB9 Branch / PB9 GitHub** | PB9 version, Python version, branch/commit and comparison with the official `v9` branch. Uses the same wheel/runtime warnings as PB8. An absent PB9 installation shows **-**; a blocked installation keeps its warning. |
+
+New PB9 columns appear automatically in previously saved table layouts. Existing hidden columns, sorting and selections are preserved. Running PB9 bots are included in the VPS bot count. GitHub comparisons use the monitor's background cache; opening this table does not fetch Git data.
 
 The Linux Updates dialog closes with either **×** in its header or **Close** at the bottom. A previous password-validation dialog no longer leaves its close button disabled. Normal updates include non-security kernel upgrades; new installations and package removals are listed separately in the details. Stale cached counts retain their visible stale warning.
 

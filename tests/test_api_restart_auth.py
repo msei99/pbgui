@@ -332,7 +332,7 @@ def isolated_monitor_lifespan(monkeypatch, tmp_path):
     monkeypatch.setattr(PBApiServer, "run_startup_migrations", Mock(return_value={"skipped": True, "completed": []}))
     monkeypatch.setattr(PBApiServer, "reconcile_pending_credentials", Mock(return_value={}))
     for name in (
-        "ai_capabilities_startup", "_worker_watchdog_loop", "_serial_watcher_loop",
+        "ai_capabilities_startup", "ai_capabilities_prepare_startup", "_worker_watchdog_loop", "_serial_watcher_loop",
         "loop8_shutdown", "auth_shutdown", "ai_chat_shutdown", "live_shutdown",
         "dashboard_shutdown", "heatmap_shutdown", "pareto_explorer_shutdown",
         "strategy_explorer_v8_shutdown", "coin_data_shutdown", "market_data_shutdown",
@@ -563,14 +563,14 @@ def test_blocked_restart_releases_master_update_reservation(monkeypatch) -> None
 
     async def blocked():
         entered.set()
-        return True, "busy"
+        await asyncio.Future()
 
     monkeypatch.setattr(PBApiServer, "_restart_block_state", blocked)
 
     async def scenario():
         nonlocal entered
         entered = asyncio.Event()
-        task = asyncio.create_task(PBApiServer._perform_server_restart())
+        task = asyncio.create_task(PBApiServer.server_restart(session=object()))
         await entered.wait()
         assert not task.done()
         task.cancel()
@@ -620,7 +620,7 @@ def test_root_restart_spawn_ack_failure_returns_error_before_success(monkeypatch
     monkeypatch.setattr(PBApiServer, "_api_restart_lease", None)
 
     with pytest.raises(HTTPException) as error:
-        asyncio.run(PBApiServer._perform_server_restart())
+        asyncio.run(PBApiServer.server_restart(session=object()))
 
     assert error.value.status_code == 500
     assert "ack failed" in str(error.value.detail)
@@ -631,7 +631,6 @@ def test_root_restart_spawn_ack_failure_returns_error_before_success(monkeypatch
         "<lambda>",
         "<lambda>",
         "<lambda>",
-        "_release_api_restart_leases",
     ]
 
 
@@ -652,7 +651,7 @@ def test_root_restart_lock_order_is_global_service_then_update(monkeypatch) -> N
     )
     monkeypatch.setattr(
         PBApiServer,
-        "acquire_master_update_lock",
+        "acquire_master_restart_lock",
         lambda _root: events.append("master-update") or Lease(),
     )
 
@@ -662,8 +661,8 @@ def test_root_restart_lock_order_is_global_service_then_update(monkeypatch) -> N
     PBApiServer._release_api_restart_leases(leases)
 
 
-def test_restart_blockers_keep_local_registry_reads_on_event_loop(monkeypatch) -> None:
-    """Only the blocking VPS deployment inspection is delegated to a worker thread."""
+def test_restart_blockers_keep_only_memory_reads_on_event_loop(monkeypatch) -> None:
+    """Persisted safety and deploy reads run outside the loop; memory registries stay local."""
     from api import cluster, coin_data, dashboard, db_tools, pareto_explorer, vps_manager, loop_optimizer_v8
 
     event_loop_thread = threading.get_ident()
@@ -692,7 +691,9 @@ def test_restart_blockers_keep_local_registry_reads_on_event_loop(monkeypatch) -
     )
 
     assert asyncio.run(PBApiServer._restart_block_state()) == (False, "")
-    assert local_threads == [event_loop_thread] * 9
+    assert local_threads[:6] == [event_loop_thread] * 6
+    assert len(local_threads) == 9
+    assert all(thread != event_loop_thread for thread in local_threads[6:])
     assert len(external_threads) == 1
     assert external_threads[0] != event_loop_thread
 
@@ -728,6 +729,7 @@ def test_restart_status_identifies_running_api_instance(monkeypatch):
 def isolated_cloud_supervisor_discovery(monkeypatch):
     """Existing API tests must not inspect actual user rental processes."""
     monkeypatch.setattr(PBApiServer, '_vast_supervisor_restart_state', lambda: [])
+
 
 
 @pytest.mark.parametrize('stream', [False, True])

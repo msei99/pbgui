@@ -32,7 +32,7 @@ def test_collector_keeps_pb7_and_pb8_independent_without_local_pb7(
         output = (
             _heads(("main", pbgui_commit))
             if upstream_releases.PBGUI_UPSTREAM_URL in command
-            else _heads(("master", passivbot_commit), ("v7", "c" * 40))
+            else _heads(("master", passivbot_commit), ("v7", "c" * 40), ("v9", "9" * 40))
         )
         return SimpleNamespace(returncode=0, stdout=output)
 
@@ -49,6 +49,8 @@ def test_collector_keeps_pb7_and_pb8_independent_without_local_pb7(
     assert snapshot["repositories"]["pb7"]["target_commit"] == passivbot_commit
     assert snapshot["repositories"]["pb8"]["target_commit"] == passivbot_commit
     assert snapshot["repositories"]["pb7"] is not snapshot["repositories"]["pb8"]
+    assert snapshot["repositories"]["pb9"]["target_commit"] == "9" * 40
+    assert snapshot["repositories"]["pb9"]["default_branch"] == "v9"
 
 
 def test_pbgui_collector_uses_official_url_even_when_master_has_fork_origin(
@@ -118,13 +120,13 @@ def test_collector_retains_last_known_heads_when_remote_check_fails(
             name: {
                 "name": name,
                 "state": "ok",
-                "default_branch": "main" if name == "pbgui" else "master",
+                "default_branch": "main" if name == "pbgui" else "v9" if name == "pb9" else "master",
                 "target_commit": "d" * 40,
-                "heads": {"main" if name == "pbgui" else "master": "d" * 40},
+                "heads": {"main" if name == "pbgui" else "v9" if name == "pb9" else "master": "d" * 40},
                 "last_success_at": 50.0,
                 **({"source_url": upstream_releases.PBGUI_UPSTREAM_URL} if name == "pbgui" else {}),
             }
-            for name in ("pbgui", "pb7", "pb8")
+            for name in ("pbgui", "pb7", "pb8", "pb9")
         },
     }
     state_path.parent.mkdir(parents=True)
@@ -144,7 +146,7 @@ def test_collector_retains_last_known_heads_when_remote_check_fails(
 
     snapshot = collector._collect_sync()
 
-    for name in ("pbgui", "pb7", "pb8"):
+    for name in ("pbgui", "pb7", "pb8", "pb9"):
         assert snapshot["repositories"][name]["state"] == "stale"
         assert snapshot["repositories"][name]["target_commit"] == "d" * 40
         assert snapshot["repositories"][name]["last_success_at"] == 50.0

@@ -109,7 +109,9 @@ Während des Speicherns sind die Einstellungen gegen doppelte Anfragen gesperrt.
 
 Die Restart-Aktion in der Navigation zeigt direkt nach der Bestätigung den Fortschritt und verhindert doppelte Anfragen. PBGui verbindet sich automatisch neu und prüft vor dem Neuladen der aktuellen Seite, ob eine neue API-Instanz läuft. Bei verlorener Antwort wird der Status geprüft, ohne den Neustart automatisch erneut anzufordern.
 
-Läuft geschützte Arbeit wie eine PB9-Prüfung, merkt sich der Server den bestätigten Neustart. Die Fortschrittsanzeige nennt den Wartegrund; sobald die Arbeit abgeschlossen ist, geht es automatisch weiter. Neue PB9-Prüfungen werden bis nach dem Neustart zurückgehalten. Ein Neuladen des Browsers stellt die Anzeige des vorgemerkten Neustarts unter der aktuellen URL wieder her; erneutes Klicken ist unnötig. Unabhängig laufende Backtests und Optimierungen laufen weiter.
+Restart nutzt wieder den bewährten direkten Ablauf: PBGui prüft geschützte Arbeit, plant die veralteten lokalen Dienste über systemd ein und bestätigt erst danach den Erfolg. Anschließend verbindet sich der Browser neu und prüft die Ersatz-API. Laufende geschützte Arbeit, einschließlich PB9-Prüfungen, liefert einen konkreten Grund statt eines ungeprüft vorgemerkten Neustarts. Es gibt keine zusätzliche Restart-Warteschlange. Unabhängige Bot-, Backtest- und Optimize-Prozesse behalten ihre eigenen Laufzeiten.
+
+Die PBCoinData-Prozessprüfung akzeptiert schlüssige NAS-Automounts außerhalb ihrer Nachweispfade. Mehrdeutige Überlagerungen geschützter Pfade führen weiterhin zu Unknown. Verdeckte Tabs geben ihren Status-Stream frei und verbinden ihn beim Anzeigen automatisch neu.
 
 Mit Escape schließt sich der aktive Hilfe-, Preis-, Ergebnis-, CMC-Schlüssel- oder CMC-Authority-Dialog im Services Monitor. Während einer laufenden CMC-Änderung bleibt der entsprechende Dialog geöffnet.
 
@@ -118,3 +120,15 @@ Der Preisdialog aktualisiert Preise automatisch alle fünf Sekunden und Altersan
 Ändert sich die Code-Version während eines Neustarts, führt PBGui nach Verfügbarkeit der neuen API einmalig einen weiteren Neustart durch. Die Fortschrittsanzeige nennt Dienste, die noch mit älterem Code laufen. Dauerhafte Fehler bleiben sichtbar, statt Dienste wiederholt neu zu starten.
 
 Remote-Updates von PBGui und Branch-Wechsel starten PBData neu, wenn der Dienst bereits lief. Seine bestehende Autostart-Einstellung bleibt erhalten. Inaktives PBData wird durch das Update nicht gestartet.
+
+Jede Statusabfrage zur Wiederverbindung hat ein Zeitlimit von fünf Sekunden. Eine unbeantwortete Abfrage wird automatisch wiederholt, statt die Fortschrittsanzeige festzuhalten.
+
+Vor dem Neustart beendet PBGui reine GET-Ereignisstreams, damit deren Keepalive-Verbindungen das Herunterfahren nicht verzögern. Credential-Prüfungen bleiben aktiv; unveränderte private Dateien behalten ihre Metadaten, damit gültige Scan-Ergebnisse wiederverwendet werden. KI-Aktionen werden weiterhin vor der Bereitschaft wiederhergestellt; nur das Aufräumen alter abgeschlossener Einträge läuft danach.
+
+Beim API-Neustart dürfen bestehende Runtime-Lesezugriffe weiterlaufen; echte Installationen und Quellcode-Updates bleiben durch ihre exklusive Sperre ausgeschlossen. Unterbrochene Analysen werden vor konkurrierenden Controller-Warmups wiederhergestellt. Die Wiederherstellung genehmigter Aktionen bleibt Voraussetzung für die Bereitschaft.
+
+Beide Restart-Einstiege verwenden dieselbe laufende API-Instanz. Beim Herunterfahren erhalten neue GET-Abfragen vorübergehend 503 mit Retry-After; der Browser verbindet sich automatisch neu.
+
+Die Statusanzeige prüft die laufenden Operationen. Die Restart-Aktion prüft zusätzlich die gespeicherten Wiederherstellungs- und Deployment-Sperren, bevor sie den Neustart annimmt.
+
+Browser-Tabs teilen sich die passiven Restart-Statusprüfungen. Ändern sich Serial oder Laufzeitgründe für einen Neustart, wird der kurze Anzeigecache verworfen; die Restart-Aktion prüft ihre vollständigen Voraussetzungen weiterhin neu. Langsame Anzeigeprüfungen antworten vorübergehend mit einer Wiederholungsaufforderung, statt alle Tabs warten zu lassen. Die Abhängigkeiten für Pareto-Auswertungen und Exchange-WebSockets werden erst bei ihrer ersten Nutzung geladen.

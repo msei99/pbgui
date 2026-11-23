@@ -519,6 +519,38 @@ def overview_preferences(page):
     return page.evaluate('(key) => JSON.parse(localStorage.getItem(key))', OVERVIEW_PREFS)
 
 
+def test_pb9_overview_columns_use_shared_cells_and_keep_preferences(manager):
+    """The actual table shows PB9 state and adds new columns to saved layouts."""
+    page = manager
+    page.evaluate('''key => localStorage.setItem(key, JSON.stringify({
+      sort:{field:'name',dir:'asc'},visible_columns:{pb7:false}
+    }))''', OVERVIEW_PREFS)
+    page.reload()
+    page.evaluate('''() => handleMessage({type:'state',data:{overview:{rows:[
+      {name:'pb9-host',hostname:'pb9-host',nav:'vps',role:'slave',online:true,
+       pb9:'v9.0.0.dev0 /3.12',pb9_branch:'v9 (1234567)',pb9_github:'✅',
+       pb9_installed:true,pb9_wheel_required:true},
+      {name:'no-pb9',hostname:'no-pb9',nav:'vps',role:'slave',online:true,pb9_installed:false}
+    ]},vps:[],deploys:{}}})''')
+    expect(page.locator(OVERVIEW + ' tbody tr')).to_have_count(2)
+    for label in ['PB9', 'PB9 Branch', 'PB9 GitHub']:
+        expect(page.get_by_role('button', name='Hide column ' + label, exact=True)).to_have_count(1)
+    expect(page.get_by_role('button', name='Hide column PB7', exact=True)).to_have_count(0)
+    row = page.locator(OVERVIEW + ' tr[data-overview-host="pb9-host"]')
+    assert 'v9.0.0.dev0' in row.text_content()
+    assert 'v9 (1234567)' in row.text_content()
+    assert 'Wheel update' in row.text_content()
+    # PB9 fields are the last three data columns before the shared Reset column.
+    absent = page.locator(OVERVIEW + ' tr[data-overview-host="no-pb9"] td').all_text_contents()
+    assert absent[-4:-1] == ['-', '-', '-']
+    page.evaluate('''() => {const row=store.state.overview.rows[0];
+      row.pb9_runtime_blocked=true;row.pb9_runtime_reason='PB9 repair required';
+      handleMessage({type:'state',data:store.state});}''')
+    row = page.locator(OVERVIEW + ' tr[data-overview-host="pb9-host"]')
+    assert row.evaluate("el => Array.from(el.querySelectorAll('[title]')).some(item => item.title.includes('PB9 repair required'))")
+    assert page.evaluate('document.documentElement.scrollWidth <= document.documentElement.clientWidth')
+
+
 def overview_button_point(button, offset=0):
     """Check actual hit testing after scrolling the real control into its container."""
     button.scroll_into_view_if_needed()
@@ -579,7 +611,7 @@ def test_overview_hide_targets_do_not_sort(manager, offset):
     publish_overview(page)
     names = page.locator(OVERVIEW + ' button[title="Hide column"]').evaluate_all(
         '(buttons) => buttons.map(button => button.getAttribute("aria-label"))')
-    assert len(names) == 16
+    assert len(names) == 19
     for name in names:
         # Deliberately sort via the label outside the enlarged button target.
         page.locator(OVERVIEW + ' .th-sort-main').first.click(position={'x': 2, 'y': 2})
@@ -592,7 +624,7 @@ def test_overview_hide_targets_do_not_sort(manager, offset):
         assert preferences['sort'] == {'field': 'name', 'dir': 'desc'}
         assert sum(value is False for value in preferences['visible_columns'].values()) == 1
         click_overview_button(page, page.get_by_role('button', name='Reset view', exact=True), offset)
-        expect(page.locator(OVERVIEW + ' button[title="Hide column"]')).to_have_count(16)
+        expect(page.locator(OVERVIEW + ' button[title="Hide column"]')).to_have_count(19)
         assert overview_preferences(page)['sort'] == {'field': 'name', 'dir': 'asc'}
         assert all(overview_preferences(page)['visible_columns'].values())
         assert page.locator(OVERVIEW + ' tbody tr').first.get_attribute('data-overview-host') == 'test-alpha'
@@ -678,7 +710,7 @@ def test_overview_keyboard_reload_live_state_and_guide(manager):
     reset = page.get_by_role('button', name='Reset view', exact=True)
     reset.focus()
     page.keyboard.press('Enter')
-    expect(page.locator(OVERVIEW + ' button[title="Hide column"]')).to_have_count(16)
+    expect(page.locator(OVERVIEW + ' button[title="Hide column"]')).to_have_count(19)
     assert overview_preferences(page)['sort'] == {'field': 'name', 'dir': 'asc'}
 
 

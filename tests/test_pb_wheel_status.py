@@ -61,6 +61,28 @@ def test_receipt_requires_matching_checkout_and_binary(tmp_path, monkeypatch):
     assert not status.wheel_installed(pbgdir, "pb7", repo, python)
 
 
+@pytest.mark.parametrize("product", ["pb7", "pb8", "pb9"])
+@pytest.mark.parametrize("second", ["identical", "changed", "symlink"])
+def test_flat_and_package_extensions_require_every_copy_to_match(tmp_path, monkeypatch, product, second):
+    """Legacy duplicate layouts are valid only when every binary proves the receipt."""
+    repo, python, binary = make_runtime(tmp_path, product, monkeypatch)
+    flat = binary.parent.parent / binary.name
+    if second == "symlink":
+        flat.symlink_to(binary)
+    else:
+        flat.write_bytes(binary.read_bytes() if second == "identical" else b"wrong build")
+    assert status.wheel_installed(tmp_path / "software/pbgui", product, repo, python) is (second == "identical")
+
+
+@pytest.mark.parametrize('payload', ['[]', '"text"', '1', '[' * 1100 + '0' + ']' * 1100])
+def test_invalid_receipt_shape_is_unverified_without_status_exception(tmp_path, monkeypatch, payload):
+    """Non-object and deeply nested receipts must not break an entire status response."""
+    repo, python, _ = make_runtime(tmp_path, 'pb7', monkeypatch)
+    root = tmp_path / 'software/pbgui'
+    (root / 'data/state/pb7-wheel.json').write_text(payload)
+    assert status.wheel_installed(root, 'pb7', repo, python) is False
+
+
 def test_pb8_live_skip_requires_current_commit_and_complete_runtime(tmp_path, monkeypatch):
     """An old, incomplete or interrupted live install must still run the update."""
     repo, python, binary = make_runtime(tmp_path, "pb8", monkeypatch)

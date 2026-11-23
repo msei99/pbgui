@@ -12,6 +12,7 @@ import re
 import stat
 import shlex
 import subprocess
+import sys
 import time
 
 import psutil
@@ -367,7 +368,8 @@ def _mountinfo(text, deadline):
 
 
 def _mount_view(rows, root):
-    """Require an unrestricted procfs root, only benign binfmt stacks, and a local checkout."""
+    """Require uncovered evidence paths; allow unrelated, coherent NAS automounts."""
+    root = Path(root).resolve()
     proc = [row for row in rows if row.point == "/proc"]
     if (len(proc) != 1 or proc[0].filesystem != "proc" or proc[0].root != "/"
             or any(v.startswith("hidepid=") and v != "hidepid=0" or v.startswith("subset=")
@@ -379,9 +381,23 @@ def _mount_view(rows, root):
                    or row.filesystem not in {"autofs", "binfmt_misc"} or row.device[0] != 0
                    or row.parent not in {proc[0].ident, *(child.ident for child in children)} for row in children)):
         raise ValueError("Critical or unknown procfs overlays prevent complete visibility")
-    points = [row.point for row in rows if row not in children]
-    if len(points) != len(set(points)):
-        raise ValueError("Stacked mount mapping is ambiguous")
+    points = {}
+    for row in rows:
+        if row not in children:
+            points.setdefault(row.point, []).append(row)
+    protected = (str(Path(root).resolve().parent), str(Path(sys.prefix).resolve()),
+                 str(Path.home() / ".config"), str(Path.home() / ".local"),
+                 "/proc", "/run", "/sys", "/dev", "/etc", "/usr", "/var", "/opt")
+    for point, stack in points.items():
+        if len(stack) == 1:
+            continue
+        lower = next((row for row in stack if row.filesystem == "autofs"), None)
+        upper = next((row for row in stack if row is not lower), None)
+        if (len(stack) != 2 or lower is None or upper is None
+                or lower.root != "/" or lower.device[0] != 0 or upper.parent != lower.ident
+                or upper.filesystem not in {"nfs", "nfs4", "cifs"}
+                or any(_within_group(point, path) or _within_group(path, point) for path in protected)):
+            raise ValueError("Stacked mount mapping is ambiguous")
     candidates = [row for row in rows if _within_group(str(root), row.point)]
     checkout = max(candidates, key=lambda row: len(Path(row.point).parts))
     if checkout.filesystem not in {"ext2", "ext3", "ext4", "xfs", "btrfs", "overlay", "tmpfs"}:

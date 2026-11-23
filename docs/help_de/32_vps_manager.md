@@ -1,5 +1,7 @@
 # VPS Manager
 
+Die Warnung Wheel update prüft Quellcommit und Rust-Datei gegen den Installationsnachweis; sie bedeutet nicht, dass eine neue Passivbot-Version erschienen ist. Alte Rust-Dateien direkt unter site-packages und im Paketordner werden gemeinsam akzeptiert, wenn jede Kopie zum Nachweis passt. Zum Entfernen der Anzeige werden keine Dateien gelöscht.
+
 Installierte systemd-Dienste gelten auch dann als migriert, wenn sie gestoppt sind oder ihr Autostart deaktiviert ist. Diese Zustände werden über die vorhandenen Start/Stop- und Enable/Disable-Aktionen unter Services verwaltet und erfordern keine erneute Migration. Fehlende erforderliche Units oder verbliebene alte Startdateien erfordern weiterhin eine Migration.
 
 Update Linux und andere VPS-Befehle speichern benötigte Einstellungen vorher nur lokal. Dabei werden weder Firewall noch Swap automatisch geändert. Apply VPS Config darf nur über die ausdrückliche Aktion zum Anwenden/Speichern der VPS-Konfiguration starten.
@@ -37,6 +39,9 @@ Die Hauptansicht zeigt eine Tabelle mit allen Servern (Master + VPS) und ihrem a
 | **PBGui / PBGui Branch / PBGui GitHub** | Installierte Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt |
 | **PB7 / PB7 Branch / PB7 GitHub** | PB7-Version, Branch und ob sie mit dem GitHub-Origin übereinstimmt. Ist PB7 nicht installiert, zeigen alle drei Spalten **-** ohne Warnsymbol. |
 | **PB8 / PB8 Branch / PB8 GitHub** | PB8-Version, Branch und ob sie mit der aktuellen Upstream-PB8-Revision uebereinstimmt |
+| **PB9 / PB9 Branch / PB9 GitHub** | PB9-Version, Python-Version, Branch/Commit und Vergleich mit dem offiziellen Branch `v9`. Verwendet dieselben Wheel-/Laufzeitwarnungen wie PB8. Fehlt die PB9-Installation, erscheint **-**; eine gesperrte Installation behält ihren Warnhinweis. |
+
+Die neuen PB9-Spalten erscheinen automatisch auch in bereits gespeicherten Tabellenansichten. Bisher ausgeblendete Spalten, Sortierung und Auswahl bleiben erhalten. Laufende PB9-Bots zählen zur Bot-Anzahl des VPS. Der GitHub-Vergleich nutzt den Hintergrund-Cache des Monitors; das Öffnen der Tabelle ruft keine Git-Daten ab.
 
 Der Dialog Linux Updates lässt sich über **×** im Kopf oder **Close** unten schließen. Eine vorherige Passwortprüfung lässt den Schließen-Knopf nicht mehr gesperrt zurück. Normale Updates umfassen auch Kernel-Upgrades ohne Security-Einstufung; Neuinstallationen und Paketentfernungen stehen separat in den Details. Veraltete Cache-Werte behalten ihren sichtbaren Warnhinweis.
 

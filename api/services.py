@@ -1984,6 +1984,7 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
                 if api_server._api_restart_lease is restart_lease:
                     api_server._api_restart_lease = None
                     api_server._release_api_restart_leases(leases)
+                    api_server._resume_read_streams_after_failed_restart()
                     _log(SERVICE, "[restart] scheduled systemd handoff did not stop the API; restart reservation released", level="ERROR")
 
             try:

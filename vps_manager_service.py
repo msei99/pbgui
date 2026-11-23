@@ -130,13 +130,13 @@ def _pb7_branch_label(branch: Any, commit: Any) -> str:
     return value
 
 
-def _pb8_branch_label(branch: Any, github_status: Any) -> str:
-    """Label the verified detached PB8 upstream checkout as master."""
+def _pb8_branch_label(branch: Any, github_status: Any, default_branch: str = "master") -> str:
+    """Label a verified detached native checkout with its upstream branch."""
     value = str(branch or "unknown")
     if value == "HEAD":
         value = "unknown"
     if value == "unknown" and str(github_status or "").startswith("✅"):
-        return "master"
+        return default_branch
     return value
 
 
@@ -3846,9 +3846,7 @@ class VPSManagerService:
             "pb8_runtime_ready": bool(local_meta.get("pb8ready")) and not bool(local_meta.get("pb8blocked")),
             "pb8_runtime_blocked": bool(local_meta.get("pb8blocked")),
             "pb8_runtime_reason": str(local_meta.get("pb8reason") or ""),
-            "pb9_installed": bool(local_meta.get("pb9installed", local_meta.get("pb9ready"))),
-            "pb9_runtime_ready": bool(local_meta.get("pb9ready")),
-            "pb9_runtime_reason": str(local_meta.get("pb9reason") or ""),
+            **self._build_pb9_overview_fields(local_meta),
         }
 
     def _build_vps_overview_row(self,
@@ -3895,16 +3893,12 @@ class VPSManagerService:
             for monitor in (host_state or {}).get("instances") or []
             if str((monitor or {}).get("u") or "").strip()
         }
-        running_instances.update(
-            ("7", str((instance or {}).get("name") or "").strip())
-            for instance in (host_state or {}).get("v7_instances") or []
-            if _truthy((instance or {}).get("running")) and str((instance or {}).get("name") or "").strip()
-        )
-        running_instances.update(
-            ("8", str((instance or {}).get("name") or "").strip())
-            for instance in (host_state or {}).get("v8_instances") or []
-            if _truthy((instance or {}).get("running")) and str((instance or {}).get("name") or "").strip()
-        )
+        for generation in ("7", "8", "9"):
+            running_instances.update(
+                (generation, str((instance or {}).get("name") or "").strip())
+                for instance in (host_state or {}).get(f"v{generation}_instances") or []
+                if _truthy((instance or {}).get("running")) and str((instance or {}).get("name") or "").strip()
+            )
         package_status, monitor_agent = self._get_remote_agent_contract(host_state)
         package_status = _package_status_for_boot(package_status, boot)
         remote_pb8_github = self._build_pb8_github_status(str(meta.get("pb8c") or ""))
@@ -3954,6 +3948,7 @@ class VPSManagerService:
             "pb8_runtime_ready": bool(meta.get("pb8ready")) and not pb8_runtime_blocked,
             "pb8_runtime_blocked": pb8_runtime_blocked,
             "pb8_runtime_reason": str(meta.get("pb8reason") or ""),
+            **self._build_pb9_overview_fields(meta),
             "runtime_profile": str(getattr(vps, "runtime_profile", "pb7") or "pb7") if vps else "pb7",
             "rtd": min(self._build_remote_rtd(host_state), 9999),
             "task_command": str(getattr(vps, "command", "") or "") if vps else "",
@@ -4011,6 +4006,25 @@ class VPSManagerService:
     def _build_pb8_github_status(self, current_commit: str) -> str:
         """Compare one PB8 checkout with the latest upstream master commit."""
         return self._build_cached_github_status("pb8", current_commit, current_branch="master")
+
+    def _build_pb9_overview_fields(self, meta: dict[str, Any]) -> dict[str, Any]:
+        """Share local and remote PB9 cells using cached host and upstream facts only."""
+        installed = bool(meta.get("pb9installed", meta.get("pb9ready")))
+        blocked = bool(meta.get("pb9blocked"))
+        commit = str(meta.get("pb9c") or "")
+        github = self._build_cached_github_status("pb9", commit, current_branch="v9")
+        branch = _pb8_branch_label(meta.get("pb9b"), github, default_branch="v9")
+        python = meta.get("pb9py")
+        return {
+            "pb9": f"{str(meta.get('pb9v') or 'N/A')}{'' if python in (None, '', 'N/A') else ' /' + str(python)}",
+            "pb9_branch": f"{branch} ({_short_commit(commit)})",
+            "pb9_github": github,
+            "pb9_installed": installed,
+            "pb9_wheel_required": installed and not bool(meta.get("pb9wheel")),
+            "pb9_runtime_ready": bool(meta.get("pb9ready")) and not blocked,
+            "pb9_runtime_blocked": blocked,
+            "pb9_runtime_reason": str(meta.get("pb9reason") or ("PB9 runtime unavailable; run Update PB9" if blocked else "")),
+        }
 
     def _build_master_status(self, coindata_ok: bool) -> dict[str, Any]:
         summary_row = self._build_master_overview_row()

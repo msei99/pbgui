@@ -1,4 +1,4 @@
-"""Persistent background collection of PBGui, PB7, and PB8 upstream heads."""
+"""Persistent background collection of PBGui and PB7/PB8/PB9 upstream heads."""
 
 from __future__ import annotations
 
@@ -135,6 +135,9 @@ class UpstreamReleaseCollector:
                 "master",
                 previous.get("pb8"),
                 now,
+            ),
+            "pb9": self._collect_repository(
+                "pb9", None, PASSIVBOT_UPSTREAM_URL, "v9", previous.get("pb9"), now,
             ),
         }
         return {

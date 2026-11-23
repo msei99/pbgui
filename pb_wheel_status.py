@@ -23,7 +23,7 @@ def wheel_installed(pbgdir: Path, product: str, repo: Path, python: Path) -> boo
         if receipt.is_symlink() or receipt.stat().st_size > 4096:
             return False
         data = json.loads(receipt.read_text(encoding="utf-8"))
-        if (data.get("format") != 1 or data.get("product") != product
+        if (not isinstance(data, dict) or data.get("format") != 1 or data.get("product") != product
                 or not re.fullmatch("[0-9a-f]{40}", data.get("commit", ""))
                 or not re.fullmatch("[0-9a-f]{64}", data.get("extension_sha256", ""))):
             return False
@@ -34,11 +34,16 @@ def wheel_installed(pbgdir: Path, product: str, repo: Path, python: Path) -> boo
             return False
         site = python.parent.parent / "lib/python3.12/site-packages"
         binaries = list((site/'passivbot_rust').glob("passivbot_rust*.so")) + list(site.glob("passivbot_rust*.so"))
-        if len(binaries) != 1 or binaries[0].is_symlink():
+        if not binaries or any(binary.is_symlink() for binary in binaries):
             return False
-        with binaries[0].open("rb") as handle:
-            return hashlib.file_digest(handle, "sha256").hexdigest() == data["extension_sha256"]
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError):
+        # Older installs can retain both flat and package-layout extensions.
+        # Every importable copy must match the same source-bound receipt.
+        for binary in binaries:
+            with binary.open("rb") as handle:
+                if hashlib.file_digest(handle, "sha256").hexdigest() != data["extension_sha256"]:
+                    return False
+        return True
+    except (OSError, ValueError, TypeError, KeyError, RecursionError, subprocess.SubprocessError):
         return False
 
 

@@ -967,6 +967,52 @@ class TestManualAuthorization:
         assert not any(path.startswith('/proc/1/ns/') for path in state.opens)
         assert not state.fds
 
+    def test_unrelated_nas_automount_preserves_complete_authorization(self, manual_view):
+        """A coherent unrelated autofs/NFS stack cannot hide local process evidence."""
+        state = manual_view
+        extra = ('3 1 0:3 / /mnt/nas rw - autofs systemd-1 rw\n'
+                 '4 3 0:4 / /mnt/nas rw - nfs server:/share rw\n')
+        for path in ('/proc/self/mountinfo', '/proc/1/mountinfo'):
+            state.data[path] += extra
+        with subject.manual_action(state.root, 'start') as proof:
+            subject._consume_authorization(state.root, 'start', proof)
+        assert not state.fds
+
+    def test_symlinked_checkout_cannot_hide_remote_mount(self, tmp_path):
+        """Resolve the checkout before selecting its longest matching mount."""
+        import pbcoindata_manager as manager
+        target = tmp_path / 'remote'
+        target.mkdir()
+        alias = tmp_path / 'alias'
+        alias.symlink_to(target, target_is_directory=True)
+        text = ('1 0 0:1 / / rw - ext4 local rw\n'
+                '2 1 0:2 / /proc rw - proc proc rw\n'
+                f'3 1 0:3 / {target} rw - nfs server:/share rw\n')
+        rows = manager._mountinfo(text, time.monotonic() + 5)
+        with pytest.raises(ValueError, match='shared with controllers'):
+            manager._mount_view(rows, alias)
+
+    @pytest.mark.parametrize('fault', ['checkout', 'ancestor', 'proc', 'run', 'config',
+                                     'unrelated-parent', 'non-autofs', 'triple'])
+    def test_nas_exception_does_not_hide_critical_or_ambiguous_mounts(self, manual_view, fault):
+        """Critical evidence paths and malformed stack identities remain fail-closed."""
+        state = manual_view
+        point = {'checkout': str(state.root), 'ancestor': str(state.root.parent),
+                 'proc': '/proc/42', 'run': '/run',
+                 'config': str(Path.home() / '.config')}.get(fault, '/mnt/nas')
+        lower = 'tmpfs' if fault == 'non-autofs' else 'autofs'
+        parent = 1 if fault == 'unrelated-parent' else 3
+        extra = (f'3 1 0:3 / {point} rw - {lower} systemd-1 rw\n'
+                 f'4 {parent} 0:4 / {point} rw - nfs server:/share rw\n')
+        if fault == 'triple':
+            extra += f'5 4 0:5 / {point} rw - nfs server:/other rw\n'
+        for path in ('/proc/self/mountinfo', '/proc/1/mountinfo'):
+            state.data[path] += extra
+        with pytest.raises(subject.ProcessStateError):
+            with subject.manual_action(state.root, 'start'):
+                pytest.fail('Ambiguous or protected mount must block')
+        assert not state.fds
+
     @pytest.mark.parametrize('fault', ['denied', 'directory', 'wrong-type', 'ioctl', 'mount-denied',
                                      'fake-procfs', 'fstatfs-denied', 'fd-mount', 'fresh-pid1', 'ns-change',
                                      'open-1', 'open-2', 'open-3', 'open-4'])

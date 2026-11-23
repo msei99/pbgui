@@ -2320,6 +2320,17 @@
         if (_restartInFlight || _restartConfirmPending) return;
         var blocked = restartBtn.getAttribute('data-restart-blocked') === '1';
         var blockReason = restartBtn.getAttribute('data-restart-block-reason') || '';
+        if (blocked) {
+          showNavConfirm({
+            title: 'Restart blocked',
+            message: 'PBGui services cannot restart while protected work is still running.',
+            detail: blockReason || 'Wait until the active VPS task finishes or is marked interrupted.',
+            confirmText: 'OK',
+            cancelText: '',
+            hideCancel: true
+          });
+          return;
+        }
         var restartServices = Array.isArray(_restartStatus.restart_services) ? _restartStatus.restart_services : [];
         var restartLabels = visibleRestartServices(_restartStatus, restartServices).map(function (item) {
           return String((item || {}).label || (item || {}).service || '').trim();
@@ -2328,7 +2339,6 @@
           ? 'Local services running outdated code: ' + restartLabels.join(', ') + '. The API server restarts last and the page reconnects automatically.'
           : 'The API server restarts and the page reconnects automatically.';
         restartDetail += vastRestartContext(_restartStatus, restartServices);
-        if (blocked) restartDetail += ' The restart will wait automatically until protected work finishes. ' + blockReason;
         _restartConfirmPending = true;
         showNavConfirm({
           title: 'Restart PBGui services',
@@ -2357,7 +2367,7 @@
             }
             return resp.json().catch(function () { return {}; });
           }).then(function(data) {
-            showRestartOverlay(origin2, data && Array.isArray(data.restart_services) ? data.restart_services : restartServices, (data && data.api_instance_id) || previousInstance, false, targetSerial);
+            showRestartOverlay(origin2, data && Array.isArray(data.restart_services) ? data.restart_services : [], (data && data.api_instance_id) || previousInstance, false, targetSerial);
           }).catch(function(err) {
             if (!err.restartRejected) {
               // A lost response may mean the API is already shutting down. Never resubmit.
@@ -2386,11 +2396,16 @@
 
     function startRestartStatusWatch() {
       stopRestartStatusWatch();
+      if (document.hidden || _restartInFlight) return;
       fetchRestartStatus(apiOrigin);
       _restartPollTimer = setInterval(function () { fetchRestartStatus(apiOrigin); }, 30000);
       setupRestartSSE(apiOrigin);
     }
     startRestartStatusWatch();
+    document.addEventListener('visibilitychange', function () {
+      if (document.hidden) stopRestartStatusWatch();
+      else startRestartStatusWatch();
+    });
     window.addEventListener('pagehide', stopRestartStatusWatch);
     window.addEventListener('pageshow', function (event) {
       if (event && event.persisted) startRestartStatusWatch();
@@ -2429,27 +2444,18 @@
     var apiBase = (origin || window.location.origin);
 
     function probe() {
+      if (ov.isConnected === false) return;
       attempts++;
       if (statusEl) statusEl.textContent = 'Reconnecting\u2026 (' + attempts + '/' + maxAttempts + ')';
-      fetch(apiBase + '/api/server-status', authOptions({ cache: 'no-store' }))
+      var controller = new AbortController();
+      var deadline = setTimeout(function () { controller.abort(); }, 5000);
+      fetch(apiBase + '/api/server-status', authOptions({ cache: 'no-store', signal: controller.signal }))
         .then(function (r) {
           if (!r.ok) throw new Error('status unavailable');
           return r.json();
         })
         .then(function (data) {
-          var request = data && data.restart_request;
-          if (request && request.state === 'waiting') {
-            // Protected work has no arbitrary reconnect timeout. The server
-            // owns the request, so browser reloads never submit it again.
-            attempts = 0;
-            if (statusEl) statusEl.textContent = 'Restart queued — waiting: ' + (request.reason || 'Protected work is finishing…');
-            setTimeout(probe, 1000);
-            return;
-          }
-          if (request && request.state === 'failed') {
-            _overlayFail('Restart failed: ' + (request.reason || 'Check service logs.'));
-            return;
-          }
+          if (ov.isConnected === false) return;
           if (!data || data.needs_restart || data.restart_inspection_error ||
               (!data.api_instance_id || data.api_instance_id === previousInstance)) {
             var newlyDiscovered = data && Array.isArray(data.restart_services)
@@ -2500,8 +2506,9 @@
           window.location.reload();
         })
         .catch(function () {
+          if (ov.isConnected === false) return;
           if (attempts < maxAttempts) setTimeout(probe, 2000); else _overlayFail();
-        });
+        }).finally(function () { clearTimeout(deadline); });
     }
 
     function _overlayFail(message) {
@@ -2539,17 +2546,12 @@
     updateAuthModeState(state && state.auth ? state.auth : {});
     var btn = document.getElementById('pbgui-restart-btn');
     if (!btn) return;
-    var request = state && state.restart_request;
-    if (!_restartInFlight && request && (request.state === 'waiting' || request.state === 'restarting')) {
-      _restartInFlight = true;
-      showRestartOverlay(_getAppBase(), state.restart_services || [], request.api_instance_id || state.api_instance_id, false, state.current_serial);
-    }
     if (_restartInFlight) {
       btn.style.display = 'flex';
       btn.disabled = true;
       btn.setAttribute('aria-disabled', 'true');
       btn.classList.add('disabled');
-      btn.innerHTML = '<span class="nav-restart-dot"></span>' + (request && request.state === 'waiting' ? 'Restart queued…' : 'Restarting...');
+      btn.innerHTML = '<span class="nav-restart-dot"></span>Restarting...';
       return;
     }
     var visible = !!(state && state.needs_restart);
@@ -2567,11 +2569,11 @@
     btn.setAttribute('data-restart-blocked', blocked ? '1' : '0');
     btn.setAttribute('data-restart-block-reason', reason);
     btn.disabled = false;
-    btn.setAttribute('aria-disabled', 'false');
-    btn.classList.toggle('disabled', false);
+    btn.setAttribute('aria-disabled', blocked ? 'true' : 'false');
+    btn.classList.toggle('disabled', blocked);
     btn.innerHTML = '<span class="nav-restart-dot"></span>Restart' + (serviceLabels.length ? ' (' + serviceLabels.length + ')' : '');
     btn.title = blocked
-      ? ('Restart automatically after protected work finishes: ' + (reason || 'Protected PBGui work is still running.'))
+      ? ('Restart blocked: ' + (reason || 'Protected PBGui work is still running.'))
       : ('Restart outdated PBGui services' + (serviceLabels.length ? ': ' + serviceLabels.join(', ') : ''));
   }
 
@@ -2604,12 +2606,13 @@
   }
 
   function setupRestartSSE(apiOrigin) {
-    if (!apiOrigin) return;
+    if (!apiOrigin || document.hidden || _restartInFlight) return;
     if (_restartEventSource) _restartEventSource.close();
     var url = apiOrigin + '/api/server-status/stream';
     var es = new EventSource(url, { withCredentials: true });
     _restartEventSource = es;
     es.onmessage = function (e) {
+      if (_restartEventSource !== es || document.hidden) return;
       try {
         var data = JSON.parse(e.data);
         updateRestartButtonState(data || {});
