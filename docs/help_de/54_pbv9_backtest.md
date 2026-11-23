@@ -120,3 +120,33 @@ Nur ein erfolgreiches, eindeutig zugeordnetes natives Ergebnis mit passendem Sna
 Browser-Neuladen stellt ungespeicherte Namen, Werte und offene Abschnitte über dieselbe geschützte Entwurfs-Speicherung wie Optimize wieder her. Native Revisionsprüfungen bleiben an die ursprüngliche Quelle gebunden. Benutzerdefinierte Credential-Felder werden nie im Browserspeicher abgelegt. Unveränderte Konfigurationen werden erneut aus ihrer aktuellen Quelle geladen.
 
 Der Umgang mit dem Beginn externer Quellen hängt vom installierten PB9-Build ab. Der lokale Source-Window-Testfix verwendet bei ausdrücklich gewähltem externen Ordner die erste verfügbare echte Kerze je Coin und Quelle, online und offline. Das begrenzt das ausgewählte Datenfenster und behauptet keinen Marktstart. Angeforderte Datumswerte bleiben dokumentiert; frühere Kurse werden nicht erfunden und Rohkerzen nicht kopiert. Interne Lücken und ein vollständiges Offline-Ende werden weiter geprüft. Ungepatchte PB9-Builds können einen späteren externen Datenbeginn weiterhin ablehnen. Nach Änderung des nativen Quell-Commits einen frischen Auftrag einreihen; alte Queue-Snapshots behalten ihre ursprüngliche Zuordnung.
+
+## Aktuelles PB9-Risikolayout
+
+PBGui benötigt das PB9-Risikolayout nach PR #2318. Ältere PB9-Entwicklungsconfigs
+werden als inkompatibel angezeigt; Bearbeiten, Speichern, Einreihen, Starten und
+Fortsetzen sind gesperrt. Lösche sie ausdrücklich und erstelle neue Configs aus
+dem aktuellen nativen Template. PBGui migriert, überschreibt oder löscht sie
+nicht automatisch. Bestehende Stop- und Löschsperren für aktivierte oder laufende
+Instanzen bleiben erhalten. Alte Ergebnischarts und Metriken bleiben lesbar; das
+Starten ihrer alten Konfiguration ist gesperrt.
+
+HSL und Unstuck liegen je Scope unter `bot.<scope>.risk`, Portfolio-HSL unter
+`bot.portfolio.risk.hsl`. Der gemeinsame Speicher für realisierte Verluste wird
+unter `bot.portfolio.risk.loss_realization.memory_ema_span_minutes` eingestellt.
+Sein Loss-Gate besitzt einen ausdrücklichen `enabled`-Schalter und einen separaten
+`max_realized_drawdown_fraction` in `[0, 1)`, der nur bei aktiviertem Gate nötig
+ist. Das alte `unstuck.close_fraction` entfällt. Die Einstellungen stehen über
+normale GUI-Felder mit nativer Parameterhilfe zur Verfügung.
+
+GPU-Ausführung benötigt eine von der installierten nativen PB9-Prüfung unterstützte
+Policy. In diesem Stand erfordern aktives Unstuck oder Loss-Gate CPU, auch bei
+Aktivierung über Szenarien oder Coin-Overrides. PBGui lehnt nicht unterstützte
+GPU-Anfragen vor Start oder Miete ab und deaktiviert keine Risikoeinstellungen
+stillschweigend. Ein Worker für einen anderen PB9-Quellstand kann den Job nicht
+ausführen.
+
+Der bestehende PB8-zu-PB9-Konverter verwendet den installierten offiziellen
+Konverter und muss dieses aktuelle Layout liefern. Er erzeugt einen ungespeicherten
+Entwurf und konvertiert keine bestehenden PB9-Entwicklungsconfigs. Aktualisiere die
+separate PB9-Installation, wenn der Editor ein zu altes natives Template meldet.

@@ -109,7 +109,7 @@ Während des Speicherns sind die Einstellungen gegen doppelte Anfragen gesperrt.
 
 Die Restart-Aktion in der Navigation zeigt direkt nach der Bestätigung den Fortschritt und verhindert doppelte Anfragen. PBGui verbindet sich automatisch neu und prüft vor dem Neuladen der aktuellen Seite, ob eine neue API-Instanz läuft. Bei verlorener Antwort wird der Status geprüft, ohne den Neustart automatisch erneut anzufordern.
 
-Restart nutzt wieder den bewährten direkten Ablauf: PBGui prüft geschützte Arbeit, plant die veralteten lokalen Dienste über systemd ein und bestätigt erst danach den Erfolg. Anschließend verbindet sich der Browser neu und prüft die Ersatz-API. Laufende geschützte Arbeit, einschließlich PB9-Prüfungen, liefert einen konkreten Grund statt eines ungeprüft vorgemerkten Neustarts. Es gibt keine zusätzliche Restart-Warteschlange. Unabhängige Bot-, Backtest- und Optimize-Prozesse behalten ihre eigenen Laufzeiten.
+Restart nutzt wieder den bewährten direkten Ablauf: PBGui prüft geschützte Arbeit, plant die veralteten lokalen Dienste über systemd ein und bestätigt erst danach den Erfolg. Anschließend verbindet sich der Browser neu und prüft die Ersatz-API. Während geschützte Arbeit wie eine PB9-Prüfung läuft, bleibt der Neustart vorgemerkt und zeigt den Wartegrund. Sobald die Arbeit endet, geht er automatisch weiter; erneutes Klicken ist nicht nötig. Die Wartezeit zählt nicht zum Wiederverbindungs-Timeout. Ein Browser-Reload stellt die Fortschrittsanzeige wieder her. Ohne geschützte Arbeit gibt es keine zusätzliche Wartepause. Unabhängige Bot-, Backtest- und Optimize-Prozesse behalten ihre eigenen Laufzeiten.
 
 Die PBCoinData-Prozessprüfung akzeptiert schlüssige NAS-Automounts außerhalb ihrer Nachweispfade. Mehrdeutige Überlagerungen geschützter Pfade führen weiterhin zu Unknown. Verdeckte Tabs geben ihren Status-Stream frei und verbinden ihn beim Anzeigen automatisch neu.
 
@@ -129,6 +129,14 @@ Beim API-Neustart dürfen bestehende Runtime-Lesezugriffe weiterlaufen; echte In
 
 Beide Restart-Einstiege verwenden dieselbe laufende API-Instanz. Beim Herunterfahren erhalten neue GET-Abfragen vorübergehend 503 mit Retry-After; der Browser verbindet sich automatisch neu.
 
+Sowohl Restart in der Navigation als auch Restart beim API Server erneuern einen
+veralteten lokalen VPSMonitor vor der API. Dafür wird seine Start-Serial geprüft,
+unabhängig von älteren RPC-Fähigkeiten. Ein erreichbarer älterer Monitor ohne
+Start-Serial wird über dieselbe Aktion einmal erneuert; ein aktueller Monitor
+läuft weiter. Dienste auf entfernten VPS und Trading-Bots werden nicht neu gestartet.
+
 Die Statusanzeige prüft die laufenden Operationen. Die Restart-Aktion prüft zusätzlich die gespeicherten Wiederherstellungs- und Deployment-Sperren, bevor sie den Neustart annimmt.
 
-Browser-Tabs teilen sich die passiven Restart-Statusprüfungen. Ändern sich Serial oder Laufzeitgründe für einen Neustart, wird der kurze Anzeigecache verworfen; die Restart-Aktion prüft ihre vollständigen Voraussetzungen weiterhin neu. Langsame Anzeigeprüfungen antworten vorübergehend mit einer Wiederholungsaufforderung, statt alle Tabs warten zu lassen. Die Abhängigkeiten für Pareto-Auswertungen und Exchange-WebSockets werden erst bei ihrer ersten Nutzung geladen.
+Browser-Tabs teilen sich die passiven Restart-Statusprüfungen. Abgeschlossene Prüfungen bleiben drei Sekunden ab ihrem Ende verfügbar, damit langsame Prüfungen nicht vor dem Lesen ihres Ergebnisses ablaufen. Ändern sich Serial oder Laufzeitgründe für einen Neustart, wird der Anzeigecache sofort verworfen; die Restart-Aktion prüft ihre vollständigen Voraussetzungen weiterhin neu. Langsame Anzeigeprüfungen antworten vorübergehend mit einer Wiederholungsaufforderung, statt alle Tabs warten zu lassen. Die Abhängigkeiten für Pareto-Auswertungen und Exchange-WebSockets werden erst bei ihrer ersten Nutzung geladen.
+
+Beim Start oder Neustart des VPSMonitor haben seine anfänglichen SSH-Verbindungen bis zu 60 Sekunden Zeit zur Wiederverbindung, bevor ein neuer Offline-Alarm entsteht. Das läuft im Hintergrund und verzögert den API-Neustart nicht; der Verbindungsstatus bleibt sichtbar. Die erste erfolgreiche Verbindung beendet diese Frist für den jeweiligen Host. Ein späterer Abbruch wird daher normal gemeldet. Authentifizierungsfehler werden sofort gemeldet. Ist ein Host nach der Frist weiterhin nicht erreichbar, entsteht der normale Alarm. Bereits aktive Alarme bleiben bis zur tatsächlichen Behebung bestehen; eine erfolgreiche Wiederverbindung ohne vorherigen Ausfallalarm erzeugt keine Entwarnung.

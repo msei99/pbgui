@@ -1,0 +1,33 @@
+{
+    "schema_version": 1,
+    "state": "unpublished_candidate",
+    "runtime": "pb8",
+    "upstream_repository": "https://github.com/enarjord/passivbot",
+    "base_revision": "15d6404f33bd5623d46a46e04ea694188ea7acea",
+    "runtime_base": "ghcr.io/msei99/pbgui-pb8-worker@sha256:3aa5c16b22a62983ec5dc46862c21c2d959856bf2362d4d9b39e3ded61f000cf",
+    "worker_image_tag": "pbgui-pb8-worker:15d6404-current-candidate",
+    "build_input_sha256": {
+        "pb8_current_worker.patch": "0b027e206ae28e9884b04038333386b45a34fdd436b92ce1a7cc7fb62dc3f5ec",
+        "pb8_current_Cargo.lock": "e7edfdcac15bef84a0fb6e2ae57c691874dffa0f2d0760a0a1fdba666e3a5b5f"
+    },
+    "worker_source_sha256": "860f7203df65af0ce06e0bdcc002a265d22a5e312b4fddb65e81f02f1a11e7c0",
+    "source_sha256": {
+        "passivbot-rust/src/backtest_hsl.rs": "8f5376f0f64ce62e3a77a7f8cc7290f1e2af66b946075df49e66b8f210c4afff",
+        "passivbot-rust/src/backtest_hsl_runtime.rs": "0a35e0ca0192ea005ad4b8d70bd35f69febe850baba32187cebb75f5ef453bcc",
+        "passivbot-rust/src/hsl_history.rs": "829b062a4c94cf250cd0cd9a63a24e12e7c32d1d45194ad728ce7283e7f74b35",
+        "passivbot-rust/src/backtest_hsl_cache.rs": "567684c5a5c6822f01ce2e5c9d3664c1e9a69afccf7e62698c2d1fb3ab2fa4ee",
+        "passivbot-rust/src/hsl_evaluator.rs": "110976ad024cce685ca8f571b40548a16d4befd0735bd9512c8db04109ee7d95",
+        "src/optimization/gpu/autotune.py": "fc7a54219f114c831f31796536da3dad0c80eb8b46173a529e4a2579454a29ea",
+        "src/optimization/gpu/mps_kernel.py": "80b934233da48ace107ae9a84fcf66eb62afbf7bad1e322b1e5b799699faee54",
+        "src/optimization/gpu/hsl_history_cache.py": "6627b815dbbaa1e67b216db76df1df4e5f326f2937bf6a74a30ad33c75d31d94",
+        "src/optimization/backends/gpu_backend.py": "93a3ef0430d6e8664a3fbd48a10044e674faea58627da996d9209fbc827aec81",
+        "passivbot-rust/src/backtest.rs": "cf278a452117bbb61b8cf3f5f8414d53a3d45482f19fd772a8d1e57e38ece455",
+        "pyproject.toml": "36be9d0ec957b425d0369a702a8f490f2215d941faa15535ac7115054a8ae091",
+        "passivbot-rust/Cargo.lock": "e7edfdcac15bef84a0fb6e2ae57c691874dffa0f2d0760a0a1fdba666e3a5b5f"
+    },
+    "overlays": [
+        "retained rolling CPU HSL history/prefix reuse, merged with official minute-prefix reuse",
+        "retained GPU HSL history cache and adaptive CUDA memory"
+    ],
+    "activation": "Unpublished candidate only. Active image/revision pins and existing rentals remain unchanged. GPU hardware acceptance not performed."
+}

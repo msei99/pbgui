@@ -2041,9 +2041,9 @@ class TestVpsManagerFrontendLogic:
         source = HTML_PATH.read_text(encoding="utf-8")
         sidebar_source = _extract_function(source, "renderSidebarActions")
 
-        assert 'deploySelectedVpsAction("vps-update-runtime", "Update Passivbot (PB7/PB8)")' in sidebar_source
-        assert 'deploySelectedVpsAction("vps-update-pbgui-runtime", "Update PBGui + Passivbot (PB7/PB8)")' in sidebar_source
-        assert "Updates PB7, PB8, or both according to what is installed on each selected VPS." in sidebar_source
+        assert 'deploySelectedVpsAction("vps-update-runtime", "Update Passivbot (PB7/PB8/PB9)")' in sidebar_source
+        assert 'deploySelectedVpsAction("vps-update-pbgui-runtime", "Update PBGui + Passivbot (PB7/PB8/PB9)")' in sidebar_source
+        assert "Updates PB7, PB8, or both according" not in sidebar_source
         assert 'deploySelectedVpsAction("vps-update-pb7", "Update PB7")' not in sidebar_source
 
     def test_vps_monitor_combines_pb7_and_pb8_runtime_rows(self) -> None:
@@ -2054,7 +2054,7 @@ class TestVpsManagerFrontendLogic:
 
         assert "const runtimeRows = pb7Rows.concat(pb8Rows)" in render_monitor
         assert "const runtimeFallback = pb7Fallback.concat(pb8Fallback)" in render_monitor
-        assert "No running PB7 or PB8 instances reported." in source
+        assert "No running PB7, PB8 or PB9 instances reported." in source
         assert "data-bot-key" in source
         assert "var rowKey = pbVersion + ':' + name" in live_update
 

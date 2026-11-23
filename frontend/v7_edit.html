@@ -1261,7 +1261,7 @@ graceful_stop: manage with graceful_stop semantics during cooldown">hsl_position
 
 <script src="/app/js/editor_shared.js?v=32"></script>
 <script src="/app/js/pbgui_dialogs.js?v=12"></script>
-<script src="/app/js/run_editor_adapter.js?v=18"></script>
+<script src="/app/js/run_editor_adapter.js?v=19"></script>
 <script src="/app/js/log_viewer_panel.js?v=50"></script>
 <script src="/app/js/coin_overrides_editor.js?v=28"></script>
 <script>
@@ -1916,7 +1916,11 @@ async function init() {
         if (!response.ok) {
           var hint = response.headers.get('X-PBGUI-Error-Codes') === 'runtime_not_detected'
             ? '. Open System > Welcome > Setup to check the PB9 runtime.' : '';
-          throw new Error((runEditorAdapter.metadataDriven ? runEditorAdapter.label : 'PB8') + ' editor metadata: HTTP ' + response.status + hint);
+          return response.json().catch(function() { return {}; }).then(function(payload) {
+            var detail = payload && typeof payload.detail === 'string' ? payload.detail.slice(0, 2000) : '';
+            throw new Error((runEditorAdapter.metadataDriven ? runEditorAdapter.label : 'PB8') +
+              ' editor metadata: ' + (detail || ('HTTP ' + response.status + hint)));
+          });
         }
         return response.json();
       });

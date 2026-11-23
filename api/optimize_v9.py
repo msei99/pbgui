@@ -22,6 +22,11 @@ SERVICE = 'OptimizeV9'
 class NativeOptimizeEngine(OptimizeEngine):
     """Change native schema/config hooks while sharing queue, results and controls."""
 
+    def _config_compatibility_error(self, config):
+        """Keep retired configs visible and deletable, without invoking native code."""
+        from pb9_config_helper import incompatible_pb9_layout, INCOMPATIBLE_PB9_MESSAGE
+        return INCOMPATIBLE_PB9_MESSAGE if incompatible_pb9_layout(config) else ''
+
     def __init__(self):
         """Construct native hooks after the shared engine's own isolated state."""
         super().__init__(OptimizeProfile('v9'))

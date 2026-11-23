@@ -41,7 +41,7 @@ async def main() -> None:
             raise
         heartbeat = ProcessCapabilityHeartbeat(root, SERVICE)
         heartbeat.__enter__()
-        daemon = VPSMonitorRPCDaemon()
+        daemon = VPSMonitorRPCDaemon(code_serial=heartbeat.code_serial)
         await daemon.start()
         await stop_event.wait()
     except Exception as exc:

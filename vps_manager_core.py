@@ -139,6 +139,7 @@ def _command_updates_pbgui(command: str | None) -> bool:
         "vps-update-pb",
         "vps-update-pbgui-pb8",
         "vps-update-pbgui-pb7-pb8",
+        "vps-update-pbgui-runtime",
         "vps-switch-pbgui-branch",
     }
 

@@ -192,3 +192,37 @@ def test_malformed_cache_entries_are_not_certified(monkeypatch, tmp_path, entry)
     ns = namespace(monkeypatch, {'key': entry})
     assert ns['cached_software_probe']('key', [source], lambda: 'fresh') == 'fresh'
     assert ns['_next_software_probes']['key'][2] == 'fresh'
+
+
+@pytest.mark.parametrize('layout,marker', [('legacy',False),('current',False),('unknown',False),('current',True)])
+def test_pb9_host_metadata_distinguishes_installed_from_compatible(tmp_path, monkeypatch, layout, marker):
+    """Identical v9 package/schema labels cannot make retired risk source look ready."""
+    import configparser
+    import pb_wheel_status
+    repo = tmp_path / 'pb9'; defaults = repo / 'src/config/bot_defaults.py'
+    defaults.parent.mkdir(parents=True)
+    if layout != 'unknown':
+        value = "{'hsl':{},'unstuck':{}}" if layout == 'legacy' else "{'risk':{'hsl':{},'unstuck':{}}}"
+        defaults.write_text('def get_common_bot_defaults():\n    return ' + value)
+    python = tmp_path / 'venv_pb9/bin/python'; python.parent.mkdir(parents=True)
+    python.write_text('inert interpreter'); python.with_name('passivbot').write_text('inert CLI')
+    root = tmp_path / 'pbgui'
+    if marker:
+        path = root / 'data/locks/pb9-runtime-invalid'; path.parent.mkdir(parents=True); path.touch()
+    cfg = configparser.ConfigParser(); cfg['main'] = {'pb9dir':str(repo),'pb9venv':str(python)}
+    monkeypatch.setattr(pb_wheel_status, 'wheel_installed', lambda *a: False)
+    script = monitor_agent._embedded_monitor_script('HOST_META_SCRIPT')
+    block = script.split('# Optional PB9 slot:',1)[1].split('\navailable = []',1)[0]
+    block = block[block.index('\npb9dir ='):]
+    facts = {}
+    exec(compile(block,'<synthetic-pb9-host-meta>','exec'), {
+        'cfg':cfg,'Path':Path,'PBGDIR':str(root),'result':facts,
+        'read_pb7_version':lambda path:'v9.0.0.dev0',
+        'read_pb7_config_schema':lambda path:'v9.0.0',
+        'git_value':lambda *a:'a'*40,'python_version':lambda path:'3.12.3'})
+    assert facts['pb9installed'] is True
+    assert facts['pb9layout'] == layout
+    assert facts['pb9ready'] is (layout == 'current' and not marker)
+    assert facts['pb9blocked'] is (layout == 'legacy' or marker)
+    if layout != 'current' or marker:
+        assert facts['pb9reason']

@@ -4381,6 +4381,8 @@
           pb7_allowed: st.pb7_action_allowed !== false,
           pb7_reason: String(st.pb7_action_reason || ''),
           pb9_installed: !!st.pb9_installed,
+          pb9_ready: !!st.pb9_runtime_ready,
+          pb9_layout: String(st.pb9_config_layout || 'unknown'),
           pb9_allowed: !!st.pb9_action_allowed,
           pb9_reason: String(st.pb9_action_reason || st.pb9_runtime_reason || ''),
           pb8_installed: !!st.pb8_installed,
@@ -4409,6 +4411,8 @@
           pb7_up: !!st.pb7_update_available,
           pb7_installed: !!st.pb7_installed,
           pb9_installed: !!st.pb9_installed,
+          pb9_ready: !!st.pb9_runtime_ready,
+          pb9_layout: String(st.pb9_config_layout || 'unknown'),
           pb9_allowed: !!st.pb9_action_allowed,
           pb9_reason: String(st.pb9_action_reason || st.pb9_runtime_reason || ''),
           pb8_installed: !!st.pb8_installed,
@@ -4787,9 +4791,11 @@
       const pbguiVer = String(summary.pbgui || '-');
       const pb7Ver = String(summary.pb7 || '-');
       const pb8Ver = String(summary.pb8 || '-');
+      const pb9Ver = String(summary.pb9 || '-');
       const pbguiBranch = String(summary.pbgui_branch || '-');
       const pb7Branch = String(summary.pb7_branch || '-');
       const pb8Branch = String(summary.pb8_branch || '-');
+      const pb9Branch = String(summary.pb9_branch || '-');
       const pbguiTone = getOverviewVersionTone(summary.pbgui_github, summary.pbgui);
       const pb7WheelRequired = !!summary.pb7_wheel_required;
       const pb8WheelRequired = !!summary.pb8_wheel_required;
@@ -4800,6 +4806,17 @@
       const pbguiSub = getVersionStatusSub(pbguiBranch, summary.pbgui_github, pbguiTone);
       const pb7Sub = pb7WheelRequired ? 'Wheel update required' : getVersionStatusSub(pb7Branch, summary.pb7_github, pb7Tone);
       const pb8Sub = pb8Blocked ? (pb8Reason || 'PB8 runtime unavailable; run Update PB8') : (pb8WheelRequired ? 'Wheel update required' : getVersionStatusSub(pb8Branch, summary.pb8_github, pb8Tone));
+      const pb9Installed = !!(status.pb9_installed || summary.pb9_installed);
+      const pb9Layout = String(status.pb9_config_layout || summary.pb9_config_layout || 'unknown');
+      const pb9Blocked = !!(status.pb9_runtime_blocked || summary.pb9_runtime_blocked || pb9Layout === 'legacy');
+      const pb9Reason = String(status.pb9_runtime_reason || summary.pb9_runtime_reason ||
+        (pb9Layout === 'legacy' ? 'Update PB9: the installed runtime uses the pre-PR #2318 risk layout.' : ''));
+      const pb9WheelRequired = !!summary.pb9_wheel_required;
+      const pb9Tone = pb9Blocked ? 'error' : (!pb9Installed || pb9Layout !== 'current' || pb9WheelRequired
+        ? 'warning' : getOverviewVersionTone(summary.pb9_github, summary.pb9));
+      const pb9Sub = pb9Blocked ? (pb9Reason || 'PB9 runtime unavailable; run Update PB9')
+        : !pb9Installed ? 'Not installed' : pb9Layout !== 'current' ? 'Installed · compatibility unknown'
+        : pb9WheelRequired ? 'Wheel update required' : getVersionStatusSub(pb9Branch, summary.pb9_github, pb9Tone);
       const tags = [];
       if (!isMaster) {
         tags.push(`<span class='tag ${hostConnected ? (telemetryStale ? 'warning' : 'ok') : 'error'}'>${esc(onlineText)}</span>`);
@@ -4840,6 +4857,7 @@
         pb8Tone,
         pb8Blocked,
         pb8Reason,
+        pb9Ver, pb9Branch, pb9Sub, pb9Tone, pb9Blocked, pb9Reason,
         tagsHtml: tags.join(''),
       };
     }
@@ -4883,6 +4901,11 @@
               <div class='system-metric-value'><span class='dot ${model.pb8Tone}' data-role='pb8-dot'></span><span data-role='pb8-ver'>${esc(model.pb8Ver)}</span></div>
               <div class='system-metric-sub' data-role='pb8-branch'>${esc(model.pb8Sub)}</div>
             </div>
+            <div class='system-metric${model.pb9Blocked ? ' runtime-error' : ''}' data-role='pb9-card' title='${escAttr(model.pb9Reason)}'>
+              <div class='system-metric-label' data-role='pb9-label'>PB9 ${model.pb9Tone !== 'ok' && model.pb9Ver !== '-' ? '⚠' : ''}</div>
+              <div class='system-metric-value'><span class='dot ${model.pb9Tone}' data-role='pb9-dot'></span><span data-role='pb9-ver'>${esc(model.pb9Ver)}</span></div>
+              <div class='system-metric-sub' data-role='pb9-branch'>${esc(model.pb9Sub)}</div>
+            </div>
           </div>
         </div>`;
     }
@@ -4921,8 +4944,13 @@
       const pb8Dot = header.querySelector('[data-role="pb8-dot"]');
       const pb8VerNode = header.querySelector('[data-role="pb8-ver"]');
       const pb8BranchNode = header.querySelector('[data-role="pb8-branch"]');
+      const pb9Card = header.querySelector('[data-role="pb9-card"]');
+      const pb9LabelNode = header.querySelector('[data-role="pb9-label"]');
+      const pb9Dot = header.querySelector('[data-role="pb9-dot"]');
+      const pb9VerNode = header.querySelector('[data-role="pb9-ver"]');
+      const pb9BranchNode = header.querySelector('[data-role="pb9-branch"]');
 
-      if (!onlineDot || !hostnameNode || !tagsNode || !bootTimeNode || !updatesCard || !updatesDot || !updatesCountNode || !rebootDot || !pbguiLabelNode || !pbguiDot || !pbguiVerNode || !pbguiBranchNode || !pb7LabelNode || !pb7Dot || !pb7VerNode || !pb7BranchNode || !pb8Card || !pb8LabelNode || !pb8Dot || !pb8VerNode || !pb8BranchNode) {
+      if (!onlineDot || !hostnameNode || !tagsNode || !bootTimeNode || !updatesCard || !updatesDot || !updatesCountNode || !rebootDot || !pbguiLabelNode || !pbguiDot || !pbguiVerNode || !pbguiBranchNode || !pb7LabelNode || !pb7Dot || !pb7VerNode || !pb7BranchNode || !pb8Card || !pb8LabelNode || !pb8Dot || !pb8VerNode || !pb8BranchNode || !pb9Card || !pb9LabelNode || !pb9Dot || !pb9VerNode || !pb9BranchNode) {
         container.innerHTML = renderSystemHeader(status, summary, isMaster, rtd);
         return;
       }
@@ -4955,6 +4983,12 @@
       setNodeClassNameIfChanged(pb8Dot, 'dot ' + model.pb8Tone);
       setNodeTextIfChanged(pb8VerNode, model.pb8Ver);
       setNodeTextIfChanged(pb8BranchNode, model.pb8Sub);
+      setNodeClassNameIfChanged(pb9Card, 'system-metric' + (model.pb9Blocked ? ' runtime-error' : ''));
+      pb9Card.title = model.pb9Reason;
+      setNodeTextIfChanged(pb9LabelNode, 'PB9 ' + (model.pb9Tone !== 'ok' && model.pb9Ver !== '-' ? '⚠' : ''));
+      setNodeClassNameIfChanged(pb9Dot, 'dot ' + model.pb9Tone);
+      setNodeTextIfChanged(pb9VerNode, model.pb9Ver);
+      setNodeTextIfChanged(pb9BranchNode, model.pb9Sub);
     }
 
     function renderMasterSummaryTags(status) {
@@ -11948,7 +11982,7 @@
           <button class='${masterPbguiBtnClass}' type='button' onclick='runMasterWithLog("master-update-pbgui", "Update PBGui")'>Update PBGui</button>
           <button class='${masterPb7BtnClass}' type='button' onclick='runMasterWithLog("master-update-pb7", "${masterPb7ButtonText}")'>${masterPb7ButtonText}</button>
           ${st.pb8_action_allowed ? `<button class='${masterPb8BtnClass}' type='button' title='${escAttr(masterPb8ButtonTitle)}' onclick='runMasterWithLog("master-update-pb8", "${masterPb8ButtonText}")'>${masterPb8ButtonText}</button>` : ''}
-          ${st.pb9_action_allowed ? `<button class='sb-btn ${st.pb9_installed ? 'ok' : 'install'}' type='button' title='${escAttr(st.pb9_runtime_reason || "Official PB9 v9 branch; separate source and environment")}' onclick='runMasterWithLog("master-update-pb9", "${st.pb9_installed ? "Update PB9" : "Install PB9"}")'>${st.pb9_installed ? 'Update PB9' : 'Install PB9'}</button>` : ''}
+          ${st.pb9_action_allowed ? `<button class='sb-btn ${st.pb9_installed ? (st.pb9_runtime_ready && st.pb9_config_layout === 'current' ? 'ok' : 'warning') : 'install'}' type='button' title='${escAttr(st.pb9_runtime_reason || "Official PB9 v9 branch; separate source and environment")}' onclick='runMasterWithLog("master-update-pb9", "${st.pb9_installed ? "Update PB9" : "Install PB9"}")'>${st.pb9_installed ? 'Update PB9' : 'Install PB9'}</button>` : ''}
           ${masterHasBothRuntimes ? `<button class='${masterPbguiPb8BtnClass}' type='button' onclick='runMasterWithLog("master-update-pbgui-pb8", "Update PBGui and PB8")'>Update PBGui and PB8</button>` : ''}
           <div class='sb-field'>
             <label class='sb-toggle'><input type='checkbox' ${store.master.updateReboot ? 'checked' : ''} ${linuxUpdateSupported ? '' : 'disabled'} onchange="setMasterBool('updateReboot', this.checked)"> Reboot after Linux update</label>
@@ -12024,7 +12058,7 @@
           <button class='${pb7BtnClass}' type='button' title='${escAttr(st.pb7_action_reason || '')}' ${pb7ActionAllowed ? '' : 'disabled'} data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb7' data-command-text='${pb7ButtonText}'>${pb7ButtonText}</button>
           ${!pb7ActionAllowed && st.pb7_action_reason ? `<div class='notice warning'>${esc(st.pb7_action_reason)}</div>` : ''}
           ${st.pb8_action_allowed ? `<button class='${pb8BtnClass}' type='button' title='${escAttr(pb8ButtonTitle)}' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb8' data-command-text='${pb8ButtonText}'>${pb8ButtonText}</button>` : ''}
-          <button class='sb-btn ${st.pb9_installed ? 'ok' : 'install'}' type='button' title='${escAttr(st.pb9_action_reason || st.pb9_runtime_reason || "Official PB9 v9 branch; separate source and environment")}' ${st.pb9_action_allowed ? '' : 'disabled'} data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb9' data-command-text='${st.pb9_installed ? "Update PB9" : "Install PB9"}'>${st.pb9_installed ? 'Update PB9' : 'Install PB9'}</button>
+          <button class='sb-btn ${st.pb9_installed ? (st.pb9_runtime_ready && st.pb9_config_layout === 'current' ? 'ok' : 'warning') : 'install'}' type='button' title='${escAttr(st.pb9_action_reason || st.pb9_runtime_reason || "Official PB9 v9 branch; separate source and environment")}' ${st.pb9_action_allowed ? '' : 'disabled'} data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pb9' data-command-text='${st.pb9_installed ? "Update PB9" : "Install PB9"}'>${st.pb9_installed ? 'Update PB9' : 'Install PB9'}</button>
           ${!st.pb8_action_allowed && st.pb8_action_reason ? `<div class='notice warning'>${esc(st.pb8_action_reason)}</div>` : ''}
           <button class='${bothBtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='${combinedCommand}' data-command-text='${combinedText}'>${combinedText}</button>
           ${hasBothRuntimes ? `<button class='${pbguiPb8BtnClass}' type='button' data-vps-action='run-command' data-host='${escAttr(selectedHost)}' data-command='vps-update-pbgui-pb8' data-command-text='Update PBGui and PB8'>Update PBGui and PB8</button>` : ''}
@@ -12079,8 +12113,8 @@
           </div>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update", "Update Linux")'>Update Linux</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui", "Update PBGui")'>Update PBGui</button>
-          <button class='sb-btn ok' type='button' title='Updates PB7, PB8, or both according to what is installed on each selected VPS.' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-runtime", "Update Passivbot (PB7/PB8)")'>Update Passivbot (PB7/PB8)</button>
-          <button class='sb-btn ok' type='button' title='Updates PBGui plus PB7, PB8, or both according to what is installed on each selected VPS.' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui-runtime", "Update PBGui + Passivbot (PB7/PB8)")'>Update PBGui + Passivbot (PB7/PB8)</button>
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-runtime", "Update Passivbot (PB7/PB8/PB9)")'>Update Passivbot (PB7/PB8/PB9)</button>
+          <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-update-pbgui-runtime", "Update PBGui + Passivbot (PB7/PB8/PB9)")'>Update PBGui + Passivbot (PB7/PB8/PB9)</button>
           <button class='sb-btn ok' type='button' ${disabledAttr} onclick='deploySelectedVpsAction("vps-cleanup", "Cleanup VPS")'>Cleanup VPS</button>`;
       } else {
         html = '';
@@ -14356,7 +14390,7 @@
 
     function renderRunningPb7Fallback(items) {
       if (!Array.isArray(items) || !items.length) {
-        return `<div class='empty-state'>No running PB7 or PB8 instances reported.</div>`;
+        return `<div class='empty-state'>No running PB7, PB8 or PB9 instances reported.</div>`;
       }
       return `
         <div class='notice warning'>Detailed live metrics are unavailable for the instances below; process and Cluster Sync telemetry still confirm them.</div>

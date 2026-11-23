@@ -287,8 +287,8 @@ def test_request_timeout_keeps_one_worker_owned_until_shutdown():
     asyncio.run(scenario())
 
 
-def test_cache_age_starts_when_inspection_begins():
-    """A long scan cannot extend old display data by another full TTL afterward."""
+def test_slow_inspection_retains_a_completed_snapshot_until_expiry():
+    """Slow scans remain consumable; serial changes still invalidate them immediately."""
     async def scenario():
         clock = [0.0]
         calls = []
@@ -299,11 +299,46 @@ def test_cache_age_starts_when_inspection_begins():
             clock[0] += 1
             return {}
 
-        reader = RestartStatusReader(inspect, lambda: 1, clock=lambda: clock[0])
+        version = [1]
+        reader = RestartStatusReader(inspect, lambda: version[0], clock=lambda: clock[0])
         await reader.read()
+        await reader.read()
+        assert len(calls) == 1
+        clock[0] += 0.3
         await reader.read()
         assert len(calls) == 2
+        version[0] = 2
+        await reader.read()
+        assert len(calls) == 3
         await reader.close()
+    asyncio.run(scenario())
+
+
+def test_timed_out_viewer_reuses_completed_scan_on_next_reconnect_probe():
+    """A two-second browser retry can consume a scan that outlived its first caller."""
+    async def scenario():
+        clock, calls = [0.0], []
+        release = threading.Event()
+
+        def inspect():
+            """Model ten seconds of local inspection without real runtime reads."""
+            calls.append(1)
+            assert release.wait(2)
+            clock[0] += 10
+            return {'api_instance_id': 'replacement', 'needs_restart': False}
+
+        reader = RestartStatusReader(inspect, lambda: 1, ttl=3, timeout=.01, clock=lambda: clock[0])
+        try:
+            with pytest.raises(RestartStatusUnavailable, match='timed out'):
+                await reader.read()
+            release.set()
+            await reader.task
+            clock[0] += 2
+            assert (await reader.read())['api_instance_id'] == 'replacement'
+            assert len(calls) == 1
+        finally:
+            release.set()
+            await reader.close()
     asyncio.run(scenario())
 
 

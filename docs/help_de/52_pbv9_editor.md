@@ -35,3 +35,33 @@ Runtime-Pfade mit `%` werden vom INI-Slot-Schreiber derzeit nicht unterstützt u
 Anfrage und Dokument haben getrennte Ein-MiB-Grenzen. Die Dokumentgrenze zählt ASCII-escaped JSON; der native Transport enthält zusätzliche Runtime-Daten. Kompakte oder nicht-ASCII-Anfragen können daher schon unter einem MiB Übertragungsgröße abgelehnt werden. JSON ist auf 64 Verschachtelungsebenen, Dateinamen auf 255 UTF-8-Bytes begrenzt. Unterstützt werden nur Inline-Konfigurationen; dateibasierte Coin-Listen/Overrides und Symbol-Mapping-abhängige Quellen werden abgelehnt. Der Bibliotheksscan ist auf 1.000 Verzeichniseinträge begrenzt.
 
 Die native Prozessverwaltung benötigt derzeit Linux. Stop/Shutdown bricht laufende native Prüfungen ab; eine bereits atomar veröffentlichte Datei bleibt gespeichert. Revisionssperren koordinieren PBGui-Schreiber; unabhängige Dateieditoren desselben Benutzers nehmen an diesem Sperrprotokoll nicht teil. Für native Tests ist eine echte v9-/Rust-Installation erforderlich; Offline-Browsertests nutzen isolierte Fixtures.
+
+## Aktuelles PB9-Risikolayout
+
+PBGui benötigt das PB9-Risikolayout nach PR #2318. Ältere PB9-Entwicklungsconfigs
+werden als inkompatibel angezeigt; Bearbeiten, Speichern, Einreihen, Starten und
+Fortsetzen sind gesperrt. Lösche sie ausdrücklich und erstelle neue Configs aus
+dem aktuellen nativen Template. PBGui migriert, überschreibt oder löscht sie
+nicht automatisch. Bestehende Stop- und Löschsperren für aktivierte oder laufende
+Instanzen bleiben erhalten. Alte Ergebnischarts und Metriken bleiben lesbar; das
+Starten ihrer alten Konfiguration ist gesperrt.
+
+HSL und Unstuck liegen je Scope unter `bot.<scope>.risk`, Portfolio-HSL unter
+`bot.portfolio.risk.hsl`. Der gemeinsame Speicher für realisierte Verluste wird
+unter `bot.portfolio.risk.loss_realization.memory_ema_span_minutes` eingestellt.
+Sein Loss-Gate besitzt einen ausdrücklichen `enabled`-Schalter und einen separaten
+`max_realized_drawdown_fraction` in `[0, 1)`, der nur bei aktiviertem Gate nötig
+ist. Das alte `unstuck.close_fraction` entfällt. Die Einstellungen stehen über
+normale GUI-Felder mit nativer Parameterhilfe zur Verfügung.
+
+GPU-Ausführung benötigt eine von der installierten nativen PB9-Prüfung unterstützte
+Policy. In diesem Stand erfordern aktives Unstuck oder Loss-Gate CPU, auch bei
+Aktivierung über Szenarien oder Coin-Overrides. PBGui lehnt nicht unterstützte
+GPU-Anfragen vor Start oder Miete ab und deaktiviert keine Risikoeinstellungen
+stillschweigend. Ein Worker für einen anderen PB9-Quellstand kann den Job nicht
+ausführen.
+
+Der bestehende PB8-zu-PB9-Konverter verwendet den installierten offiziellen
+Konverter und muss dieses aktuelle Layout liefern. Er erzeugt einen ungespeicherten
+Entwurf und konvertiert keine bestehenden PB9-Entwicklungsconfigs. Aktualisiere die
+separate PB9-Installation, wenn der Editor ein zu altes natives Template meldet.

@@ -286,3 +286,88 @@ const flush=()=>new Promise(r=>setImmediate(r));
 '''
     result = run_javascript(['-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
     assert result.returncode == 0, result.stderr
+
+
+def test_protected_work_wait_does_not_expire_or_resubmit_restart():
+    """A long native inspection consumes no reconnect budget and never sends another POST."""
+    source = Path('frontend/pbgui_nav.js').read_text()
+    start = source.index('  function showRestartOverlay(')
+    end = source.index('\n  }', start) + 4
+    code = r'''
+const assert=browserAssert;
+let timers=[],reloads=0,requests=0;
+const statusNode={};
+const node=()=>({style:{},remove(){},appendChild(){},addEventListener(){}});
+const document={getElementById:id=>id==='pbgui-restart-status'?statusNode:null,createElement:node,body:{appendChild(){}}};
+const window={location:{origin:'http://test',reload(){reloads++}}};
+const authOptions=x=>x;
+const setTimeout=fn=>{timers.push(fn);return fn};
+const clearTimeout=fn=>{const index=timers.indexOf(fn);if(index>=0)timers.splice(index,1)};
+const AbortController=class{constructor(){this.signal={}}abort(){}};
+let status={needs_restart:true,api_instance_id:'old',restart_request:{state:'waiting',reason:'PB9 inspection in progress'}};
+const fetch=async(_url,options)=>{assert.notEqual(options.method,'POST');requests++;return {ok:true,json:async()=>status}};
+const flush=()=>new Promise(r=>setImmediate(r));
+(async()=>{
+ showRestartOverlay('http://test',[],'old');
+ for(let i=0;i<125;i++){assert.equal(timers.length,1);timers.shift()();await flush();}
+ assert.equal(reloads,0);assert.equal(requests,125);
+ assert.match(statusNode.textContent,/queued.*PB9 inspection.*automatically/);
+ status={needs_restart:false,api_instance_id:'new'};
+ timers.shift()();await flush();assert.equal(reloads,1);
+})();
+'''
+    result = run_javascript(['-e', source[start:end] + code], capture_output=True, text=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+
+
+def test_busy_restart_button_queues_and_browser_reload_restores_progress():
+    """Click the actual shared nav control; a busy inspection never needs a second click."""
+    import json
+    from browser_driver import sync_browser
+    source = Path('frontend/pbgui_nav.js').read_text()
+    payload = {'needs_restart': True, 'api_restart_required': True, 'api_instance_id': 'old',
+               'restart_blocked': True, 'restart_block_reason': 'PB9 inspection in progress',
+               'restart_services': [{'service': 'PBAPIServer', 'label': 'PBGui API Server'}]}
+    posts = []
+    with sync_browser() as driver:
+        browser = driver.chromium.launch(headless=True)
+        page = browser.new_page()
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+
+        def serve(route):
+            """Intercept every request, including restart, without contacting any live API."""
+            url = route.request.url
+            if url.endswith('/nav.js'):
+                route.fulfill(body=source, content_type='text/javascript')
+            elif url.endswith('/api/server-restart'):
+                posts.append(url)
+                payload['restart_request'] = {'state': 'waiting', 'reason': 'PB9 inspection in progress'}
+                route.fulfill(json={'ok': True, 'api_instance_id': 'old', 'restart_request': payload['restart_request']})
+            elif url.endswith('/api/server-status/stream'):
+                route.fulfill(body='data: ' + json.dumps(payload) + '\n\n', content_type='text/event-stream')
+            elif url.endswith('/api/server-status'):
+                route.fulfill(json=payload)
+            elif '/api/' in url and '/edit_page' not in url:
+                route.fulfill(json={})
+            else:
+                route.fulfill(body='''<nav id="topnav"></nav><script>
+                    window.PBGUI_NAV_CONFIG={authenticated:true,current:'v9_run'};
+                    </script><script src="/nav.js"></script>''', content_type='text/html')
+
+        page.route('**/*', serve)
+        destination = 'http://pbgui.test/api/v9/edit_page?name=fixture#editor'
+        page.goto(destination)
+        button = page.locator('#pbgui-restart-btn')
+        button.wait_for(state='visible', timeout=2000)
+        assert button.get_attribute('aria-disabled') == 'false'
+        button.click()
+        page.locator('#pbgui-confirm-accept').click()
+        page.wait_for_function("document.getElementById('pbgui-restart-status')?.textContent.includes('PB9 inspection')", timeout=8000)
+        assert len(posts) == 1
+        page.reload()
+        page.wait_for_function("document.getElementById('pbgui-restart-status')?.textContent.includes('PB9 inspection')", timeout=8000)
+        assert len(posts) == 1
+        assert page.url == destination
+        assert not errors
+        browser.close()

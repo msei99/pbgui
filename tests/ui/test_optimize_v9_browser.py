@@ -20,7 +20,7 @@ def native_page(tmp_path, request):
     docs = tmp_path/'docs'
     docs.mkdir()
     (docs/'configuration.md').write_text('## Shared Bot Policy\n\n- **bot.portfolio.hedge_mode**: Original hedge policy.\n'
-        '## Bot Settings\n\nLocal HSL settings inherit from `bot.global.hsl`, with optional directional pins.\n')
+        '## Bot Settings\n\nLocal HSL settings inherit from `bot.global.risk.hsl`, with optional directional pins.\n')
     populate_pb9_field_help(tmp_path, metadata['fields'])
     config = copy.deepcopy(metadata['template'])
     config['bot']['global']['universe']['approved_coins'] = ['HYPE']
@@ -309,7 +309,7 @@ def test_native_editor_navigation_restore_and_bounds(native_page):
     page.wait_for_function("document.getElementById('opted-starting-balance')?.value==='1000'")
     shared = page.locator('[data-native-bound-section="global"]')
     portfolio = page.locator('[data-native-bound-section="portfolio"]')
-    assert 'Global bounds (49)' in shared.locator('summary').inner_text()
+    assert 'Global bounds (48)' in shared.locator('summary').inner_text()
     assert 'Portfolio bounds (1)' in portfolio.locator('summary').inner_text()
     assert page.get_by_text('Long bound overrides (0)',exact=True).is_visible()
     assert page.get_by_text('Short bound overrides (0)',exact=True).is_visible()
@@ -421,9 +421,9 @@ def test_native_policy_and_gpu_fields_update_the_authoritative_json(native_page)
     page.locator('#btn-new-config').click()
     page.wait_for_function("document.getElementById('opted-starting-balance')?.value==='1000'")
     _open_native_policy(page)
-    page.locator('#opt9-policy-bot__global__hsl__enabled').check()
-    assert page.evaluate('collectEditorConfig().config.bot.global.hsl.enabled') is True
-    assert page.evaluate("JSON.parse(document.getElementById('opted-raw-json').value).bot.global.hsl.enabled") is True
+    page.locator('#opt9-policy-bot__global__risk__hsl__enabled').check()
+    assert page.evaluate('collectEditorConfig().config.bot.global.risk.hsl.enabled') is True
+    assert page.evaluate("JSON.parse(document.getElementById('opted-raw-json').value).bot.global.risk.hsl.enabled") is True
     assert page.evaluate('collectEditorConfig().config.bot.short')==source['bot']['short']
     page.locator('#opted-opt-backend').select_option('gpu')
     field=page.locator('#opt9-field-optimize__gpu__checkpoint_interval_seconds')
@@ -438,9 +438,9 @@ def test_native_strategy_change_and_scenario_recipe_keep_native_metric_names(nat
     page.locator('#btn-new-config').click()
     page.wait_for_function("document.getElementById('opted-starting-balance')?.value==='1000'")
     _open_native_policy(page)
-    page.locator('#opt9-policy-bot__global__hsl__enabled').check()
+    page.locator('#opt9-policy-bot__global__risk__hsl__enabled').check()
     page.locator('#opted-strategy-kind').select_option('ema_anchor')
-    assert page.locator('#opt9-policy-bot__global__hsl__enabled').is_checked()
+    assert page.locator('#opt9-policy-bot__global__risk__hsl__enabled').is_checked()
     assert page.locator('#opted-runtime-overrides-panel .bounds-side-card').count()==4
     page.evaluate("applyOptimizeSweepPreset({template:'all',contract_version:1})")
     config=page.evaluate('collectEditorConfig().config')
@@ -520,19 +520,19 @@ def test_native_can_add_portfolio_and_unseeded_side_bounds(native_page):
     portfolio = page.locator('[data-native-bound-section="portfolio"]')
     portfolio.locator('summary').click()
     portfolio.get_by_role('combobox', name='Portfolio bound parameter').select_option(
-        'portfolio.loss_gate.memory_ema_span_minutes'
+        'portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction'
     )
     portfolio.get_by_role('button', name='Add Portfolio bound').click()
-    portfolio.get_by_role('button', name='Remove portfolio.loss_gate.memory_ema_span_minutes').wait_for()
-    assert page.evaluate('collectEditorConfig().config.optimize.bounds.portfolio.loss_gate.memory_ema_span_minutes')
-    assert page.evaluate('collectEditorConfig().config.optimize.bounds.portfolio.unstuck') == source['optimize']['bounds']['portfolio']['unstuck']
+    portfolio.get_by_role('button', name='Remove portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction').wait_for()
+    assert page.evaluate('collectEditorConfig().config.optimize.bounds.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction')
+    assert page.evaluate('collectEditorConfig().config.optimize.bounds.portfolio.risk.loss_realization.memory_ema_span_minutes') == source['optimize']['bounds']['portfolio']['risk']['loss_realization']['memory_ema_span_minutes']
     side_picker = page.get_by_role('combobox', name='Short bound parameter')
     side_picker.select_option('short.entry_cooldown.max_duration_minutes')
     page.get_by_role('button', name='Add Short bound override').click()
     assert page.evaluate('collectEditorConfig().config.optimize.bounds.short.entry_cooldown.max_duration_minutes') == [360, 360]
-    assert portfolio.locator('option[value^="portfolio.hsl."]').count() == 0
+    assert portfolio.locator('option[value^="portfolio.risk.hsl."]').count() == 0
     page.locator('#opted-hsl-signal-mode').select_option('portfolio')
-    assert portfolio.locator('option[value^="portfolio.hsl."]').count() == 4
+    assert portfolio.locator('option[value^="portfolio.risk.hsl."]').count() == 4
     assert not errors
 
 
@@ -855,13 +855,13 @@ def test_side_json_policy_boolean_edit_is_not_reverted_by_policy_panel(native_pa
     """A Side JSON boolean edit survives repeated collection and reaches the panel."""
     page, source, errors, calls, saved = native_page
     _open_new_native_draft(page)
-    _edit_side_json(page, 'long', lambda value: value['hsl'].update(enabled=True))
-    page.wait_for_function("document.getElementById('opt9-policy-bot__long__hsl__enabled')?.checked===true")
+    _edit_side_json(page, 'long', lambda value: value['risk']['hsl'].update(enabled=True))
+    page.wait_for_function("document.getElementById('opt9-policy-bot__long__risk__hsl__enabled')?.checked===true")
     for _ in range(3):
         result = page.evaluate('collectEditorConfig().config')
-        assert result['bot']['long']['hsl']['enabled'] is True
-        assert result['bot']['global']['hsl']['enabled'] is False
-    assert page.evaluate("JSON.parse(document.getElementById('opted-raw-json').value).bot.long.hsl.enabled") is True
+        assert result['bot']['long']['risk']['hsl']['enabled'] is True
+        assert result['bot']['global']['risk']['hsl']['enabled'] is False
+    assert page.evaluate("JSON.parse(document.getElementById('opted-raw-json').value).bot.long.risk.hsl.enabled") is True
     assert not errors
 
 
@@ -870,14 +870,14 @@ def test_policy_panel_edit_updates_side_json_and_later_side_edit_wins(native_pag
     page, source, errors, calls, saved = native_page
     _open_new_native_draft(page)
     _open_native_policy(page)
-    page.locator('#opt9-policy-bot__global__hsl__enabled').check()
-    page.wait_for_function("JSON.parse(document.getElementById('opted-bot-long').value).hsl.enabled===true")
-    _edit_side_json(page, 'long', lambda value: value['hsl'].update(enabled=False))
-    page.wait_for_function("document.getElementById('opt9-policy-bot__long__hsl__enabled')?.checked===false")
+    page.locator('#opt9-policy-bot__global__risk__hsl__enabled').check()
+    page.wait_for_function("JSON.parse(document.getElementById('opted-bot-long').value).risk.hsl.enabled===true")
+    _edit_side_json(page, 'long', lambda value: value['risk']['hsl'].update(enabled=False))
+    page.wait_for_function("document.getElementById('opt9-policy-bot__long__risk__hsl__enabled')?.checked===false")
     result = page.evaluate('collectEditorConfig().config')
-    assert result['bot']['global']['hsl']['enabled'] is True
-    assert result['bot']['long']['hsl']['enabled'] is False
-    assert page.locator('#opt9-policy-bot__global__hsl__enabled').is_checked()
+    assert result['bot']['global']['risk']['hsl']['enabled'] is True
+    assert result['bot']['long']['risk']['hsl']['enabled'] is False
+    assert page.locator('#opt9-policy-bot__global__risk__hsl__enabled').is_checked()
     assert not errors
 
 
@@ -889,9 +889,9 @@ def test_hsl_mode_change_keeps_native_policy_fields(native_page):
     page.locator('#opted-hsl-signal-mode').select_option('portfolio')
     assert page.locator('#opt9-policy-bot__portfolio__hedge_mode').count() == 1
     assert 'No runtime overrides' not in page.locator('#opted-runtime-overrides-panel').inner_text()
-    page.locator('#opt9-policy-bot__global__hsl__enabled').check()
-    assert page.evaluate('collectEditorConfig().config.bot.portfolio.hsl.scope') == 'portfolio'
-    assert page.evaluate('collectEditorConfig().config.bot.global.hsl.enabled') is True
+    page.locator('#opt9-policy-bot__global__risk__hsl__enabled').check()
+    assert page.evaluate('collectEditorConfig().config.bot.portfolio.risk.hsl.scope') == 'portfolio'
+    assert page.evaluate('collectEditorConfig().config.bot.global.risk.hsl.enabled') is True
     page.evaluate("setOptimizeBoundsData(state.optimizeBounds.map(entry=>[entry.key,[entry.low,entry.high]]).reduce((a,[k,v])=>(a[k]=v,a),{}), state.optimizeFixedParams, {})")
     assert page.locator('#opt9-policy-bot__portfolio__hedge_mode').count() == 1
     assert not errors
@@ -1104,4 +1104,16 @@ def test_score_hysteresis_margin_is_a_regular_policy_field(native_page):
     assert page.evaluate('collectEditorConfig().config.bot.global.forager.score_hysteresis_margin') == 0.05
     assert page.locator('#opt9-policy-bot__portfolio__warmup__max_minutes').count() == 1
     assert page.locator('#opt9-policy-bot__global__risk__max_positions').count() == 0
+    assert not errors
+
+
+def test_runtime_update_link_targets_local_master_and_preserves_mount(native_page):
+    """The runtime warning opens the existing local Update PB9 controls, never Run."""
+    page, source, errors, calls, saved = native_page
+    link = page.locator('#pb8-runtime-warning a')
+    assert link.text_content() == 'Update PB9'
+    assert link.get_attribute('href') == '/api/vps-manager/main_page#master'
+    page.evaluate("BASE_PREFIX='/mounted'; optimizeEditorAdapter.configureUi();")
+    assert link.get_attribute('href') == '/mounted/api/vps-manager/main_page#master'
+    assert not saved
     assert not errors

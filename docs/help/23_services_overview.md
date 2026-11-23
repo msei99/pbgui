@@ -109,7 +109,7 @@ Settings saves are locked while pending. Validation errors identify the affected
 
 The navigation Restart action shows progress immediately after confirmation and ignores duplicate clicks. PBGui reconnects automatically and verifies that a new API instance is running before reloading the current page. A lost restart response is checked without automatically submitting another restart.
 
-Restart uses the established direct workflow: PBGui checks protected work, schedules the outdated local services through systemd, and confirms success only after scheduling. The browser then reconnects and verifies the replacement API. Active protected work, including PB9 inspections, returns a concrete reason instead of queuing an unverified restart. There is no deferred restart queue. Detached bot, backtest and optimizer processes remain independently owned.
+Restart uses the established direct workflow: PBGui checks protected work, schedules the outdated local services through systemd, and confirms success only after scheduling. The browser then reconnects and verifies the replacement API. While protected work such as a PB9 inspection is running, the request stays queued and displays its reason. It continues automatically as soon as the work finishes; do not click Restart again. Waiting does not consume the reconnect timeout. Browser reload restores the pending restart progress. With no protected work there is no added waiting interval. Detached bot, backtest and optimizer processes remain independently owned.
 
 PBCoinData ownership verification accepts coherent NAS automounts unrelated to its evidence paths. Ambiguous mounts over protected paths still report Unknown. Hidden tabs release their navigation status stream and reconnect automatically when shown.
 
@@ -129,6 +129,14 @@ API restart uses a shared source-read barrier: background config reads can conti
 
 Both restart entry points use the live API instance. While an accepted restart drains connections, new GET polls receive a temporary 503 with Retry-After; the browser reconnects automatically.
 
+Both the navigation Restart action and the API Server Restart action include an
+outdated local VPSMonitor before restarting the API. Its startup serial is
+checked independently of older RPC capabilities. A reachable legacy monitor
+without a startup serial is upgraded once through the same action; a current
+monitor is left running. Remote VPS services and trading bots are not restarted.
+
 The status display samples current operation owners; the restart action additionally checks persisted recovery and deployment gates before accepting the handoff.
 
-Browser tabs share passive restart-status checks. The short display cache is invalidated when the code serial or runtime restart reasons change; restart actions still run their complete checks afresh. Slow display checks return a temporary retry response instead of holding every tab open. Pareto analysis and exchange WebSocket dependencies load on first use rather than during the API import.
+Browser tabs share passive restart-status checks. Completed inspections remain available for three seconds, measured from completion so a slow scan cannot expire before its result is consumed. The display cache is invalidated when the code serial or runtime restart reasons change; restart actions still run their complete checks afresh. Slow display checks return a temporary retry response instead of holding every tab open. Pareto analysis and exchange WebSocket dependencies load on first use rather than during the API import.
+
+When VPSMonitor starts or restarts, its initial SSH connections have up to 60 seconds to re-establish before a new offline alarm is created. This runs in the background and does not delay API restart; connection status remains visible. A first successful connection ends this allowance for that host, so a later disconnect is reported normally. Authentication failures are reported immediately. A host still unreachable after the interval generates the normal alarm. Existing active alerts stay active until actual recovery; reconnecting successfully without a preceding outage does not send a recovery notification.

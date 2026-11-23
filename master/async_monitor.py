@@ -132,6 +132,7 @@ HOST_META_INTERVAL = 10     # seconds
 PACKAGE_STATUS_INTERVAL = 3600  # seconds
 HL_EXPIRY_RETRY_SECONDS = 300
 METRICS_STREAM_STARTUP_GRACE_SECONDS = 30.0
+SSH_STARTUP_ALERT_GRACE_SECONDS = 60.0
 METRICS_STREAM_STALE_SECONDS = 15.0
 METRICS_STREAM_RECONNECT_AFTER_STALE_RESTARTS = 2
 METRICS_STREAM_STALE_LOG_INTERVAL = 60.0
@@ -882,6 +883,9 @@ def _validate_monitor_agent_payload(filename: str, payload: Any, *, now: float |
         for field in ('pb9ready', 'pb9installed', 'pb9blocked', 'pb9wheel'):
             if field in payload and type(payload[field]) is not bool:
                 raise MonitorAgentPayloadError(f'invalid {field}')
+        if 'pb9layout' in payload and (not isinstance(payload['pb9layout'], str)
+                or payload['pb9layout'] not in {'legacy', 'current', 'unknown'}):
+            raise MonitorAgentPayloadError('invalid pb9layout')
         _monitor_agent_require_number(payload, "boot", minimum=0.0)
         if type(payload.get("reboot")) is not bool:
             raise MonitorAgentPayloadError("invalid type for reboot")
@@ -4005,9 +4009,19 @@ result.update(pb9v=read_pb7_version(pb9dir), pb9_config_schema=read_pb7_config_s
     pb9blocked=pb9_marker.exists() or pb9_marker.is_symlink(), pb9reason='')
 result['pb9installed'] = bool(result['pb9v'].startswith('v9.') and result['pb9_config_schema'].startswith('v9.')
     and result['pb9c'] and pb9venv and Path(pb9venv).is_file() and Path(pb9venv).parent.joinpath('passivbot').is_file())
-result['pb9ready'] = result['pb9installed'] and not result['pb9blocked']
+try:
+    from pb9_runtime import pb9_source_config_layout
+    result['pb9layout'] = pb9_source_config_layout(pb9dir)
+except ImportError:
+    result['pb9layout'] = 'unknown'
+result['pb9ready'] = result['pb9installed'] and not result['pb9blocked'] and result['pb9layout'] == 'current'
 if result['pb9blocked']:
     result['pb9reason'] = 'PB9 installation or update did not complete; run Update PB9.'
+elif result['pb9installed'] and result['pb9layout'] == 'legacy':
+    result['pb9blocked'] = True
+    result['pb9reason'] = 'Update PB9: the installed runtime uses the pre-PR #2318 risk layout.'
+elif result['pb9installed'] and result['pb9layout'] == 'unknown':
+    result['pb9reason'] = 'PB9 is installed; config-layout compatibility has not been confirmed.'
 if pb9dir and pb9venv:
     try:
         from pb_wheel_status import wheel_installed
@@ -4261,6 +4275,9 @@ class VPSMonitor:
         self._alert_gui_routes: dict[str, bool] = dict(ALERT_ROUTE_GUI_DEFAULTS)
         self._alert_telegram_routes: dict[str, bool] = dict(ALERT_ROUTE_TELEGRAM_DEFAULTS)
         self._alert_routes_loaded = False
+        # Startup connections are unknown, not lost. This deadline only covers
+        # initial reconnection and never delays a later established-link failure.
+        self._startup_ssh_pending: dict[str, float] = {}
         self._hl_expiry_last_warned: dict[str, str] = {}
         self._hl_expiry_retry_after: dict[str, float] = {}
 
@@ -4766,9 +4783,25 @@ class VPSMonitor:
             return
         await self._send_alert(message)
 
+    def _pending_startup_ssh_hosts(self, connections: dict[str, Any]) -> set[str]:
+        """Defer initial reconnect alarms for a fixed interval, retaining real alert history."""
+        pending = getattr(self, '_startup_ssh_pending', {})
+        now = time.monotonic()
+        deferred = set()
+        for host, deadline in list(pending.items()):
+            connection = connections.get(host)
+            status = str((connection or {}).get('status') or '')
+            if (not connection or now >= deadline or status in {
+                    ConnectionStatus.CONNECTED.value, ConnectionStatus.AUTH_FAILED.value}):
+                pending.pop(host, None)
+            else:
+                deferred.add(host)
+        return deferred
+
     async def _sync_live_alerts(self) -> None:
         self._load_alert_routes()
         conn_summary = self.pool.get_status_summary().get("connections") or {}
+        pending_ssh_hosts = self._pending_startup_ssh_hosts(conn_summary)
         monitor_config = getattr(self, "_monitor_config", None)
         if monitor_config is None:
             monitor_config = MonitorConfig()
@@ -4781,6 +4814,9 @@ class VPSMonitor:
             monitor_config,
             self.store.streams,
         )
+        live_alerts = [item for item in live_alerts
+                       if not (item.get('kind') == ALERT_KIND_OFFLINE
+                               and item.get('host') in pending_ssh_hosts)]
         now = time.time()
         self._prune_alert_history(now)
         live_map = {str(item.get("id") or ""): item for item in live_alerts if str(item.get("id") or "")}
@@ -4835,6 +4871,10 @@ class VPSMonitor:
 
         for alert_id, alert in list(self._alerts.items()):
             if alert_id in live_map:
+                continue
+            if alert.host in pending_ssh_hosts:
+                # An initial reconnect is not evidence that a persisted outage
+                # (or cached service problem) recovered. Await an actual status.
                 continue
             if alert.active:
                 history_key = _alert_history_id(alert)
@@ -5059,6 +5099,10 @@ class VPSMonitor:
             _log(SERVICE, f"Config reload rejected during startup: {self._config_error_text(exc)}", level="WARNING")
             self._schedule_config_retry()
         self._load_alert_state()
+        self._startup_ssh_pending = {
+            host: time.monotonic() + SSH_STARTUP_ALERT_GRACE_SECONDS
+            for host in self.enabled_hosts
+        }
         for store in self._host_metric_history.values():
             store.load()
         self._bot_cpu_history.load()
@@ -5146,6 +5190,7 @@ class VPSMonitor:
         if release_collector is not None:
             await release_collector.stop()
         await self.pool.disconnect_all()
+        getattr(self, '_startup_ssh_pending', {}).clear()
         self.loop = None
         _log(SERVICE, "VPS monitor stopped")
 
@@ -5451,6 +5496,7 @@ class VPSMonitor:
 
     def _start_metrics_stream(self, hostname: str):
         """Launch an async task that reads system metrics from SSH."""
+        getattr(self, '_startup_ssh_pending', {}).pop(hostname, None)
         self._stop_metrics_stream(hostname)
         generation = self._stream_generations.get(hostname, 0) + 1
         self._stream_generations[hostname] = generation

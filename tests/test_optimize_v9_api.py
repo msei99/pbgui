@@ -165,6 +165,7 @@ def test_native_cli_options_survive_snapshot_and_result_resume(native_optimizer)
 def test_native_cli_unknown_capability_is_rejected_before_queue(native_optimizer):
     """Old native parsers cannot silently ignore newly selected launch controls."""
     engine, metadata, _ = native_optimizer
+    metadata['native_cli_options'] = []
     source = copy.deepcopy(metadata['template'])
     source['backtest']['scenarios'] = [{'label': 'train'}]
     source['pbgui'] = {'optimize_runtime': {'scenarios': ['train']}}

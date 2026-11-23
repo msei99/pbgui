@@ -58,7 +58,11 @@ def editor():
                 directory = 'help_de' if language == 'de' else 'help'
                 route.fulfill(json={'content': (ROOT / 'docs' / directory / '53_pbv9_run.md').read_text()})
             elif path == '/api/v9/editor/metadata':
-                route.fulfill(json={**metadata, 'runtime': {'detected': True}})
+                if getattr(state, 'metadata_error', None):
+                    route.fulfill(status=503, json={'detail': state.metadata_error},
+                                  headers={'X-PBGUI-Error-Codes': 'runtime_upgrade_required'})
+                else:
+                    route.fulfill(json={**metadata, 'runtime': {'detected': True}})
             elif path == '/api/v9/instances/new-config':
                 route.fulfill(json={'config': copy.deepcopy(state.config), 'param_status': {}, 'override_configs': {}})
             elif path == '/api/v9/draft':
@@ -143,6 +147,26 @@ def test_native_form_preserves_sparse_sides_on_note_save(editor):
     assert editor.unexpected == []
 
 
+@pytest.mark.parametrize('detail,expected', [
+    ('Update the separate PB9 runtime: PBGui requires the current post-PR #2318 risk layout.',
+     'Update the separate PB9 runtime'),
+    ('<img src=x onerror=alert(1)> Update PB9', '<img src=x onerror=alert(1)> Update PB9'),
+    ({'unexpected': 'object'}, 'PB9 editor metadata: HTTP 503'),
+])
+def test_metadata_error_displays_actionable_detail_as_plain_text(editor, detail, expected):
+    """The shared Run page preserves the API explanation without interpreting HTML."""
+    editor.metadata_error = detail
+    page = editor.page
+    page.reload()
+    expect(page.locator('#toast')).to_contain_text(expected)
+    assert page.locator('#toast img').count() == 0
+    assert editor.saved == []
+    assert editor.errors == []
+    editor.metadata_error = None
+    page.reload()
+    expect(page.locator('#f-user')).to_have_value('fixture')
+
+
 def test_additional_parameters_discover_unregistered_native_fields(editor):
     """New native fields stay editable before PBGui adds a dedicated control."""
     editor.metadata['prototype']['live']['future_default'] = 7.5
@@ -157,6 +181,26 @@ def test_additional_parameters_discover_unregistered_native_fields(editor):
     page.wait_for_function('document.getElementById("f-version").value === "1"')
     assert editor.saved[-1]['config']['live']['future_source'] == {'threshold': 3.25}
     assert 'future_default' not in editor.saved[-1]['config']['live']
+    assert editor.errors == editor.unexpected == []
+
+
+def test_current_loss_gate_controls_save_without_legacy_fields(editor):
+    """An optional cap stays absent until authored; gate and shared memory roundtrip."""
+    page = editor.page
+    page.locator('#run-meta-section-portfolio > .expander-header').click()
+    gate = page.locator('[data-config-path="bot.portfolio.risk.loss_realization.loss_gate.enabled"]')
+    cap = page.locator('[data-config-path="bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction"]')
+    memory = page.locator('[data-config-path="bot.portfolio.risk.loss_realization.memory_ema_span_minutes"]')
+    gate.check()
+    cap.fill('0.15')
+    memory.fill('14400')
+    page.locator('#btn-save').click()
+    page.wait_for_function('document.getElementById("f-version").value === "1"')
+    portfolio = editor.saved[-1]['config']['bot']['portfolio']
+    assert portfolio['risk']['loss_realization'] == {
+        'memory_ema_span_minutes': 14400,
+        'loss_gate': {'enabled': True, 'max_realized_drawdown_fraction': .15}}
+    assert 'loss_gate' not in portfolio
     assert editor.errors == editor.unexpected == []
 
 
@@ -245,12 +289,13 @@ def test_primary_fields_and_side_json_are_visible_without_expanding(editor):
     page = editor.page
     expect(page.locator('#f-leverage')).to_have_value('10')
     for field in ('f-leverage', 'f-margin-mode', 'f-logging-level', 'f-min-coin-age',
-                  'f-v9-risk-lookback', 'f-warmup-ratio', 'f-max-loss-pct',
+                  'f-v9-risk-lookback', 'f-warmup-ratio',
                   'f-price-dist', 'f-exec-delay', 'f-market-order-threshold',
                   'f-filter-min-cost', 'f-market-orders', 'f-hedge-mode', 'f-auto-gs',
                   'f-long-json', 'f-short-json'):
         assert page.locator('#' + field).is_visible(), field
     assert not page.locator('#f-pnls-lookback').is_visible()
+    assert not page.locator('#f-max-loss-pct').is_visible()
     assert page.locator('#exp-v9-advanced').get_attribute('class') == 'expander'
     for side in ('long', 'short'):
         control = page.locator('[data-config-path="bot.' + side + '.enabled"]')
@@ -281,11 +326,11 @@ def test_inherited_side_json_authors_only_changed_values(editor):
     assert editor.saved[-1]['config']['bot']['long'] == {**editor.metadata['template']['bot']['long'], 'risk': {'max_positions': 4}}
     expect(page.locator('#f-long-npos')).to_have_value('4')
     projection = json.loads(page.locator('#f-long-json').input_value())
-    projection['enabled'] = False
+    projection['enabled'] = True
     page.locator('#f-long-json').fill(json.dumps(projection))
     page.locator('#btn-save').click()
     expect(page.locator('#f-version')).to_have_value('2')
-    assert editor.saved[-1]['config']['bot']['long'] == {'risk': {'max_positions': 4}, 'enabled': False}
+    assert editor.saved[-1]['config']['bot']['long'] == {'risk': {'max_positions': 4}, 'enabled': True}
     assert editor.errors == []
 
 

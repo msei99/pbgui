@@ -36,6 +36,7 @@
         argv: ["{{ pbgui_python | default(ansible_playbook_python) }}", "{{ pbgdir }}/starter.py", --stop, PBRun]
       changed_when: true
       notify: Recover PBRun after PB7 update
+      when: not pb7_wheel_match.runtime_current | bool
 
     - name: Stop PB7 processes before changing checkout
       command:
@@ -52,6 +53,7 @@
           - --venv
           - "{{ pb7venv }}"
       changed_when: false
+      when: not pb7_wheel_match.runtime_current | bool
 
     - name: Checkout verified pinned Passivbot v7
       command:
@@ -65,9 +67,11 @@
           - --expected-major
           - "7"
           - --checkout
+      when: not pb7_wheel_match.runtime_current | bool
 
     - name: Install and validate central PB7 wheels
       include_tasks: tasks/pb7_wheels_install.yml
+      when: not pb7_wheel_match.runtime_current | bool
 
   handlers:
     - name: Recover PBRun after PB7 update

@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 import pytest
 
@@ -21,6 +22,8 @@ def isolated_restart_observations(tmp_path, monkeypatch):
     (tmp_path / 'setup').mkdir()
     (tmp_path / 'setup' / 'setup_systemd.sh').write_text('# isolated test placeholder\n')
     monkeypatch.setattr(PBApiServer, '_restart_memory_block_reason', lambda: '')
+    monkeypatch.setattr(PBApiServer, '_runtime_service_restart_state',
+                        lambda: {'stale_services': [], 'inspection_error': ''})
     for name in ('profit_sweep_restart_block_reason', 'ai_restart_block_reason',
                  'credential_migration_restart_block_reason'):
         monkeypatch.setattr(PBApiServer, name, lambda *args: '')
@@ -398,10 +401,15 @@ def test_monitor_unit_prepare_failure_never_schedules_or_falls_back(monkeypatch)
     assert not any(args[0] == "systemd-run" for args in calls)
 
 
-def test_services_restart_reuses_root_systemd_handoff(monkeypatch) -> None:
+@pytest.mark.parametrize("stale_units", [[], ["pbgui-vps-monitor.service"]])
+def test_services_restart_reuses_root_systemd_handoff(monkeypatch, stale_units) -> None:
     """The Services restart endpoint uses the same monitor migration boundary."""
 
     calls: list[bool | None] = []
+    requested = []
+    monkeypatch.setattr(PBApiServer, '_runtime_service_restart_state', lambda: {
+        'stale_services': [{'unit': unit} for unit in stale_units], 'inspection_error': '',
+    })
 
     class VPSMonitor:
         """Represent the live __main__ module's in-process monitor."""
@@ -429,11 +437,37 @@ def test_services_restart_reuses_root_systemd_handoff(monkeypatch) -> None:
     monkeypatch.setattr(
         PBApiServer,
         "_restart_current_api_systemd_unit",
-        lambda service_units=(), *, monitor_handoff=None: calls.append(monitor_handoff) or True,
+        lambda service_units=(), *, monitor_handoff=None:
+            requested.append(service_units) or calls.append(monitor_handoff) or True,
     )
 
     assert services.restart_api_server(session=None)["ok"] is True
     assert calls == [True]
+    assert requested == [stale_units]
+
+
+def test_services_restart_inspection_failure_preserves_safety_gate(monkeypatch) -> None:
+    """Failed daemon inspection cannot silently become an API-only restart."""
+    leases = tuple(SimpleNamespace(release=Mock(), detach=Mock()) for _ in range(3))
+
+    async def unblocked():
+        """Keep unrelated restart gates isolated from runtime state."""
+        return False, ""
+
+    monkeypatch.setattr(PBApiServer, '_restart_block_state', unblocked)
+    monkeypatch.setattr(PBApiServer, '_acquire_api_restart_leases', lambda: leases)
+    monkeypatch.setattr(PBApiServer, '_runtime_service_restart_state', lambda: {
+        'stale_services': [], 'inspection_error': 'OSError',
+    })
+    schedule = Mock()
+    monkeypatch.setattr(PBApiServer, '_restart_current_api_systemd_unit', schedule)
+    monkeypatch.setattr(services, '_systemd_unit_for_service', lambda name: 'pbgui-api.service')
+    monkeypatch.setattr(services, 'get_monitor', lambda: None)
+    with pytest.raises(services.HTTPException):
+        services.restart_api_server(session=None)
+    schedule.assert_not_called()
+    for lease in leases:
+        lease.release.assert_called_once()
 
 
 def test_services_restart_thread_failure_releases_lease(monkeypatch) -> None:

@@ -6,6 +6,7 @@ from vast_scenarios import flatten_overrides
 
 SERVICE = 'Vast'
 HSL_BUDGET_SCALING_REVISIONS = frozenset({
+    '15d6404f33bd5623d46a46e04ea694188ea7acea',
     'b9d6692ea41266ecb4ab81d40bb5e5baef29b50a',
 })
 _HSL_BUDGET_SCALING_PATH = 'hsl.scale_budget_with_excess_allowance'

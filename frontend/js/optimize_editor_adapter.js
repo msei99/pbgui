@@ -496,7 +496,7 @@
       },
       configureUi: function () {
         document.title = 'PBGui - ' + (normalized.toUpperCase()) + ' Optimize';
-        if(isV9){var warning=document.getElementById('pb8-runtime-warning');if(warning){var title=warning.querySelector('strong');if(title)title.textContent='PB9 runtime unavailable';var link=warning.querySelector('a');if(link){link.textContent='Runtime paths';link.href='/api/v9/main_page';}}}
+        if(isV9){var warning=document.getElementById('pb8-runtime-warning');if(warning){var title=warning.querySelector('strong');if(title)title.textContent='PB9 runtime unavailable';var link=warning.querySelector('a');if(link){link.textContent='Update PB9';link.href=String(window.BASE_PREFIX || '') + '/api/vps-manager/main_page#master';}}}
         var resume = document.getElementById('btn-resume-result');
         if (resume) resume.style.display = isV8 ? '' : 'none';
         var plotTitle = document.getElementById('plot-modal-title');

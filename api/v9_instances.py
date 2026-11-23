@@ -764,6 +764,9 @@ def _instance_row(directory: Path, master: str, paths: dict[str, str], exchanges
     load_error = ""
     try:
         native, sidecar = _read_bundle(directory)
+        from pb9_config_helper import incompatible_pb9_layout, INCOMPATIBLE_PB9_MESSAGE
+        if incompatible_pb9_layout(native):
+            load_error = INCOMPATIBLE_PB9_MESSAGE
     except _BundleError as exc:
         load_error = str(exc)
     except (OSError, ValueError):
@@ -1207,6 +1210,9 @@ def _op_load(args, body, cancel_event) -> dict[str, Any]:
     name = _validate_name(args["name"])
     with _read_lock():
         _directory, native, sidecar = _load_instance(name)
+    from pb9_config_helper import incompatible_pb9_layout
+    if incompatible_pb9_layout(native):
+        raise PB9ConfigError('incompatible_pb9_config')
     return {"name": name, "config": {**native, "pbgui": sidecar}, "param_status": {}, "override_configs": {}}
 
 

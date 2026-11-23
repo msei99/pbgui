@@ -57,6 +57,17 @@ def test_pb9_does_not_compare_with_pb8_head_and_missing_metadata_is_safe(overvie
     assert blocked['pb9_runtime_reason'] == 'PB9 runtime unavailable; run Update PB9'
 
 
+def test_legacy_layout_is_not_ready_even_if_older_metadata_claims_ready(overview):
+    """Installation presence and a matching schema/version cannot override known incompatibility."""
+    fields = overview._build_pb9_overview_fields({
+        'pb9installed': True, 'pb9ready': True, 'pb9layout': 'legacy'})
+    assert fields['pb9_installed']
+    assert not fields['pb9_runtime_ready']
+    assert fields['pb9_runtime_blocked']
+    assert fields['pb9_config_layout'] == 'legacy'
+    assert 'pre-PR #2318' in fields['pb9_runtime_reason']
+
+
 def test_pb9_running_bots_are_counted_once_per_generation(overview):
     """PB9 snapshots contribute without duplicating their existing telemetry row."""
     state = {'meta': {}, 'instances': [{'p': '9', 'u': 'same'}],

@@ -283,7 +283,9 @@
         dest: "{{ pbgdir }}/data/locks/{{ 'pb9-runtime-invalid' if passivbot_product == 'pb9' else 'pb8-runtime-invalid' }}"
         content: "{{ passivbot_label }} installation or update in progress\n"
         mode: "0600"
-      when: not pb8_branch_switch
+      when:
+        - not pb8_wheel_match.runtime_current | bool
+        - not pb8_branch_switch
 
     - name: Checkout verified official Passivbot v{{ passivbot_major }} commit
       command:
@@ -299,14 +301,18 @@
           - --checkout
       register: pb8_repo
       changed_when: "'checkout_changed=true' in pb8_repo.stdout"
-      when: not pb8_branch_switch
+      when:
+        - not pb8_wheel_match.runtime_current | bool
+        - not pb8_branch_switch
 
     - name: Mark {{ passivbot_label }} runtime unavailable for branch checkout
       copy:
         dest: "{{ pbgdir }}/data/locks/{{ 'pb9-runtime-invalid' if passivbot_product == 'pb9' else 'pb8-runtime-invalid' }}"
         content: "{{ passivbot_label }} branch switch in progress\n"
         mode: "0600"
-      when: pb8_branch_switch
+      when:
+        - not pb8_wheel_match.runtime_current | bool
+        - pb8_branch_switch
 
     - name: Checkout selected {{ passivbot_label }} branch at verified commit
       command:
@@ -320,7 +326,9 @@
         chdir: "{{ pb8dir }}"
       register: pb8_branch_checkout
       changed_when: true
-      when: pb8_branch_switch
+      when:
+        - pb8_branch_switch
+        - (not pb8_wheel_match.runtime_current | bool) or pb8_branch_switch
 
     - name: Set selected {{ passivbot_label }} branch upstream
       command:
@@ -333,12 +341,15 @@
       args:
         chdir: "{{ pb8dir }}"
       changed_when: false
-      when: pb8_branch_switch
+      when:
+        - pb8_branch_switch
+        - (not pb8_wheel_match.runtime_current | bool) or pb8_branch_switch
 
     - name: Check {{ passivbot_label }} virtualenv
       stat:
         path: "{{ pb8venv }}/bin/python"
       register: pb8_python
+      when: not pb8_wheel_match.runtime_current | bool
 
     - name: Create {{ passivbot_label }} virtualenv
       command:
@@ -347,7 +358,9 @@
           - -m
           - venv
           - "{{ pb8venv }}"
-      when: not pb8_python.stat.exists
+      when:
+        - not pb8_wheel_match.runtime_current | bool
+        - not pb8_python.stat.exists
 
     - name: Install binary {{ passivbot_label }} dependencies
       command:
@@ -361,6 +374,7 @@
           - --find-links
           - "{{ pb8_wheel_remote_stage.path }}/bundle"
           - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.python_wheel }}{{ pb8_wheel_extras }}"
+      when: not pb8_wheel_match.runtime_current | bool
 
     - name: Install verified {{ passivbot_label }} wheels
       command:
@@ -375,6 +389,7 @@
           - --force-reinstall
           - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.python_wheel }}"
           - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.rust_wheel }}"
+      when: not pb8_wheel_match.wheels_match | bool
 
     - name: Install source-bound {{ passivbot_label }} Cargo lockfile
       copy:
@@ -382,12 +397,14 @@
         dest: "{{ pb8dir }}/passivbot-rust/Cargo.lock"
         remote_src: true
         mode: "0600"
+      when: not pb8_wheel_match.runtime_current | bool
 
     - name: Validate centrally built {{ passivbot_label }} runtime
       script:
         cmd: "pb8_wheels.py runtime --product {{ passivbot_product }} --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --repo {{ pb8dir | quote }} --commit {{ pb8_wheel_commit.stdout | quote }} --receipt {{ (pbgdir ~ '/data/state/' ~ passivbot_product ~ '-wheel.json') | quote }}"
         executable: "{{ pb8venv }}/bin/python"
       changed_when: false
+      when: not pb8_wheel_match.runtime_current | bool
 
     - name: Validate {{ passivbot_label }} CLI
       command:
@@ -395,6 +412,7 @@
           - "{{ pb8venv }}/bin/passivbot"
           - --help
       changed_when: false
+      when: not pb8_wheel_match.runtime_current | bool
 
     - name: Validate {{ passivbot_label }} schema without source compilation
       command:
@@ -405,6 +423,7 @@
       args:
         chdir: "{{ pb8dir }}"
       changed_when: false
+      when: not pb8_wheel_match.runtime_current | bool
 
     - name: Save {{ passivbot_label }} runtime paths after validation
       command:
@@ -418,11 +437,13 @@
         chdir: "{{ pbgdir }}"
       register: save_pb8_paths
       changed_when: "'changed=true' in save_pb8_paths.stdout"
+      when: not pb8_wheel_match.runtime_current | bool
 
     - name: Mark validated {{ passivbot_label }} runtime available
       file:
         path: "{{ pbgdir }}/data/locks/{{ 'pb9-runtime-invalid' if passivbot_product == 'pb9' else 'pb8-runtime-invalid' }}"
         state: absent
+      when: not pb8_wheel_match.runtime_current | bool
 
     - name: Restart managed {{ passivbot_label }} live bots after successful update
       script:
@@ -430,7 +451,9 @@
         executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
       register: pb8_live_restart
       changed_when: "'stopped_processes=0' not in pb8_live_restart.stdout"
-      when: pb8_git.stat.exists
+      when:
+        - not pb8_wheel_match.runtime_current | bool
+        - pb8_git.stat.exists
 
     - name: Ensure PBRun is running after successful {{ passivbot_label }} update
       script: setup/vps_service_control.sh start PBRun
@@ -438,7 +461,9 @@
         PBGUI_DIR: "{{ pbgdir }}"
         PBGUI_PYTHON: "{{ pbgui_python | default(ansible_playbook_python) }}"
       changed_when: false
-      when: pb8_git.stat.exists
+      when:
+        - not pb8_wheel_match.runtime_current | bool
+        - pb8_git.stat.exists
 
   handlers:
     - name: Release {{ passivbot_label }} update writer ownership

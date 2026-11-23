@@ -48,3 +48,32 @@ To move an existing instance, select its new host and Save. PBGui first publishe
 Previous saved versions are backed up with the PBGui sidecar. Open a backup as an editor draft or restore it to a new version. Restoring initially disables the instance. Running instances must be stopped before deletion. The shared log panel follows the saved execution host. While an enabled remote host has no log available, it keeps that host selected instead of displaying old local output. Disabled instances retain local and backup log access. Previously detected targets remain visible but disabled when Cluster readiness fails; eligibility updates automatically without changing your selection. Restart stops the exact managed process so PBRun can relaunch it through its regular checks.
 
 The list updates automatically. Browser refresh preserves its search, sorting and navigation context. The Guide opens over the current page; Information → Help opens the complete documentation.
+
+## Current PB9 risk layout
+
+PBGui requires the post-PR #2318 PB9 risk layout. Older PB9 development configs
+are shown as incompatible and cannot be edited, saved, queued, started or resumed.
+Delete them explicitly and create new configs from the current native template.
+PBGui does not migrate, rewrite or automatically delete them. Existing stop and
+delete safeguards for enabled or running instances remain in place. Old result
+charts and metrics remain readable; launching their old configuration is blocked.
+
+Directional HSL and Unstuck settings are under `bot.<scope>.risk`. Portfolio HSL
+is under `bot.portfolio.risk.hsl`. The shared realized-loss memory is configured
+under `bot.portfolio.risk.loss_realization.memory_ema_span_minutes`. Its loss gate
+has an explicit `enabled` switch and a separate `max_realized_drawdown_fraction`
+in `[0, 1)`, required only when enabled. The old `unstuck.close_fraction` is removed.
+These fields use the normal GUI controls and native parameter help.
+
+GPU execution requires a policy supported by the installed PB9 native preflight.
+In this revision, active Unstuck or the realized-loss gate requires CPU, including
+scenario and coin overrides. PBGui rejects unsupported GPU requests before launch
+or rental and never silently disables risk settings. A worker built for a different
+PB9 source revision cannot run the job.
+
+The existing reviewed PB8-to-PB9 converter uses the installed official converter
+and must produce this current layout. It creates an unsaved draft; it does not
+convert existing PB9 development configs. Update the separate PB9 runtime if the
+editor reports that its native template is too old.
+
+If a new editor cannot initialize because the installed PB9 runtime predates the required risk layout, its metadata error now shows the update requirement. Update PB9 separately when you choose to; opening the editor does not install, migrate or delete anything.

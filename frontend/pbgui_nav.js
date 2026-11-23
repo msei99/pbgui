@@ -2320,17 +2320,6 @@
         if (_restartInFlight || _restartConfirmPending) return;
         var blocked = restartBtn.getAttribute('data-restart-blocked') === '1';
         var blockReason = restartBtn.getAttribute('data-restart-block-reason') || '';
-        if (blocked) {
-          showNavConfirm({
-            title: 'Restart blocked',
-            message: 'PBGui services cannot restart while protected work is still running.',
-            detail: blockReason || 'Wait until the active VPS task finishes or is marked interrupted.',
-            confirmText: 'OK',
-            cancelText: '',
-            hideCancel: true
-          });
-          return;
-        }
         var restartServices = Array.isArray(_restartStatus.restart_services) ? _restartStatus.restart_services : [];
         var restartLabels = visibleRestartServices(_restartStatus, restartServices).map(function (item) {
           return String((item || {}).label || (item || {}).service || '').trim();
@@ -2338,6 +2327,7 @@
         var restartDetail = restartLabels.length
           ? 'Local services running outdated code: ' + restartLabels.join(', ') + '. The API server restarts last and the page reconnects automatically.'
           : 'The API server restarts and the page reconnects automatically.';
+        if (blocked) restartDetail += ' Restart will wait for protected work: ' + blockReason;
         restartDetail += vastRestartContext(_restartStatus, restartServices);
         _restartConfirmPending = true;
         showNavConfirm({
@@ -2368,6 +2358,11 @@
             return resp.json().catch(function () { return {}; });
           }).then(function(data) {
             showRestartOverlay(origin2, data && Array.isArray(data.restart_services) ? data.restart_services : [], (data && data.api_instance_id) || previousInstance, false, targetSerial);
+            if (data && data.restart_request && data.restart_request.state === 'waiting') {
+              var queuedStatus = document.getElementById('pbgui-restart-status');
+              if (queuedStatus) queuedStatus.textContent = 'Restart queued — waiting: ' +
+                (data.restart_request.reason || 'Protected work is still running.') + ' Restart will continue automatically.';
+            }
           }).catch(function(err) {
             if (!err.restartRejected) {
               // A lost response may mean the API is already shutting down. Never resubmit.
@@ -2456,6 +2451,19 @@
         })
         .then(function (data) {
           if (ov.isConnected === false) return;
+          var pendingRestart = data && data.restart_request;
+          if (pendingRestart && pendingRestart.state === 'failed') {
+            _overlayFail(pendingRestart.reason || 'Restart preparation failed.');
+            return;
+          }
+          if (pendingRestart && (pendingRestart.state === 'waiting' || pendingRestart.state === 'preparing')) {
+            // Protected work has no reconnect deadline; one server-owned request waits.
+            attempts = 0;
+            if (statusEl) statusEl.textContent = 'Restart queued — waiting: ' +
+              (pendingRestart.reason || 'Checking protected work…') + ' Restart will continue automatically.';
+            setTimeout(probe, 1000);
+            return;
+          }
           if (!data || data.needs_restart || data.restart_inspection_error ||
               (!data.api_instance_id || data.api_instance_id === previousInstance)) {
             var newlyDiscovered = data && Array.isArray(data.restart_services)
@@ -2546,6 +2554,11 @@
     updateAuthModeState(state && state.auth ? state.auth : {});
     var btn = document.getElementById('pbgui-restart-btn');
     if (!btn) return;
+    if (!_restartInFlight && state && state.restart_request &&
+        ['waiting', 'preparing', 'restarting'].indexOf(state.restart_request.state) >= 0) {
+      _restartInFlight = true;
+      showRestartOverlay(_getAppBase(), state.restart_services || [], state.api_instance_id || '', false, state.current_serial);
+    }
     if (_restartInFlight) {
       btn.style.display = 'flex';
       btn.disabled = true;
@@ -2569,11 +2582,11 @@
     btn.setAttribute('data-restart-blocked', blocked ? '1' : '0');
     btn.setAttribute('data-restart-block-reason', reason);
     btn.disabled = false;
-    btn.setAttribute('aria-disabled', blocked ? 'true' : 'false');
-    btn.classList.toggle('disabled', blocked);
+    btn.setAttribute('aria-disabled', 'false');
+    btn.classList.toggle('disabled', false);
     btn.innerHTML = '<span class="nav-restart-dot"></span>Restart' + (serviceLabels.length ? ' (' + serviceLabels.length + ')' : '');
     btn.title = blocked
-      ? ('Restart blocked: ' + (reason || 'Protected PBGui work is still running.'))
+      ? ('Restart will wait automatically: ' + (reason || 'Protected PBGui work is still running.'))
       : ('Restart outdated PBGui services' + (serviceLabels.length ? ': ' + serviceLabels.join(', ') : ''));
   }
 

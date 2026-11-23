@@ -297,6 +297,7 @@ class VPSMonitorProxy:
         self.upstream_releases: dict[str, Any] = {}
         self.upstream_release_capability: bool | None = None
         self.package_check_capability: bool | None = None
+        self.code_serial = ""
         self._alert_settings: dict[str, Any] = {}
         self._alerts_cache = {"items": [], "history": [], "summary": self._empty_alert_summary()}
         self._debug_logging_value = False
@@ -367,6 +368,8 @@ class VPSMonitorProxy:
             self.package_check_capability = (
                 isinstance(capabilities, list) and "host.check_package" in capabilities
             )
+            serial = state.get("code_serial")
+            self.code_serial = serial if isinstance(serial, str) else ""
             if not changed:
                 return True
             store = state.get("store")

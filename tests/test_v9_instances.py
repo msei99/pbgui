@@ -90,6 +90,25 @@ def test_save_load_and_backup_keep_native_and_gui_separate(run_api):
     assert json.loads(gui.read_text())['version'] == 2
 
 
+def test_retired_config_remains_visible_and_explicitly_deletable(run_api):
+    """An isolated retired bundle is rejected by the editor, never silently removed."""
+    s = run_api
+    old = copy.deepcopy(s.config)
+    old['bot']['long']['hsl'] = {'enabled': False}
+    # The fixture validator models an older runtime which accepted this layout.
+    assert _save(s, old).status_code == 200
+    directory = s.root / 'data/run_v9/fixture'
+    original = (directory / 'config.json').read_bytes()
+    rows = s.client.get('/api/v9/instances').json()['instances']
+    assert rows[0]['status'] == 'config_error'
+    assert 'pre-PR #2318' in rows[0]['load_error']
+    assert s.client.get('/api/v9/instances/fixture/config').status_code == 422
+    assert (directory / 'config.json').read_bytes() == original
+    assert s.client.delete('/api/v9/instances/fixture').status_code == 200
+    assert not directory.exists()
+    assert (s.root / 'data/backup/v9/fixture/1/config.json').read_bytes() == original
+
+
 def test_rejects_native_error_and_symlink_without_publication(run_api):
     """Validation failure and unsafe storage cannot replace an existing bundle."""
     s = run_api

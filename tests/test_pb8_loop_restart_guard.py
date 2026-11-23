@@ -17,6 +17,7 @@ def restart_owner(monkeypatch):
         monkeypatch.setattr(PBApiServer, name, value)
     monkeypatch.setattr(PBApiServer, "_restart_current_api_systemd_unit",
                         lambda *_args: pytest.fail("Cannot restart production services"))
+    monkeypatch.setattr(PBApiServer, "_detach_api_restart_lifecycle_leases", lambda _leases: None)
 
 
 def test_inflight_request_blocks_restart_and_clears_after_response(tmp_path, monkeypatch, restart_owner):

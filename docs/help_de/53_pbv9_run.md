@@ -53,3 +53,35 @@ Die Liste aktualisiert sich automatisch. Browser-Neuladen erhält Suche, Sortier
 ## Backtest aus dem Editor
 
 **Backtest** übernimmt die aktuelle, auch ungespeicherte native Konfiguration als privaten Entwurf in die gemeinsame PB9-Backtest-Seite. Die Run-Instanz wird dabei nicht geändert. Details stehen im Guide **PB9 Backtest**.
+
+## Aktuelles PB9-Risikolayout
+
+PBGui benötigt das PB9-Risikolayout nach PR #2318. Ältere PB9-Entwicklungsconfigs
+werden als inkompatibel angezeigt; Bearbeiten, Speichern, Einreihen, Starten und
+Fortsetzen sind gesperrt. Lösche sie ausdrücklich und erstelle neue Configs aus
+dem aktuellen nativen Template. PBGui migriert, überschreibt oder löscht sie
+nicht automatisch. Bestehende Stop- und Löschsperren für aktivierte oder laufende
+Instanzen bleiben erhalten. Alte Ergebnischarts und Metriken bleiben lesbar; das
+Starten ihrer alten Konfiguration ist gesperrt.
+
+HSL und Unstuck liegen je Scope unter `bot.<scope>.risk`, Portfolio-HSL unter
+`bot.portfolio.risk.hsl`. Der gemeinsame Speicher für realisierte Verluste wird
+unter `bot.portfolio.risk.loss_realization.memory_ema_span_minutes` eingestellt.
+Sein Loss-Gate besitzt einen ausdrücklichen `enabled`-Schalter und einen separaten
+`max_realized_drawdown_fraction` in `[0, 1)`, der nur bei aktiviertem Gate nötig
+ist. Das alte `unstuck.close_fraction` entfällt. Die Einstellungen stehen über
+normale GUI-Felder mit nativer Parameterhilfe zur Verfügung.
+
+GPU-Ausführung benötigt eine von der installierten nativen PB9-Prüfung unterstützte
+Policy. In diesem Stand erfordern aktives Unstuck oder Loss-Gate CPU, auch bei
+Aktivierung über Szenarien oder Coin-Overrides. PBGui lehnt nicht unterstützte
+GPU-Anfragen vor Start oder Miete ab und deaktiviert keine Risikoeinstellungen
+stillschweigend. Ein Worker für einen anderen PB9-Quellstand kann den Job nicht
+ausführen.
+
+Der bestehende PB8-zu-PB9-Konverter verwendet den installierten offiziellen
+Konverter und muss dieses aktuelle Layout liefern. Er erzeugt einen ungespeicherten
+Entwurf und konvertiert keine bestehenden PB9-Entwicklungsconfigs. Aktualisiere die
+separate PB9-Installation, wenn der Editor ein zu altes natives Template meldet.
+
+Kann ein neuer Editor nicht starten, weil die installierte PB9-Laufzeit noch das frühere Risikolayout verwendet, nennt die Metadaten-Fehlermeldung jetzt das erforderliche Update. PB9 wird erst auf deine Anweisung separat aktualisiert; das Öffnen des Editors installiert, migriert oder löscht nichts.

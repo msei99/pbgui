@@ -33,22 +33,24 @@ from vast_worker_compatibility import config_for_worker
 
 SERVICE = "Vast"
 PROJECT = Path(__file__).resolve().parent
-IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:3aa5c16b22a62983ec5dc46862c21c2d959856bf2362d4d9b39e3ded61f000cf"
-REVISION = "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a"
+IMAGE = "ghcr.io/msei99/pbgui-pb8-worker@sha256:f5bc5f31c80b0d3e923aba2ca02cacc9d4980e20b63245c9ff24e999d7fb1d4a"
+REVISION = "15d6404f33bd5623d46a46e04ea694188ea7acea"
+LEGACY_B9_REVISION = "b9d6692ea41266ecb4ab81d40bb5e5baef29b50a"
 PREVIOUS_REVISION = "69227b75e808f8ce1f4b8949350b3311916bd377"
 ORIGINAL_REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
 # Persisted rental intents keep their own immutable image/revision pair.
 SUPPORTED_RENTAL_IMAGE_REVISIONS = {
     IMAGE: REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:3aa5c16b22a62983ec5dc46862c21c2d959856bf2362d4d9b39e3ded61f000cf": LEGACY_B9_REVISION,
     "ghcr.io/msei99/pbgui-pb9-worker@sha256:9a8a4bbb6c5dfb8f927e1652dd52894da83f4bff03b74d0422814d0b3941d99b": "1b5805ed52c9fdf8eab6d21ed938e2c73edda85b",
     "ghcr.io/msei99/pbgui-pb9-worker@sha256:59dfb6f06a33886c9da007a013831c859507f90cfce6ba668cb118b171c9f5c9": "da9f90d6d1c27ec77bb582164bbf7ab78d12a0a2",
     "ghcr.io/msei99/pbgui-pb9-worker@sha256:8093291ccefb61db45da7bdc7812186d2267ca91d2492f8d813fa4499b6d291f": "1b85ea6cc4bb7b917ada43725044b7559763c46e",
     "ghcr.io/msei99/pbgui-pb9-worker@sha256:13868e9b2bdc4a2109cf1fb6981971dac90aa1213d0215294983d80da2cc8712": "1b85ea6cc4bb7b917ada43725044b7559763c46e",
-    "ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1": REVISION,
-    "ghcr.io/msei99/pbgui-pb8-worker@sha256:15698800ffa48634708742425856608c403db26d6aeeb32d6cb5d05b15b0266d": REVISION,
-    "ghcr.io/msei99/pbgui-pb8-worker@sha256:d966b601dedbf49641a85feb4b5c13963f855d998c7d465c02af89f73c272abf": REVISION,
-    "ghcr.io/msei99/pbgui-pb8-worker@sha256:0e49bae53a7f104b2ead7ab3e9dcb2c5a83aa117291086f4ad87ca0a8fc367aa": REVISION,
-    "ghcr.io/msei99/pbgui-pb8-worker@sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae": REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:1941f03f96af1fca2062bcf8f9fa45939e1528af2d03f3322060945e9fe140b1": LEGACY_B9_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:15698800ffa48634708742425856608c403db26d6aeeb32d6cb5d05b15b0266d": LEGACY_B9_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:d966b601dedbf49641a85feb4b5c13963f855d998c7d465c02af89f73c272abf": LEGACY_B9_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:0e49bae53a7f104b2ead7ab3e9dcb2c5a83aa117291086f4ad87ca0a8fc367aa": LEGACY_B9_REVISION,
+    "ghcr.io/msei99/pbgui-pb8-worker@sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae": LEGACY_B9_REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:47032b1e42076555a29909a9b888cd24efb69dec6ccd80d06ac26b0bc653ac99": "00ce7d0ddf123071ae67db149753d6b3619f52ac",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:792a11f40098a3fffe9365c46e38f60c7bddaa35179c9bc608d130b5e1449dbe": "061e472e3d400cb3a740583d52f9d46e02eaf781",
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:32d7ee7a00330e01e4a2b8856275289eb8ee4b067542b09cfdce5e81c3b3691c": "061e472e3d400cb3a740583d52f9d46e02eaf781",

@@ -44,6 +44,7 @@
           - --force-reinstall
           - "{{ pb7_wheel_remote_stage.path }}/bundle/{{ pb7_wheel_manifest.python_wheel }}"
           - "{{ pb7_wheel_remote_stage.path }}/bundle/{{ pb7_wheel_manifest.rust_wheel }}"
+      when: not pb7_wheel_match.wheels_match | default(false) | bool
 
     - name: Install source-bound PB7 Cargo lockfile
       copy:

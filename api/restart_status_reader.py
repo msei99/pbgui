@@ -58,7 +58,6 @@ class RestartStatusReader:
 
     async def _inspect(self, key, generation):
         """Inspect off the event loop; cancellation of a viewer cannot cancel this job."""
-        started = self.clock()
         # Keep the concurrent Future: cancelling an asyncio wrapper cannot make
         # the real running thread disappear from lifecycle ownership.
         self.worker = self.pool.submit(self.inspect)
@@ -78,7 +77,10 @@ class RestartStatusReader:
                          meta={"error_type": type(error).__name__})
             raise
         if not self.closed and generation == self.generation and key == self.key():
-            self.cached = (key, started + self.ttl, deepcopy(result))
+            # Retain a completed inspection long enough for the next viewer.
+            # Timing from scan start made slow results expire before publication,
+            # repeatedly timing out the browser's post-restart verification.
+            self.cached = (key, self.clock() + self.ttl, deepcopy(result))
         return key, generation, result
 
     async def read(self):

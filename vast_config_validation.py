@@ -9,8 +9,8 @@ from vast_worker_compatibility import worker_compatibility_errors
 
 SERVICE = 'Vast'
 MAX_ITERATIONS = 20_000_000
-PROFILE_IMAGE = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:3aa5c16b22a62983ec5dc46862c21c2d959856bf2362d4d9b39e3ded61f000cf'
-PROFILE_REVISION = 'b9d6692ea41266ecb4ab81d40bb5e5baef29b50a'
+PROFILE_IMAGE = 'ghcr.io/msei99/pbgui-pb8-worker@sha256:f5bc5f31c80b0d3e923aba2ca02cacc9d4980e20b63245c9ff24e999d7fb1d4a'
+PROFILE_REVISION = '15d6404f33bd5623d46a46e04ea694188ea7acea'
 _METRIC_CONTRACT = json.loads((Path(__file__).resolve().parent / 'setup/vast_gpu_benchmark/gpu_metric_contract.json').read_text())
 METRICS = frozenset(_METRIC_CONTRACT['allowed_metrics'])
 if METRICS.intersection(_METRIC_CONTRACT['exact_only_metrics']):

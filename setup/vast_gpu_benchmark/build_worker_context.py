@@ -1,5 +1,6 @@
 """Prepare an allowlisted PB8/PB9 Docker context using the single shared recipe."""
 import argparse
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -21,15 +22,28 @@ def prepare(runtime,output, *, revision=None, repository=None, reuse_runtime_bas
         raise ValueError('Worker revision must be a full Git commit')
     if repository not in {profile.repository, 'https://github.com/enarjord/passivbot'}:
         raise ValueError('Worker repository must be the configured or official source')
-    if reuse_runtime_base and (runtime != 'pb9' or not profile.published):
-        raise ValueError('Runtime reuse requires a published PB9 base')
+    if reuse_runtime_base and not profile.published:
+        raise ValueError('Runtime reuse requires a published base')
+    source=Path(__file__).resolve().parent
+    candidate = None
+    if reuse_runtime_base and runtime == 'pb8':
+        from vast_jobs import SUPPORTED_RENTAL_IMAGE_REVISIONS
+        candidate = json.loads((source/'worker_candidate_pb8_current.json').read_text())
+        if (revision != candidate['base_revision'] or repository != candidate['upstream_repository']
+                or candidate['runtime_base'] not in SUPPORTED_RENTAL_IMAGE_REVISIONS):
+            raise ValueError('PB8 source and runtime base must match the reviewed candidate')
+        for name, expected in candidate['build_input_sha256'].items():
+            if name not in {'pb8_current_worker.patch', 'pb8_current_Cargo.lock'}:
+                raise ValueError('Unsupported PB8 build input')
+            if hashlib.sha256((source/name).read_bytes()).hexdigest() != expected:
+                raise ValueError('PB8 build input checksum mismatch')
     output=Path(output)
     if output.exists():raise ValueError('Build context must be a new directory')
-    source=Path(__file__).resolve().parent
     recipe=(source/'Dockerfile').read_text()
-    from vast_jobs import REVISION
-    if recipe.count(REVISION)!=2:raise ValueError('Shared Docker revision contract changed')
-    recipe=recipe.replace(REVISION,revision)
+    base_revision = re.search(r'^ARG PB8_REVISION=([0-9a-f]{40})$', recipe, re.MULTILINE)
+    if not base_revision or recipe.count(base_revision[1])!=2:
+        raise ValueError('Shared Docker revision contract changed')
+    recipe=recipe.replace(base_revision[1],revision)
     recipe=recipe.replace('https://github.com/enarjord/passivbot.git', repository + '.git')
     if runtime == 'pb9':
         recipe=recipe.replace('git checkout --detach "$PB8_REVISION"',
@@ -44,8 +58,9 @@ def prepare(runtime,output, *, revision=None, repository=None, reuse_runtime_bas
                    'LABEL pbgui.worker.calibration="native-cohort-v1"\n')
     recipe=recipe.replace('WORKDIR /work',f'ENV PBGUI_WORKER_RUNTIME={runtime}\nWORKDIR /work')
     if reuse_runtime_base:
-        recipe = (source/'Dockerfile.pb9-runtime').read_text()
-        recipe = recipe.replace('%%BASE_IMAGE%%', profile.image).replace('%%REVISION%%', revision)
+        recipe = (source/f'Dockerfile.{runtime}-runtime').read_text()
+        runtime_base = candidate['runtime_base'] if candidate is not None else profile.image
+        recipe = recipe.replace('%%BASE_IMAGE%%', runtime_base).replace('%%REVISION%%', revision)
         recipe = recipe.replace('%%REPOSITORY%%', repository)
     output.mkdir(parents=True,mode=0o700)
     (output/'Dockerfile').write_text(recipe)
@@ -55,6 +70,11 @@ def prepare(runtime,output, *, revision=None, repository=None, reuse_runtime_bas
         for name in ('optimize_cli.py', 'pb9_optimize_options.py', 'vast_native_calibration.py'):
             shutil.copy2(ROOT/name, output/name)
         shutil.copy2(source/'verify_native_calibration.py', output/'verify_native_calibration.py')
+    if candidate is not None:
+        for name in (*candidate['build_input_sha256'], 'verify_pb8_current.py'):
+            shutil.copy2(source/name, output/name)
+        (output/'worker_candidate.json').write_text(json.dumps(candidate, indent=4)+'\n')
+        return output
     (output/'worker_candidate.json').write_text(json.dumps({
         'schema_version':1,'state':'unpublished_candidate','runtime':runtime,
         'upstream_repository':repository,

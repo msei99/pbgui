@@ -78,19 +78,39 @@
     executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
   changed_when: false
 
+- name: Compare prepared PB7 wheels with the installed runtime
+  script:
+    cmd: "pb_wheel_status.py {{ pbgdir | quote }} --matches-bundle pb7 --repo {{ pb7dir | quote }} --python {{ (pb7venv ~ '/bin/python') | quote }} --bundle {{ (pb7_wheel_remote_stage.path ~ '/bundle') | quote }} --commit {{ (pb7_wheel_source_commit | default(pb7_ref)) | quote }} --extras {{ ('full' if pb7_install_profile == 'full' else '') | quote }}"
+    executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
+  register: pb7_wheel_comparison
+  changed_when: false
+
+- name: Keep verified PB7 wheel comparison
+  set_fact:
+    pb7_wheel_match: "{{ pb7_wheel_comparison.stdout | from_json }}"
+
+- name: Report unchanged PB7 wheels
+  debug:
+    msg: "PB7 wheels are unchanged; skipping installation and bot restarts."
+  when: pb7_wheel_match.runtime_current | bool
+
 - name: Retire unneeded VPS Rust tools before PB7 capacity check
   script:
     cmd: "pb_wheel_status.py {{ pbgdir | quote }} --prepare-product pb7 --bundle {{ (pb7_wheel_remote_stage.path ~ '/bundle') | quote }} --commit {{ (pb7_wheel_source_commit | default(pb7_ref)) | quote }}"
     executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
   register: pb7_prepared_rust_cleanup
   changed_when: "(pb7_prepared_rust_cleanup.stdout | from_json).cleaned | default(false)"
-  when: pb7_install_profile == 'live'
+  when:
+    - pb7_install_profile == 'live'
+    - not pb7_wheel_match.runtime_current | bool
 
 - name: Seed reusable PB7 cache on target masters
   script:
     cmd: "pb8_wheels.py cache --product pb7 --bundle {{ (pb7_wheel_remote_stage.path ~ '/bundle') | quote }} --cache {{ (pbgdir ~ '/data/cache/pb7-wheels') | quote }}"
     executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
-  when: pb7_install_profile == 'full'
+  when:
+    - pb7_install_profile == 'full'
+    - not pb7_wheel_match.runtime_current | bool
   changed_when: false
 
 - name: Download binary PB7 dependencies before runtime changes
@@ -107,15 +127,18 @@
       - "{{ pb7_wheel_remote_stage.path }}/bundle"
       - "{{ pb7_wheel_remote_stage.path }}/bundle/{{ pb7_wheel_manifest.python_wheel }}{{ '[full]' if pb7_install_profile == 'full' else '' }}"
   changed_when: false
+  when: not pb7_wheel_match.runtime_current | bool
 
 - name: Check PB7 binary installation capacity
   script:
     cmd: "pb8_wheels.py capacity --product pb7 --bundle {{ (pb7_wheel_remote_stage.path ~ '/bundle') | quote }} --repo {{ pb7dir | quote }}"
     executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
   changed_when: false
+  when: not pb7_wheel_match.runtime_current | bool
 
 - name: Check PB7 receipt path before runtime changes
   script:
     cmd: "pb8_wheels.py receipt --receipt {{ (pbgdir ~ '/data/state/pb7-wheel.json') | quote }}"
     executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
   changed_when: false
+  when: not pb7_wheel_match.runtime_current | bool

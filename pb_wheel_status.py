@@ -10,8 +10,136 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import zipfile
+from email.parser import BytesParser
+from pathlib import PurePosixPath
 
 SERVICE = "PBWheelStatus"
+
+
+def matching_wheel_installation(pbgdir: Path, product: str, repo: Path, python: Path,
+                                bundle: Path, commit: str, extras: str = '') -> dict:
+    """Compare verified wheel contents without importing bot code or trusting a missing receipt."""
+    result = {'wheels_match': False, 'runtime_current': False}
+    if product not in {'pb7', 'pb8', 'pb9'} or not prepared_bundle_verified(bundle, product, commit):
+        raise ValueError('Cannot compare an unverified wheel bundle')
+    if not re.fullmatch(r'[a-z0-9,-]*', extras):
+        raise ValueError('Invalid wheel dependency extras')
+    if not python.is_file():
+        return result
+    # Only standard library / pip metadata is loaded in the target interpreter.
+    # Neither the checkout nor installed Passivbot modules are imported.
+    probe = r'''
+import importlib.metadata as md, json, re, sys, sysconfig
+print(json.dumps({'site': sysconfig.get_path('purelib'), 'version': list(sys.version_info[:2]),
+                  'distributions': {re.sub(r'[-_.]+', '-', d.metadata['Name']).lower(): d.version
+                                    for d in md.distributions() if d.metadata['Name']}}))
+'''
+    try:
+        info = json.loads(subprocess.check_output(
+            [str(python), '-I', '-B', '-c', probe], text=True, timeout=30,
+            stderr=subprocess.DEVNULL))
+        site = Path(info['site'])
+        venv = python.parent.parent.resolve()
+        if info['version'] != [3, 12] or not site.resolve().is_relative_to(venv):
+            return result
+        manifest = json.loads((bundle / 'manifest.json').read_text(encoding='utf-8'))
+        wheels = [name for name in manifest['artifacts'] if name.endswith('.whl')]
+        if len(wheels) != (1 if product == 'pb9' else 2):
+            raise ValueError('Unexpected wheel bundle layout')
+        requirements = []
+        binary_count = 0
+        expected_binaries = set()
+        for name in wheels:
+            with zipfile.ZipFile(bundle / name) as archive:
+                entries = archive.infolist()
+                if len(entries) > 20000 or sum(entry.file_size for entry in entries) > 1024**3:
+                    raise ValueError('Oversized wheel contents')
+                for entry in entries:
+                    path = PurePosixPath(entry.filename)
+                    if path.is_absolute() or '..' in path.parts or '\\' in entry.filename:
+                        raise ValueError('Unsafe wheel member')
+                    if entry.is_dir() or path.name == 'RECORD':
+                        continue  # Pip rewrites RECORD on installation.
+                    if (product in {'pb7', 'pb8'} and len(path.parts) == 1
+                            and path.name.startswith('passivbot_rust') and path.name.endswith('.so')):
+                        # Older wheels ship a second, flat extension. Some
+                        # installations retain it, others prune/synchronize it.
+                        flat = site / str(path)
+                        expected_binaries.add(flat)
+                        if flat.exists() or flat.is_symlink():
+                            if flat.is_symlink() or not flat.is_file():
+                                return result
+                            with archive.open(entry) as source, flat.open('rb') as target:
+                                value = hashlib.file_digest(target, 'sha256').hexdigest()
+                                if value not in {hashlib.file_digest(source, 'sha256').hexdigest(),
+                                                 manifest.get('extension_sha256')}:
+                                    return result
+                        continue
+                    parts = path.parts
+                    if parts and parts[0].endswith('.data'):
+                        if len(parts) < 3 or parts[1] not in {'purelib', 'platlib'}:
+                            return result  # Unsupported install schemes must not be guessed.
+                        path = PurePosixPath(*parts[2:])
+                    installed = site.joinpath(*path.parts)
+                    if (installed.is_symlink() or not installed.is_file()
+                            or not installed.resolve().is_relative_to(site.resolve())):
+                        return result
+                    with archive.open(entry) as source, installed.open('rb') as target:
+                        if hashlib.file_digest(source, 'sha256').digest() != hashlib.file_digest(target, 'sha256').digest():
+                            return result
+                    if path.name.endswith('.so') and 'passivbot_rust' in str(path):
+                        binary_count += 1
+                        expected_binaries.add(installed)
+                    if path.name == 'METADATA' and '.dist-info' in str(path):
+                        requirements.extend(BytesParser().parsebytes(archive.read(entry)).get_all('Requires-Dist', []))
+        if binary_count != 1:
+            return result
+        binaries = list((site / 'passivbot_rust').glob('passivbot_rust*.so')) + list(site.glob('passivbot_rust*.so'))
+        canonical = (binaries if product == 'pb9' else
+                     [binary for binary in binaries if binary.parent.name == 'passivbot_rust'])
+        if len(canonical) != 1 or any(binary not in expected_binaries for binary in binaries):
+            return result
+        result['wheels_match'] = True
+        # The base/live and full research profiles can share the same wheel,
+        # but a missing optional dependency still needs a dependency-only install.
+        try:
+            from packaging.markers import default_environment
+            from packaging.requirements import Requirement
+        except ImportError:
+            from pip._vendor.packaging.markers import default_environment
+            from pip._vendor.packaging.requirements import Requirement
+        environments = [dict(default_environment(), extra=extra) for extra in ['', *filter(None, extras.split(','))]]
+        for raw in requirements:
+            requirement = Requirement(raw)
+            if requirement.marker and not any(requirement.marker.evaluate(env) for env in environments):
+                continue
+            version = info['distributions'].get(re.sub(r'[-_.]+', '-', requirement.name).lower())
+            if version is None or not requirement.specifier.contains(version, prereleases=True):
+                return result
+        env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+        env.update(GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
+        actual = subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'],
+                                         text=True, timeout=10, stderr=subprocess.DEVNULL, env=env).strip()
+        changes = subprocess.check_output(['git', '-C', str(repo), 'status', '--porcelain', '--untracked-files=no'],
+                                          text=True, timeout=10, stderr=subprocess.DEVNULL, env=env).strip()
+        config = configparser.ConfigParser()
+        config.read(pbgdir / 'pbgui.ini')
+        marker = pbgdir / f'data/locks/{product}-runtime-invalid'
+        cli = python.parent / 'passivbot'
+        stamp = canonical[0].with_name(canonical[0].name + '.rust-src-sha256')
+        result['runtime_current'] = bool(
+            actual == commit and not changes and not marker.exists() and not marker.is_symlink()
+            and cli.is_file() and os.access(cli, os.X_OK)
+            and stamp.is_file() and not stamp.is_symlink()
+            and stamp.read_text(encoding='utf-8').strip() == manifest.get('source_fingerprint')
+            and (repo / 'passivbot-rust/Cargo.lock').read_bytes() == (bundle / 'Cargo.lock').read_bytes()
+            and config.get('main', product + 'dir', fallback='') == str(repo)
+            and config.get('main', product + 'venv', fallback='') == str(python))
+        return result
+    except (OSError, ValueError, TypeError, KeyError, configparser.Error,
+            zipfile.BadZipFile, subprocess.SubprocessError):
+        return result
 
 
 def wheel_installed(pbgdir: Path, product: str, repo: Path, python: Path) -> bool:
@@ -206,8 +334,16 @@ def main() -> None:
     parser.add_argument("--bundle", type=Path)
     parser.add_argument("--commit")
     parser.add_argument("--current-commit")
+    parser.add_argument("--matches-bundle", choices=["pb7", "pb8", "pb9"])
+    parser.add_argument("--extras", default='')
     args = parser.parse_args()
-    if args.check_product:
+    if args.matches_bundle:
+        if (args.check_product or args.prepare_product or args.current_commit
+                or args.repo is None or args.python is None or args.bundle is None or args.commit is None):
+            parser.error('--matches-bundle requires --repo, --python, --bundle and --commit')
+        result = matching_wheel_installation(args.pbgdir, args.matches_bundle, args.repo,
+                                             args.python, args.bundle, args.commit, args.extras)
+    elif args.check_product:
         if args.prepare_product or args.bundle or args.commit:
             parser.error("--check-product cannot be combined with prepared wheel cleanup")
         if args.repo is None or args.python is None:

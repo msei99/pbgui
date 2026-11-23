@@ -1,0 +1,54 @@
+{
+    "schema_version": 1,
+    "state": "locally_built_unpublished",
+    "image": "pbgui-pb8-worker:15d6404-current-candidate",
+    "image_id": "sha256:72334f449d26535fd9b1c943b6ba05517b32c3c675965eddc43b716be9aad90b",
+    "size_bytes": 7600792358,
+    "pb8_revision": "15d6404f33bd5623d46a46e04ea694188ea7acea",
+    "config_schema": "v8.6.0",
+    "source_fingerprint": "25ab6c28a3379eb067b55c2702e504d8f26c3dbd29898ad7a7654857d04bf089",
+    "candidate_metadata_sha256": "06c2497242b1d93d7098fbe2030db07adb39a7e6830f8ff2d28497f9b2e028a1",
+    "validation": {
+        "rust_backtest_tests": {
+            "passed": 45
+        },
+        "rust_hsl_tests": {
+            "passed": 89
+        },
+        "pbgui_build_contract_tests": {
+            "passed": 60,
+            "deselected": 19
+        },
+        "official_optimizer_suite_tests": {
+            "passed": 996,
+            "files": [
+                "tests/optimization/test_gpu_backend.py",
+                "tests/optimization/test_gpu_service.py",
+                "tests/optimization/test_gpu_decimal_metadata.py",
+                "tests/test_suite_runner.py"
+            ],
+            "network": "disabled",
+            "data": "isolated container fixtures"
+        },
+        "container_offline": {
+            "revision": "15d6404f33bd5623d46a46e04ea694188ea7acea",
+            "schema": "v8.6.0",
+            "source_fingerprint": "25ab6c28a3379eb067b55c2702e504d8f26c3dbd29898ad7a7654857d04bf089",
+            "worker_sha256": "860f7203df65af0ce06e0bdcc002a265d22a5e312b4fddb65e81f02f1a11e7c0",
+            "population_seeds": 3,
+            "checkpoint_restore": true,
+            "gpu_hardware_test": "not run"
+        },
+        "gpu_hardware": "not run",
+        "unrelated_pb9_api_tests": "Two broader runs waited at the unchanged first PB9 API test and were stopped; focused build-contract selection completed."
+    },
+    "publication": {
+        "published": false,
+        "registry_digest": null,
+        "anonymous_pull_verified": false
+    },
+    "active_contract_changed": false,
+    "rental_started": false,
+    "installed_bot_sources_changed": false,
+    "pbrun_changed": false
+}

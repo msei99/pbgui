@@ -42,6 +42,7 @@ _NATIVE_OPERATIONS = _NATIVE_OPERATIONS | frozenset('opt9_' + name for name in (
 MAX_VALIDATION_BODY_BYTES = MAX_DOCUMENT_BYTES
 MAX_JSON_DEPTH = 64
 _VALIDATION_ERRORS = frozenset({"invalid_request", "invalid_document", "invalid_config",
+                                "incompatible_pb9_config", "gpu_policy_unsupported",
                                 "config_version_mismatch", "external_reference_rejected",
                                 "native_config_rejected", "invalid_config_name", "invalid_revision", "runtime_paths_invalid"})
 _PATH_KEYS = ("pb9dir", "pb9venv", "pb7dir", "pb7venv", "pb8dir", "pb8venv")
@@ -51,6 +52,8 @@ def _error(status: int, code: str, detail: str, *, busy: bool = False) -> HTTPEx
     """Build a fixed, uncached API error without native diagnostics or paths."""
     if code == 'runtime_not_detected':
         detail = 'PB9 runtime is unavailable. Open System > Welcome > Setup to check the PB9 source and Python environment.'
+    if code in {'incompatible_pb9_config', 'runtime_upgrade_required', 'gpu_policy_unsupported'}:
+        detail = str(PB9ConfigError(code))
     headers = {"Cache-Control": "no-store", "X-PBGUI-Error-Codes": code}
     if busy:
         headers["Retry-After"] = "1"

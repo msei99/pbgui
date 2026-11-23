@@ -18,6 +18,36 @@ SERVICE = "PB9ConfigHelper"
 MAX_REQUEST_BYTES = 16384
 MAX_VALIDATION_BYTES = 1024 * 1024
 MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+INCOMPATIBLE_PB9_MESSAGE = (
+    "This PB9 development config uses the retired pre-PR #2318 risk layout. "
+    "It cannot be edited, queued, started or resumed. Delete it and create a new config "
+    "from the current PB9 template. No automatic migration is performed."
+)
+
+
+def incompatible_pb9_layout(document) -> bool:
+    """Detect retired risk paths in authored configs, bounds and inline patches, without mutation."""
+    retired = re.compile(
+        r"(?:^|\.)(?:global|long|short|\*)\.(?:hsl|unstuck)(?:\.|$)"
+        r"|(?:^|\.)portfolio\.(?:hsl|unstuck|loss_gate)(?:\.|$)"
+        r"|(?:^|[._])unstuck[._](?:close_fraction|close_pct)(?:\.|$)"
+        r"|(?:^|\.)(?:unstuck|loss_gate)_memory_ema_span_minutes(?:\.|$)"
+    )
+
+    def walk(node, prefix=""):
+        """Inspect paths rather than string values, preserving result and UI text."""
+        if isinstance(node, dict):
+            for key, value in node.items():
+                path = prefix + "." + key if prefix else key
+                if retired.search(path) or walk(value, path):
+                    return True
+        elif isinstance(node, list):
+            return any(walk(value, prefix) for value in node)
+        elif isinstance(node, str) and prefix.endswith('.fixed_params'):
+            return bool(retired.search(node))
+        return False
+
+    return walk(document)
 
 
 class _HelperError(RuntimeError):
@@ -146,6 +176,8 @@ def check_inline_config(config: dict, expected_schema: str | None = None, *, all
 
     try:
         walk(config)
+        if incompatible_pb9_layout(config):
+            raise _HelperError("incompatible_pb9_config")
     except RecursionError as exc:
         raise _HelperError("invalid_config") from exc
 
@@ -164,6 +196,8 @@ def _exchange_metadata(src: Path) -> dict:
 
 def _editor_metadata(schema, src: Path) -> dict:
     """Describe native fields and strategies without coupling to the PB8 schema."""
+    if incompatible_pb9_layout(schema.get_template_config()):
+        raise _HelperError('runtime_upgrade_required')
     def arrays(value):
         """Rust tuples serialize as arrays; preserve every other JSON type exactly."""
         if isinstance(value, (tuple, list)):
@@ -326,7 +360,8 @@ def _migrate_v8(envelope, src, schema_version):
                                            best_effort=True, disabled_sides='preserve', bot_layout='preserve')
                 check_inline_config(result.config, schema_version, allow_inline_overrides=True)
             except (ValueError, TypeError, KeyError, _HelperError) as exc:
-                message = ''.join(c if ord(c) >= 32 else ' ' for c in str(exc))
+                message = (INCOMPATIBLE_PB9_MESSAGE if str(exc) == 'incompatible_pb9_config' else
+                           ''.join(c if ord(c) >= 32 else ' ' for c in str(exc)))
                 return {'status': 'blocked', 'message': message.replace(str(root), '[migration]')[:2000]}, module_file
             report = {'source_version': envelope['config']['config_version'], 'target_version': schema_version,
                       'mode': 'best_effort', 'changes': result.changes, 'warnings': list(result.warnings)}
@@ -617,6 +652,14 @@ def handle(request: dict) -> dict:
                 if request["operation"] in {"validate_optimize", "optimize_cloud_plan", "optimize_effective"}:
                     from optimization.config_adapter import extract_bounds_tuple_list_from_config
                     extract_bounds_tuple_list_from_config(prepared)
+                if (request["operation"] in {"validate_optimize", "optimize_cloud_plan"}
+                        and prepared.get('optimize', {}).get('backend') == 'gpu'):
+                    from simulation_preparation import validate_optimizer_preparation
+                    from suite_runner import extract_suite_config
+                    try:
+                        validate_optimizer_preparation(prepared, extract_suite_config(prepared, None))
+                    except ValueError as exc:
+                        raise _HelperError('gpu_policy_unsupported') from exc
                 if not isinstance(prepared, dict) or prepared.get("config_version") != schema_version:
                     raise _HelperError("runtime_identity_mismatch")
             except _HelperError:
@@ -638,6 +681,8 @@ def handle(request: dict) -> dict:
         _require_json_value(config)
     except RecursionError as exc:
         raise _HelperError("invalid_template") from exc
+    if incompatible_pb9_layout(config):
+        raise _HelperError('runtime_upgrade_required')
     return {"config": config, "config_schema": schema_version, "package_version": package_version,
             "schema_module_file": schema_file, "version_module_file": version_file}
 

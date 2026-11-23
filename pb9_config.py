@@ -16,7 +16,7 @@ import time
 
 from logging_helpers import human_log as _log
 from pb9_runtime import inspect_pb9_runtime
-from pb9_config_helper import DIAGNOSTIC_KINDS, DIAGNOSTIC_STAGES, MAX_VALIDATION_BYTES, _HelperError, _require_json_value, check_inline_config, check_migration_input
+from pb9_config_helper import DIAGNOSTIC_KINDS, DIAGNOSTIC_STAGES, MAX_VALIDATION_BYTES, INCOMPATIBLE_PB9_MESSAGE, _HelperError, _require_json_value, check_inline_config, check_migration_input
 
 
 SERVICE = "PB9Config"
@@ -27,6 +27,7 @@ _SUPPORTED_PLATFORM = sys.platform.startswith("linux") and hasattr(os, "waitid")
 _ENV_KEYS = {"PATH", "HOME", "LANG", "LC_ALL", "LC_CTYPE", "SYSTEMROOT", "WINDIR",
              "TMPDIR", "TMP", "TEMP", "TZ"}
 _HELPER_CODES = {"invalid_request", "runtime_identity_mismatch", "native_template_failed",
+                 "incompatible_pb9_config", "gpu_policy_unsupported", "runtime_upgrade_required",
                  "helper_output_limit", "invalid_template", "invalid_config", "config_version_mismatch",
                  "external_reference_rejected", "native_config_rejected", "native_validation_failed", "native_metadata_failed", "native_ohlcv_failed",
                  "ohlcv_metadata_missing", "ohlcv_coins_required", "ohlcv_pair_limit", "ohlcv_dataset_override"}
@@ -39,7 +40,12 @@ class PB9ConfigError(RuntimeError):
         """Keep codes available for later authenticated API error mapping."""
         self.error_codes = (code,)
         self.diagnostic = {}
-        super().__init__("PB9 config request failed: " + code)
+        message = (INCOMPATIBLE_PB9_MESSAGE if code == 'incompatible_pb9_config' else
+                   'Update the separate PB9 runtime: PBGui requires the current post-PR #2318 risk layout.'
+                   if code == 'runtime_upgrade_required' else
+                   'GPU execution does not support this PB9 risk policy. Use the CPU backend; no settings were changed.'
+                   if code == 'gpu_policy_unsupported' else "PB9 config request failed: " + code)
+        super().__init__(message)
 
 
 class PB9CancelSignal:

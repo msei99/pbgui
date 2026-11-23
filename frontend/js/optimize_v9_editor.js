@@ -14,7 +14,7 @@
     'backtest.market_order_slippage_pct':'backtest.market_order_slippage_fraction',
     'backtest.limit_order_fill_buffer_pct':'backtest.limit_order_fill_buffer_fraction',
     'live.strategy_kind':'bot.portfolio.strategy_kind',
-    'live.hsl_signal_mode':'bot.portfolio.hsl.scope',
+    'live.hsl_signal_mode':'bot.portfolio.risk.hsl.scope',
     'live.minimum_coin_age_days':'bot.global.universe.minimum_coin_age_days',
     'optimize.pymoo.shared.crossover_eta':'optimize.pymoo.shared.crossover_distribution_index',
     'optimize.pymoo.shared.crossover_prob_var':'optimize.pymoo.shared.crossover_probability_per_variable',
@@ -156,12 +156,13 @@
         var body=document.createElement('div');body.id='opt9-policy-'+scope;card.appendChild(body);
         var fields=metadata.fields.filter(function(field){
           return field.path[0]==='bot' && field.path[1]===scope && field.path.indexOf('*')<0
-            && field.path.join('.')!=='bot.portfolio.strategy_kind' && field.path.join('.')!=='bot.portfolio.hsl.scope'
+            && field.path.join('.')!=='bot.portfolio.strategy_kind' && field.path.join('.')!=='bot.portfolio.risk.hsl.scope'
             && (field.types.some(function(type){return type==='boolean' || type==='string';})
-              || (scope==='portfolio' && ['hsl','loss_gate','unstuck'].includes(field.path[2]))
+              || (scope==='portfolio' && field.path[2]==='risk')
               || fixedOnlyNumber(field))
             && field.path.indexOf('universe')<0;
-        }).map(function(field){return {field:field,label:field.path.slice(2).join('.'),showExplicit:false,hideUnit:true};});
+        }).map(function(field){return {field:field,label:field.path.slice(2).join('.'),
+          showExplicit:field.path.join('.')==='bot.portfolio.risk.loss_realization.loss_gate.max_realized_drawdown_fraction',hideUnit:true};});
         policyRenderer.mount(body.id,[{id:scope,groups:[{columns:2,fields:fields}]}],{});
       });
       policyRenderer.populate(source);
@@ -602,7 +603,7 @@
       var parts = key.split('.');
       if (parts[0] !== scope) return false;
       if (parts[1] === 'strategy' && parts[2] !== strategy) return false;
-      return parts[1] !== 'hsl' || (scope === 'portfolio') === (hslScope === 'portfolio');
+      return !(parts[1] === 'risk' && parts[2] === 'hsl') || (scope === 'portfolio') === (hslScope === 'portfolio');
     });
   }
 

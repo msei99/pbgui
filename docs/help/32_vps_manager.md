@@ -1,5 +1,7 @@
 # VPS Manager
 
+PB7, PB8 and PB9 updates compare the verified wheel contents with the installed Python and Rust files. An unchanged, valid runtime is reported as unchanged and does not reinstall dependencies or restart bots/PBRun. A missing deployment receipt or stopped PBRun alone does not force wheel replacement. Missing optional dependencies can be installed without reinstalling identical bot wheels. Changed or missing wheel files still require installation and validation; checks may prepare or transfer a cached bundle before reporting an unchanged runtime.
+
 The Wheel update warning verifies the installed source commit and Rust binary against the deployment receipt; it does not mean a new Passivbot version was published. Legacy flat and package-layout Rust copies are accepted together only when every copy matches the receipt. No files are removed to clear the indicator.
 
 Installed systemd services count as migrated even when stopped or autostart is disabled. Use the existing Services Start/Stop and Enable/Disable controls to manage those states; they do not require another migration. Missing required units or remaining legacy startup files still require migration.
@@ -142,7 +144,9 @@ PB8 uses `<install_dir>/pb8` and `<install_dir>/venv_pb8`, validates the PB8 CLI
 
 A first remote PB7 installation requires at least 512 MiB free before the Git checkout. The playbook separately checks unpacked wheel and dependency capacity before stopping bots. PB7 wheels are built on the controlling master and copied to the target; the VPS does not run rustup or compile Rust. Existing installations remain updateable below the initial reserve if the binary capacity check passes. The PB7/PB8 version column shows **Wheel update** until its checkout and installed Rust binary match a validated wheel receipt. After both installed runtimes use verified wheels, the VPS update removes their Rust build targets, unused account Rust/Cargo toolchain and caches, and the obsolete Ubuntu `rustup` package. An unrelated Rust toolchain or Cargo binary keeps shared tools in place; masters keep their build tools.
 
-Overview bulk updates follow what is installed on each selected VPS. **Update Passivbot (PB7/PB8)** and **Update PBGui + Passivbot (PB7/PB8)** dispatch PB7-only hosts to PB7 playbooks, PB8-only hosts to PB8 playbooks, and combined hosts to ordered PB7+PB8 playbooks. Mixed selections therefore retain one parallel or sequential rollout without applying PB7 tasks to PB8-only hosts. Rollout action, mode, debug, and reboot selections are saved immediately and restored after a page reload.
+Overview bulk updates follow what is installed on each selected host. **Update Passivbot (PB7/PB8/PB9)** and **Update PBGui + Passivbot (PB7/PB8/PB9)** update the installed generations in PB7, PB8, PB9 order using their existing guarded playbooks. PB9 participates only when fresh telemetry confirms its installation; the bulk action does not add PB9 to other hosts or add PB7/PB8 to a PB9-only host. Mixed selections retain one parallel or sequential rollout, including remote masters. Combined updates run PBGui first and retain its deferred API restart until the complete runner exits. Rollout action, mode, debug, and reboot selections are saved immediately and restored after a page reload.
+
+Deployment progress includes imported runtime playbooks and their wheel tasks. It follows task positions, not elapsed time: a long download or build can keep the same percentage until the next task. Early handler runs do not advance to the end of the plan; completion is confirmed by the terminal run outcome.
 Combined local-master PBGui/runtime updates defer the API restart until every imported runtime update and validation step has finished. The command log remains open during this work and receives its terminal status before the API restarts.
 Successful Master PBGui updates also restart an active PBRun controller so it adopts the new code serial automatically; intentionally stopped PBRun services remain stopped.
 When PB8 is not installed, **Install PB8** is shown as a filled blue action so it remains distinct from routine update buttons.
@@ -368,3 +372,5 @@ PB9 readiness. Remote actions require an explicit host action; merely opening
 this view performs no installation. Target hosts need the updated PBGui helper
 files before they can use this workflow. Default-path local uninstall includes
 `pb9` and `venv_pb9` under the selected parent, as stated in its confirmation.
+
+The shared local-master and remote-host header includes a **PB9** card with version, branch and readiness. Presence of PB9 files does not establish compatibility: older pre-PR #2318 risk layouts show **Update PB9**; missing layout evidence shows compatibility as unknown. These states also highlight the Update PB9 action. Status updates preserve the current view.

@@ -1527,6 +1527,10 @@ class OptimizeEngine:
         stat = path.stat()
         return (stat.st_dev, stat.st_ino, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_size)
 
+    def _config_compatibility_error(self, config: dict) -> str:
+        """Allow native profiles to mark incompatible files without loading a runtime."""
+        return ''
+
     def _config_summary(self, name: str, path: Path) -> tuple[dict, dict, tuple]:
         """Cache lightweight metadata only while the validated file identity matches."""
         identity = self._file_identity(path)
@@ -1542,6 +1546,9 @@ class OptimizeEngine:
         live = config.get('live') if isinstance(config.get('live'), dict) else {}
         summary = {'name': name, 'exchange': backtest.get('exchanges') or [], 'start_date': backtest.get('start_date') or '', 'end_date': backtest.get('end_date') or '', 'strategy': self._strategy_kind(config), 'seed_mode': seed_mode, 'seed_source': seed_source, 'modified': self.datetime.datetime.fromtimestamp(path.stat().st_mtime).isoformat()}
         count_config = {'backtest': {'base_dir': backtest.get('base_dir')}}
+        compatibility_error = self._config_compatibility_error(config)
+        if compatibility_error:
+            summary.update(invalid=True, config_error=compatibility_error)
         if self._file_identity(path) == identity:
             with self._config_summary_cache_lock:
                 self._config_summary_cache[key] = {'identity': identity, 'summary': self.copy.deepcopy(summary), 'count_config': count_config}

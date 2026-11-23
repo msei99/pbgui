@@ -419,6 +419,7 @@ def test_proxy_hydrates_system_metrics_only_for_new_revision() -> None:
     """Polling turns serialized metrics back into SystemMetrics and honors revisions."""
     state = {
         "boot_id": "boot-1",
+        "code_serial": "2052",
         "revision": 4,
         "enabled_hosts": ["vps-1"],
         "alert_settings": {"offline_gui": True},
@@ -444,6 +445,7 @@ def test_proxy_hydrates_system_metrics_only_for_new_revision() -> None:
         assert proxy.get_upstream_release_status()["repositories"]["pb7"]["target_commit"] == "b" * 40
         assert proxy.upstream_release_capability is True
         assert proxy.package_check_capability is True
+        assert proxy.code_serial == "2052"
         proxy.store.changed.clear()
         state["store"]["system"]["vps-1"]["cpu"] = 99.0
         assert await proxy._poll_once() is True
@@ -487,6 +489,20 @@ def test_daemon_exposes_and_refreshes_upstream_release_snapshot() -> None:
     assert state["capabilities"] == ["host.check_package"]
     assert refreshed is True
     assert ("release-refresh", None) in monitor.calls
+
+
+def test_monitor_serial_is_fixed_at_daemon_start_and_missing_legacy_is_unknown() -> None:
+    """Readiness reports the loaded generation, never an updated serial from disk."""
+    daemon = VPSMonitorRPCDaemon(monitor=FakeMonitor(), streamer=FakeStreamer(), code_serial="2051")
+    state = daemon._state_snapshot()
+    assert state["code_serial"] == "2051"
+    assert daemon._state_snapshot()["code_serial"] == "2051"
+    proxy = VPSMonitorProxy(client=StateClient(state))
+    assert asyncio.run(proxy._poll_once()) is True
+    assert proxy.code_serial == "2051"
+    del state["code_serial"]
+    assert asyncio.run(proxy._poll_once()) is True
+    assert proxy.code_serial == ""
 
 
 def test_api_proxy_stop_never_requests_daemon_shutdown() -> None:

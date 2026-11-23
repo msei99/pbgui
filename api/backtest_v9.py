@@ -680,8 +680,11 @@ def _operation(operation, cancel, payload=None):
             if _root('configs').is_dir():
                 for path in sorted(_root('configs').glob('*/config.json')):
                     config = _read(_cfg_path(path.parent.name))
+                    from pb9_config_helper import incompatible_pb9_layout, INCOMPATIBLE_PB9_MESSAGE
+                    incompatible = incompatible_pb9_layout(config)
                     bt, bot = config.get('backtest', {}), config.get('bot', {})
-                    results.append({'name': path.parent.name, 'exchanges': bt.get('exchanges', []),
+                    results.append({'name': path.parent.name, 'invalid': incompatible,
+                        'config_error': INCOMPATIBLE_PB9_MESSAGE if incompatible else '', 'exchanges': bt.get('exchanges', []),
                         'strategy': bot.get('portfolio', {}).get('strategy_kind', ''), 'coins': _configured_coins_count(config),
                         'twe_long': _side_risk(config, 'long').get('total_wallet_exposure_limit_ratio', 0),
                         'twe_short': _side_risk(config, 'short').get('total_wallet_exposure_limit_ratio', 0), 'start_date': bt.get('start_date'), 'end_date': bt.get('end_date'),

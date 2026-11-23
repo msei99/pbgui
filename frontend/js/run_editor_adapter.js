@@ -46,7 +46,6 @@
     'f-min-coin-age': ['bot', 'global', 'universe', 'minimum_coin_age_days'],
     'f-v9-risk-lookback': ['live', 'startup', 'risk_bootstrap_max_lookback_minutes'],
     'f-warmup-ratio': ['bot', 'portfolio', 'warmup', 'activation_span_fraction'],
-    'f-max-loss-pct': ['bot', 'portfolio', 'loss_gate', 'max_drawdown_fraction'],
     'f-price-dist': ['live', 'execution', 'limit_order_create_max_market_distance_fraction'],
     'f-exec-delay': ['live', 'execution', 'execution_delay_seconds'],
     'f-market-order-threshold': ['bot', 'portfolio', 'execution', 'market_order_near_touch_fraction'],
@@ -609,6 +608,11 @@
           element.classList.remove('run-version-hidden');
         });
         hideUnsupportedActions(this);
+        // The new gate has independent enablement and an optional dormant cap.
+        // Keep them together in the schema-driven Portfolio group, rather than
+        // forcing an absent cap through the legacy always-present numeric input.
+        var oldLossInput = document.getElementById('f-max-loss-pct');
+        if (oldLossInput) oldLossInput.closest('.form-group').classList.add('run-version-hidden');
         var title = document.querySelector('.sb-title');
         if (title) title.textContent = 'Edit PB9 Instance';
         document.title = 'PBv9 Edit';

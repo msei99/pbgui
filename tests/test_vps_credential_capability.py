@@ -427,7 +427,11 @@ def test_v7_frontend_keeps_host_selection_simple_and_secret_free() -> None:
     assert "hostCmcStatusLabel" not in source
     assert "hostDynamicIgnoreAllowed" not in source
     assert "opt.textContent = h;" in source
-    assert source.count("refreshHostCapabilities();") == 1
+    # One initial request plus the shared automatic update path are intentional.
+    # Inspect their owners separately rather than treating live updates as duplicates.
+    automatic_update = source.index('  async function update() {')
+    assert source[:automatic_update].count("refreshHostCapabilities();") == 1
+    assert source[automatic_update:].count("refreshHostCapabilities();") == 1
     assert "document.getElementById('f-enabled-on').addEventListener('focus'" in source
     assert LEGACY_FIELD not in source
 

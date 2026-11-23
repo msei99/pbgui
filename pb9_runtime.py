@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import configparser
 import os
 from pathlib import Path
@@ -13,6 +14,46 @@ from passivbot_runtime import classify_passivbot_source
 
 SERVICE = "PB9Runtime"
 _SLOT_KEYS = ("pb7dir", "pb7venv", "pb8dir", "pb8venv")
+
+
+def pb9_source_config_layout(repo_dir) -> str:
+    """Inspect canonical default keys without importing or executing Passivbot code."""
+    try:
+        if repo_dir is None or not str(repo_dir).strip():
+            return 'unknown'
+        root = _absolute_path(repo_dir)
+        path = root / 'src/config/bot_defaults.py'
+        resolved = path.resolve()
+        if root not in resolved.parents or not resolved.is_file():
+            return 'unknown'
+        with resolved.open('rb') as stream:
+            source = stream.read(262145)
+        if len(source) > 262144:
+            return 'unknown'
+        module = ast.parse(source.decode('utf-8-sig'))
+        functions = [node for node in module.body if isinstance(node, ast.FunctionDef)
+                     and node.name == 'get_common_bot_defaults']
+        if len(functions) != 1:
+            return 'unknown'
+        returns = [node.value for node in functions[0].body if isinstance(node, ast.Return)]
+        if len(returns) != 1 or not isinstance(returns[0], ast.Dict):
+            return 'unknown'
+        tree = returns[0]
+        keys = [node.value for node in tree.keys if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+        if len(keys) != len(tree.keys) or len(keys) != len(set(keys)):
+            return 'unknown'
+        if 'hsl' in keys or 'unstuck' in keys:
+            return 'legacy'
+        values = dict(zip(keys, tree.values))
+        risk = values.get('risk')
+        if isinstance(risk, ast.Dict):
+            child_keys = [node.value for node in risk.keys if isinstance(node, ast.Constant) and isinstance(node.value, str)]
+            children = set(child_keys)
+            if len(child_keys) == len(risk.keys) == len(children) and {'hsl', 'unstuck'} <= children:
+                return 'current'
+    except (OSError, ValueError, RuntimeError, TypeError, SyntaxError, UnicodeError, RecursionError):
+        pass
+    return 'unknown'
 
 
 class PB9RuntimePathError(ValueError):

@@ -9,7 +9,7 @@
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/backtest_shell.js?v=5"></script>
 <script src="/app/js/backtest_editor_adapter.js?v=21"></script>
-<script src="/app/js/backtest_v9_editor.js?v=22"></script>
+<script src="/app/js/backtest_v9_editor.js?v=23"></script>
 <script src="/app/js/backtest_v9_migration.js?v=2" defer></script>
 <script src="/app/js/backtest_advanced_fields.js?v=2"></script>
   <link rel="stylesheet" href="/app/css/sidebar.css?v=6">
@@ -2050,7 +2050,7 @@ function renderConfigs() {
       '<button class="act-btn convert-v8-btn" data-config-name="' + esc(c.name) + '" title="Convert to V8">V8</button> ';
     if (backtestEditorAdapter.isV8) convertAction += '<button class="act-btn" data-migrate-pb9="config" data-config-name="' + esc(c.name) + '" title="Open as PB9 Backtest">V9</button> ';
     html += '<tr data-name="' + esc(c.name) + '">' +
-      '<td title="' + esc(c.name) + '">' + esc(c.name) + '</td>' +
+      '<td title="' + esc(c.config_error || c.name) + '">' + esc(c.name) + (c.invalid ? ' — Incompatible PB9 config; delete and recreate' : '') + '</td>' +
       '<td>' + esc(Array.isArray(c.exchanges) ? c.exchanges.join(', ') : c.exchanges) + '</td>' +
       ((backtestEditorAdapter.isV8 || backtestEditorAdapter.metadataDriven) ? '<td>' + esc(c.strategy || '-') + '</td>' : '') +
       '<td>' + c.coins + '</td>' +
@@ -2060,8 +2060,8 @@ function renderConfigs() {
       '<td class="results-count-cell" onclick="event.stopPropagation();viewConfigResults(\'' + esc(c.name) + '\')" title="Open results" style="cursor:pointer;color:' + (c.results ? '#63b3ed' : '#64748b') + ';font-weight:' + (c.results ? '600' : 'normal') + '">' + c.results + '</td>' +
       '<td>' + fmtDate(c.modified) + '</td>' +
       '<td class="actions-cell">' +
-        '<button class="act-btn" onclick="editConfig(\'' + esc(c.name) + '\')" title="Edit">✏️</button> ' +
-        '<button class="act-btn" onclick="addConfigToQueue(\'' + esc(c.name) + '\')" title="Add to Queue">▶</button> ' +
+        '<button class="act-btn" onclick="editConfig(\'' + esc(c.name) + '\')" title="Edit"' + (c.invalid ? ' disabled' : '') + '>✏️</button> ' +
+        '<button class="act-btn" onclick="addConfigToQueue(\'' + esc(c.name) + '\')" title="Add to Queue"' + (c.invalid ? ' disabled' : '') + '>▶</button> ' +
         convertAction +
         '<button class="act-btn" onclick="event.stopPropagation();viewConfigResults(\'' + esc(c.name) + '\')" title="View Results">📊</button>' +
       '</td></tr>';

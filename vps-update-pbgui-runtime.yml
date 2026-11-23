@@ -1,0 +1,4 @@
+---
+# Keep the existing deferred API restart until the complete runner has finished.
+- import_playbook: vps-update-pbgui.yml
+- import_playbook: vps-update-runtime.yml

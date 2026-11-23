@@ -1,0 +1,43 @@
+# Refresh official PB8 sources; retain the published CUDA dependencies and worker.
+FROM rust:1.90-bookworm AS rust
+FROM %%BASE_IMAGE%% AS build
+COPY --from=rust /usr/local/cargo /usr/local/cargo
+COPY --from=rust /usr/local/rustup /usr/local/rustup
+ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
+ENV PATH=/usr/local/cargo/bin:$PATH
+RUN apt-get update && apt-get install -y --no-install-recommends git build-essential && rm -rf /var/lib/apt/lists/*
+RUN rm -rf /opt/passivbot && git init /opt/passivbot \
+    && git -C /opt/passivbot fetch --depth=1 %%REPOSITORY%%.git %%REVISION%% \
+    && git -C /opt/passivbot checkout --detach FETCH_HEAD \
+    && test "$(git -C /opt/passivbot rev-parse HEAD)" = "%%REVISION%%"
+COPY pb8_current_worker.patch pb8_current_Cargo.lock worker_candidate.json /tmp/pb8-inputs/
+RUN cd /opt/passivbot \
+    && python -c 'import hashlib,json,pathlib; p=pathlib.Path("/tmp/pb8-inputs"); m=json.loads((p/"worker_candidate.json").read_text()); assert all(hashlib.sha256((p/n).read_bytes()).hexdigest()==h for n,h in m["build_input_sha256"].items())' \
+    && patch --batch --fuzz=0 --forward -p1 < /tmp/pb8-inputs/pb8_current_worker.patch \
+    && cp /tmp/pb8-inputs/pb8_current_Cargo.lock passivbot-rust/Cargo.lock \
+    && maturin build --manifest-path passivbot-rust/Cargo.toml --release --locked --out /tmp/pb8-wheels
+RUN cd /opt/passivbot/passivbot-rust \
+    && cargo test --release --locked --no-default-features --features abi3-py312 --lib backtest::tests \
+    && cargo test --release --locked --no-default-features --features abi3-py312 --lib hsl \
+    && rm -rf target
+
+FROM %%BASE_IMAGE%% AS runtime
+RUN rm -rf /opt/passivbot
+COPY --from=build /opt/passivbot /opt/passivbot
+# Cargo build outputs and toolchains stay in the build stage.
+COPY --from=build /tmp/pb8-wheels /tmp/pb8-wheels
+RUN python -m pip install --no-deps --force-reinstall /tmp/pb8-wheels/*.whl \
+    && rm -rf /tmp/pb8-wheels \
+    && python -m pip check \
+    && printf '%s\n' '%%REVISION%%' > /opt/pb8-revision \
+    && python -m pip freeze > /opt/pb8-pip-freeze.txt
+COPY worker_candidate.json /opt/pb8-worker-provenance.json
+COPY verify_pb8_current.py /opt/pbgui/verify_pb8_current.py
+RUN cd /opt/passivbot && PYTHONPATH=/opt/passivbot/src python -c 'import passivbot_rust; from rust_utils import source_fingerprint,stamp_compiled_extensions; stamp_compiled_extensions(source_fingerprint())'
+RUN cd /work && PYTHONPATH=/opt/pbgui:/opt/passivbot/src python /opt/pbgui/verify_pb8_current.py
+ENV PBGUI_WORKER_RUNTIME=pb8
+LABEL pbgui.passivbot.base-revision="%%REVISION%%"
+LABEL pbgui.pb8.backtest-hotfix="upstream-ema-span-alias"
+LABEL pbgui.pb8.rust-source-fingerprint="25ab6c28a3379eb067b55c2702e504d8f26c3dbd29898ad7a7654857d04bf089"
+WORKDIR /work
+CMD ["bash"]

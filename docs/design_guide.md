@@ -269,7 +269,7 @@ Minimal detail-window shell (opened by adding `.is-open` and setting `aria-hidde
 
 ## 6. Navigation, loading and state
 
-- The shared navigation restart action uses the established direct workflow: validate protected work, schedule stale local services, then acknowledge success. Keep safety checks off the API event loop where they read persisted state. The browser verifies the replacement instance before restoring the same URL; it must not show an accepted restart before scheduling succeeds.
+- The shared navigation restart action registers one API-owned intent. Protected work queues it with a visible reason; the restart continues automatically as soon as the work finishes. With no protected work, retain the established direct scheduling workflow. A queued acknowledgement must be distinguished from a scheduled restart. Keep safety checks off the API event loop where they read persisted state. The browser verifies the replacement instance before restoring the same URL; it must not show an accepted restart before scheduling succeeds.
 
 - Register normal pages in `FASTAPI_PAGES`, the correct navigation group and `GUIDE_TOPICS`, with EN/DE guide coverage.
 - Use the existing page key and canonical route for shared PB7/PB8 views.

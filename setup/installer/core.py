@@ -510,8 +510,14 @@ def _install_master_wheel(
     python = venv / "bin" / "python"
     wheel_tool = pbgui_dir / "pb8_wheels.py"
     receipt = pbgui_dir / "data" / "state" / f"{product}-wheel.json"
-    _run_command([python, wheel_tool, "receipt", "--receipt", receipt], log)
     extras = "full" if product == "pb7" else pb8_gpu_extras(repo)
+    from pb_wheel_status import matching_wheel_installation
+    comparison = (matching_wheel_installation(pbgui_dir, product, repo, python, bundle, commit, extras)
+                  if python.is_file() else {'wheels_match': False, 'runtime_current': False})
+    if comparison['runtime_current']:
+        log(f"{product.upper()} wheels are unchanged; skipping installation.")
+        return
+    _run_command([python, wheel_tool, "receipt", "--receipt", receipt], log)
     requirement = f"{bundle / manifest['python_wheel']}[{extras}]"
     _run_command([python, "-m", "pip", "download", "--only-binary=:all:",
                   "--dest", bundle, "--find-links", bundle, requirement], log, timeout=1800)
@@ -519,9 +525,10 @@ def _install_master_wheel(
                   "--bundle", bundle, "--repo", repo], log)
     _run_command([python, "-m", "pip", "install", "--no-index", "--only-binary=:all:",
                   "--find-links", bundle, requirement], log, timeout=1800)
-    _run_command([python, "-m", "pip", "install", "--no-index", "--only-binary=:all:",
-                  "--no-deps", "--force-reinstall", *dict.fromkeys(
-                      [bundle / manifest["python_wheel"], bundle / manifest["rust_wheel"]])], log, timeout=1800)
+    if not comparison['wheels_match']:
+        _run_command([python, "-m", "pip", "install", "--no-index", "--only-binary=:all:",
+                      "--no-deps", "--force-reinstall", *dict.fromkeys(
+                          [bundle / manifest["python_wheel"], bundle / manifest["rust_wheel"]])], log, timeout=1800)
     shutil.copy2(bundle / "Cargo.lock", repo / "passivbot-rust" / "Cargo.lock")
     _run_command([python, wheel_tool, "runtime", "--product", product, "--bundle", bundle,
                   "--repo", repo, "--commit", commit, "--receipt", receipt], log)

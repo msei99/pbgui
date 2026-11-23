@@ -157,19 +157,39 @@
     executable: "{{ pbgui_python }}"
   changed_when: false
 
+- name: Compare prepared {{ passivbot_label | default('PB8') }} wheels with the installed runtime
+  script:
+    cmd: "pb_wheel_status.py {{ pbgdir | quote }} --matches-bundle {{ passivbot_product | default('pb8') }} --repo {{ pb8dir | quote }} --python {{ (pb8venv ~ '/bin/python') | quote }} --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --commit {{ pb8_wheel_commit.stdout | quote }} --extras {{ (pb8_wheel_extras | replace('[', '') | replace(']', '')) | quote }}"
+    executable: "{{ pbgui_python | default(ansible_playbook_python) }}"
+  register: pb8_wheel_comparison
+  changed_when: false
+
+- name: Keep verified {{ passivbot_label | default('PB8') }} wheel comparison
+  set_fact:
+    pb8_wheel_match: "{{ pb8_wheel_comparison.stdout | from_json }}"
+
+- name: Report unchanged {{ passivbot_label | default('PB8') }} wheels
+  debug:
+    msg: "{{ passivbot_label | default('PB8') }} wheels are unchanged; skipping installation and bot restarts."
+  when: pb8_wheel_match.runtime_current | bool
+
 - name: Retire unneeded VPS Rust tools before {{ passivbot_label | default('PB8') }} capacity check
   script:
     cmd: "pb_wheel_status.py {{ pbgdir | quote }} --prepare-product {{ passivbot_product | default('pb8') }} --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --commit {{ pb8_wheel_commit.stdout | quote }}"
     executable: "{{ pbgui_python }}"
   register: pb8_prepared_rust_cleanup
   changed_when: "(pb8_prepared_rust_cleanup.stdout | from_json).cleaned | default(false)"
-  when: pb8_install_profile == 'live'
+  when:
+    - pb8_install_profile == 'live'
+    - not pb8_wheel_match.runtime_current | bool
 
 - name: Seed reusable wheel cache on target masters
   script:
     cmd: "pb8_wheels.py cache --product {{ passivbot_product | default('pb8') }} --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --cache {{ (pbgdir ~ '/data/cache/pb8-wheels') | quote }}"
     executable: "{{ pbgui_python }}"
-  when: pb8_install_profile == 'full'
+  when:
+    - pb8_install_profile == 'full'
+    - not pb8_wheel_match.runtime_current | bool
   changed_when: false
 
 - name: Download binary {{ passivbot_label | default('PB8') }} dependencies before changing the runtime
@@ -186,15 +206,18 @@
       - "{{ pb8_wheel_remote_stage.path }}/bundle"
       - "{{ pb8_wheel_remote_stage.path }}/bundle/{{ pb8_wheel_manifest.python_wheel }}{{ pb8_wheel_extras }}"
   changed_when: false
+  when: not pb8_wheel_match.runtime_current | bool
 
 - name: Check unpacked binary installation capacity before runtime changes
   script:
     cmd: "pb8_wheels.py capacity --product {{ passivbot_product | default('pb8') }} --bundle {{ (pb8_wheel_remote_stage.path ~ '/bundle') | quote }} --repo {{ pb8dir | quote }}"
     executable: "{{ pbgui_python }}"
   changed_when: false
+  when: not pb8_wheel_match.runtime_current | bool
 
 - name: Check {{ passivbot_label | default('PB8') }} receipt path before runtime changes
   script:
-    cmd: "pb8_wheels.py receipt --receipt {{ (pbgdir ~ '/data/state/pb8-wheel.json') | quote }}"
+    cmd: "pb8_wheels.py receipt --receipt {{ (pbgdir ~ '/data/state/' ~ (passivbot_product | default('pb8')) ~ '-wheel.json') | quote }}"
     executable: "{{ pbgui_python }}"
   changed_when: false
+  when: not pb8_wheel_match.runtime_current | bool

@@ -17,7 +17,7 @@ def docs(tmp_path):
         '- **bot.portfolio.hedge_mode**: Original portfolio hedge policy.\n'
         '- **bot.<side>.enabled**: Original side activation.\n'
         '## Bot Settings\n\n'
-        'Local HSL settings inherit from `bot.global.hsl`, with optional side pins.\n\n'
+        'Local HSL settings inherit from `bot.global.risk.hsl`, with optional side pins.\n\n'
         '## Live Trading Settings\n\n'
         '- **total_exposure_enforcer.enabled**: Original exposure repair toggle.\n'
         '- **total_exposure_enforcer.policy**: Original exposure repair policy.\n'
@@ -28,7 +28,7 @@ def docs(tmp_path):
 def test_native_policy_labels_have_original_text_and_precise_scope(docs):
     """Duplicate leaf names cannot borrow monitoring or another scope's meaning."""
     fields = [{'path': path.split('.'), 'description': ''} for path in (
-        'bot.portfolio.hedge_mode', 'bot.long.enabled', 'bot.global.hsl.enabled',
+        'bot.portfolio.hedge_mode', 'bot.long.enabled', 'bot.global.risk.hsl.enabled',
         'bot.short.risk.total_exposure_enforcer.enabled', 'bot.global.risk.total_exposure_enforcer.policy',
         'bot.global.unknown.enabled')]
     populate_pb9_field_help(docs, fields)

@@ -503,6 +503,41 @@ OVERVIEW = '#overview-table-live'
 OVERVIEW_PREFS = 'pbgui_vps_manager_overview_prefs_v1'
 
 
+@pytest.mark.parametrize('viewport', [1450, 375])
+@pytest.mark.parametrize('command,label', [
+    ('vps-update-runtime', 'Update Passivbot (PB7/PB8/PB9)'),
+    ('vps-update-pbgui-runtime', 'Update PBGui + Passivbot (PB7/PB8/PB9)'),
+])
+def test_overview_bulk_pb9_action_uses_shared_selection_and_layout(manager, viewport, command, label):
+    """Real menu, row selection and action dispatch work without contacting a VPS."""
+    page = manager
+    page.set_viewport_size({'width': viewport, 'height': 1000})
+    publish_state(page)
+    button = page.get_by_role('button', name=label, exact=True)
+    expect(button).to_be_disabled()
+    for width in (160, 420):
+        if viewport > 760:
+            page.locator('#sidebar-resize').focus()
+            page.keyboard.press('Home' if width == 160 else 'End')
+        assert button.evaluate('(e) => e.scrollWidth <= e.clientWidth+1')
+        assert page.locator('#sidebar-actions').evaluate('(e) => e.scrollWidth <= e.clientWidth+1')
+    page.locator("tr[data-overview-host='test-host'] td").nth(1).click()
+    expect(button).to_be_enabled()
+    page.evaluate('window.testBulkCommands=[]; send=(payload)=>{window.testBulkCommands.push(payload);return true;}')
+    button.click()
+    sent = page.evaluate("window.testBulkCommands.filter(p=>p.cmd==='run_vps_deploy')")
+    assert len(sent) == 1
+    assert sent[0]['command'] == command
+    assert sent[0]['hostnames'] == ['test-host']
+    assert sent[0]['extra_vars'] is None  # Runtime flags belong to the server.
+    assert page.url.startswith('http://manager.test/prefix/api/vps-manager/main_page')
+    if viewport > 760:
+        before = page.url
+        page.locator('#pbgui-guide-btn').click()
+        expect(page.locator('#pbgui-shared-help-ovl')).to_have_class('visible')
+        assert page.url == before
+
+
 def publish_overview(page, revision=0):
     """Send two isolated hosts through the real live handler so sorting is observable."""
     page.evaluate('''revision => handleMessage({type:'state',data:{overview:{rows:[
@@ -1122,3 +1157,78 @@ def test_completed_recap_removes_stale_overview_running_badge(manager):
         page.evaluate('row => handleMessage({type:"state",data:{overview:{rows:[row]},vps:[],deploys:{}}})', row)
         expect(page.locator('tr[data-overview-host="test-host"]')).not_to_contain_text('Task Running')
     assert page.evaluate('store.view') == 'overview'
+
+
+def test_runtime_deploy_bar_updates_from_imported_task_progress(manager):
+    """The real deployment view renders backend-derived intermediate state automatically."""
+    import vps_manager_service as service
+
+    page = manager
+    instance = object.__new__(service.VPSManagerService)
+    command = 'vps-update-runtime'
+    tasks = service._playbook_task_names(command)
+    assert len(tasks) > 100
+    history = [{'id': 'fixture-run', 'command': command,
+                'command_text': 'Update Passivbot (PB7/PB8/PB9)', 'hostnames': ['fixture-host']}]
+    page.evaluate("selectView('deploys-vps-logging')")
+    previous = -1
+    for count in (1, len(tasks)//4, len(tasks)//2, len(tasks)-1, len(tasks)):
+        log = '\n'.join(f'TASK [{name}]' for name in tasks[:count])
+        finished = count == len(tasks)
+        if finished:
+            log += '\nPLAY RECAP\nfixture-host : ok=152 changed=37 unreachable=0 failed=0 skipped=0 rescued=0 ignored=0\n'
+        parsed = service._parse_ansible_task_progress('fixture-host', log, command=command)
+        status = 'successful' if finished else 'running'
+        progress = instance._progress_payload(status, parsed['current_index'], parsed['total_steps'])
+        row = {'hostname': 'fixture-host', 'task_command': command, 'task_status': status,
+               'task_step': parsed['step'], 'task_step_kind': parsed['step_kind'],
+               'task_current_index': parsed['current_index'], 'task_total_steps': parsed['total_steps'],
+               'task_progress': progress, 'task_recap': parsed['recap']}
+        page.evaluate('''data => handleMessage({type:'state',data:{overview:{rows:[]},vps:[],
+                        deploys:{history:data.history,progress_rows:[data.row]}}})''',
+                      {'row': row, 'history': history})
+        bar = page.locator('#deploys-progress-live .deploy-progress-fill')
+        percent = bar.evaluate('(e) => parseFloat(e.style.width)')
+        assert percent > previous
+        assert percent == pytest.approx(progress['percent'], abs=.001)
+        assert (percent == 100) is finished
+        assert page.evaluate('store.view') == 'deploys-vps-logging'
+        previous = percent
+
+
+def test_pb9_header_card_and_update_action_follow_live_compatibility(manager):
+    """The real local-master detail shows PB9, updates in place and survives reload."""
+    page = manager
+    row = dict(name='local-fixture', hostname='local-fixture', nav='master', role='master', online=True,
+               pbgui='v2.12', pb7='v7.12', pb8='v8.6', pb9='v9.0.0.dev0 /3.12',
+               pb9_branch='v9 (1234567)', pb9_github='✅', pb9_installed=True,
+               pb9_config_layout='legacy', pb9_runtime_ready=False, pb9_runtime_blocked=True,
+               pb9_runtime_reason='Update PB9: pre-PR #2318 risk layout.')
+    page.evaluate("row => handleMessage({type:'state',data:{overview:{rows:[row]},vps:[],deploys:{}}})", row)
+    detail = page.evaluate("buildProvisionalVpsDetail('local-fixture')")
+    detail['kind'] = 'master'
+    detail['status'].update(name='local-fixture', online=True, pb9_installed=True, pb9_action_allowed=True,
+                            pb9_runtime_ready=False, pb9_runtime_blocked=True, pb9_config_layout='legacy',
+                            pb9_runtime_reason=row['pb9_runtime_reason'], summary_row=row)
+    page.route('**/api/vps-manager/detail-master', lambda route: route.fulfill(json=detail))
+    page.get_by_role('button', name='local-fixture', exact=True).click()
+    card = page.locator('[data-role="pb9-card"]')
+    expect(card).to_contain_text('v9.0.0.dev0 /3.12')
+    expect(card).to_contain_text('Update PB9')
+    assert 'error' in card.locator('[data-role="pb9-dot"]').get_attribute('class')
+    update = page.locator('#sidebar-actions').get_by_role('button', name='Update PB9', exact=True)
+    assert 'warning' in update.get_attribute('class')
+    page.evaluate("window.originalPb9Card = document.querySelector('[data-role=pb9-card]')")
+    detail['status'].update(pb9_runtime_ready=True, pb9_runtime_blocked=False, pb9_config_layout='current', pb9_runtime_reason='')
+    row.update(pb9_runtime_ready=True, pb9_runtime_blocked=False, pb9_config_layout='current', pb9_runtime_reason='')
+    page.evaluate("detail => handleMessage({type:'detail',data:detail,context_generation:store.contextGeneration})", detail)
+    expect(card.locator('[data-role="pb9-dot"]')).to_have_class('dot ok')
+    assert page.evaluate("window.originalPb9Card === document.querySelector('[data-role=pb9-card]')")
+    assert 'ok' in update.get_attribute('class')
+    for width in [1440, 800, 375]:
+        page.set_viewport_size({'width': width, 'height': 1000})
+        assert card.is_visible()
+        assert page.locator('.system-header').evaluate('el => el.scrollWidth <= el.clientWidth')
+    page.reload()
+    expect(page.locator('[data-role="pb9-card"]')).to_contain_text('v9.0.0.dev0 /3.12')
+    assert page.url.endswith('#master')

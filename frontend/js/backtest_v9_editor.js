@@ -81,7 +81,7 @@
         item('backtest.taker_fee_override_fraction','cfg-taker-fee','taker_fee_override_fraction',0.00001,2),
         item('backtest.market_order_slippage_fraction','cfg-slippage','market_order_slippage_fraction',0.0001),
         item('backtest.filter_by_min_effective_cost','cfg-filter-cost','filter_by_min_effective_cost'),
-        item('bot.portfolio.hsl.scope','cfg-hsl-scope','hsl.scope'),
+        item('bot.portfolio.risk.hsl.scope','cfg-hsl-scope','risk.hsl.scope'),
         item('logging.level','cfg-logging-level','logging_level')
       ],
       candles: [

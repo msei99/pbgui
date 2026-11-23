@@ -38,7 +38,7 @@ def test_current_image_has_offline_layer_sizes():
     from vast_image_layers import IMAGE_LAYERS
     assert IMAGE in IMAGE_LAYERS
     import json
-    receipt = json.loads((Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark/worker_release_ema_span_alias_b9d6692.json').read_text())
+    receipt = json.loads((Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark/worker_release_15d6404.json').read_text())
     assert IMAGE == 'ghcr.io/msei99/pbgui-pb8-worker@' + receipt['digest']
     assert IMAGE_LAYERS[IMAGE] == {key.split(':')[1][:12]: size for key, size in receipt['layers'].items()}
 
@@ -176,7 +176,7 @@ def test_suite_metric_hotfix_is_retired_after_upstream_merge():
     assert candidate['state'] == 'unpublished_candidate'
     assert published['base_revision'] == '00ce7d0ddf123071ae67db149753d6b3619f52ac'
     current = json.loads((root / 'worker_release_b9d6692.json').read_text())
-    assert current['base_revision'] == REVISION
+    assert current['base_revision'] == 'b9d6692ea41266ecb4ab81d40bb5e5baef29b50a'
     assert current['overlays'] == []
     assert current['anonymous_pull_verified'] is True
     assert not (root / 'Dockerfile.suite-metrics').exists()
@@ -204,7 +204,7 @@ def test_hsl_cache_worker_retains_previous_upstream_image():
     """The performance wrapper must preserve previous rental and calibration identities."""
     from vast_calibration import COMPATIBLE_CALIBRATION_IMAGES
     previous = "ghcr.io/msei99/pbgui-pb8-worker@sha256:dc83342c2d4b9d643164bc064a14fa944fdc8f0d0834b25de8379343736365ae"
-    assert SUPPORTED_RENTAL_IMAGE_REVISIONS[previous] == REVISION
+    assert SUPPORTED_RENTAL_IMAGE_REVISIONS[previous] == 'b9d6692ea41266ecb4ab81d40bb5e5baef29b50a'
     assert previous in COMPATIBLE_CALIBRATION_IMAGES
     root = Path(__file__).resolve().parents[1] / 'setup/vast_gpu_benchmark'
     recipe = (root / 'Dockerfile.hsl-history-cache').read_text()

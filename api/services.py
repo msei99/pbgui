@@ -1971,7 +1971,13 @@ def restart_api_server(session: SessionToken = Depends(require_auth)) -> Dict[st
                 and monitor.__class__.__name__ == "VPSMonitor"
             )
             try:
-                if not api_server._restart_current_api_systemd_unit(monitor_handoff=monitor_handoff):
+                restart_state = api_server._runtime_service_restart_state()
+                if restart_state.get("inspection_error"):
+                    raise RuntimeError("Could not inspect managed service versions; retry shortly")
+                stale_units = [item["unit"] for item in restart_state.get("stale_services") or []]
+                if not api_server._restart_current_api_systemd_unit(
+                    service_units=stale_units, monitor_handoff=monitor_handoff
+                ):
                     raise RuntimeError("pbgui-api.service does not own the current API process")
             except Exception:
                 api_server._release_api_restart_leases(leases)

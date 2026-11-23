@@ -487,8 +487,8 @@ VPS_DEPLOY_ACTION_TEXT = {
     COMMAND_VPS_UPDATE_PBGUI_PB8: "Update PBGui and PB8",
     COMMAND_VPS_UPDATE_PB7_PB8: "Update PB7 and PB8",
     COMMAND_VPS_UPDATE_PBGUI_PB7_PB8: "Update PBGui, PB7 and PB8",
-    COMMAND_VPS_UPDATE_RUNTIME: "Update Passivbot (PB7/PB8)",
-    COMMAND_VPS_UPDATE_PBGUI_RUNTIME: "Update PBGui + Passivbot (PB7/PB8)",
+    COMMAND_VPS_UPDATE_RUNTIME: "Update Passivbot (PB7/PB8/PB9)",
+    COMMAND_VPS_UPDATE_PBGUI_RUNTIME: "Update PBGui + Passivbot (PB7/PB8/PB9)",
     COMMAND_VPS_CLEANUP: "Cleanup VPS",
 }
 VPS_DEPLOY_ACTIONS = tuple(VPS_DEPLOY_ACTION_TEXT.keys())
@@ -1198,43 +1198,86 @@ def _status_running(status: str | None) -> bool:
 
 
 def _playbook_task_names(command: str | None) -> tuple[str, ...]:
+    """Read ordered local tasks, including composed playbooks and task imports."""
     task_name = str(command or "").strip()
-    if not task_name:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}", task_name):
         return ()
     cached = _PLAYBOOK_TASK_CACHE.get(task_name)
     if cached is not None:
         return cached
 
-    playbook_path = Path(PBGDIR) / f"{task_name}.yml"
+    root = Path(PBGDIR).resolve()
     tasks: list[str] = []
-    try:
-        payload = yaml.safe_load(playbook_path.read_text(encoding="utf-8"))
-        plays = payload if isinstance(payload, list) else [payload]
-        for play in plays:
+    reads = 0
+
+    def render(value: Any, variables: dict[str, Any]) -> str:
+        """Expand known display variables only; never execute Jinja or lookups."""
+        text = str(value or "")
+        values = {key: str(item) for key, item in variables.items()
+                  if isinstance(item, (str, int)) and '{{' not in str(item)}
+        product = values.get('runtime_product', 'pb8')
+        if product in {'pb8', 'pb9'}:
+            values.update(passivbot_product=product, passivbot_label=product.upper(),
+                          passivbot_major=product[2:])
+        return re.sub(r"\{\{\s*([A-Za-z_][A-Za-z0-9_]*)(?:\s*\|\s*default\(['\"][^'\"]*['\"]\))?\s*\}\}",
+                      lambda match: values.get(match[1], match[0]), text)
+
+    def load(value: Any, directory: Path, variables: dict[str, Any], stack: tuple[Path, ...], *, playbook: bool) -> None:
+        """Bound recursion and keep every included file inside the PBGui checkout."""
+        nonlocal reads
+        name = render(value, {**variables, 'playbook_dir': str(root)})
+        if not name or '{{' in name or '\x00' in name or len(stack) >= 16 or reads >= 128:
+            return
+        path = (directory/name).resolve()
+        if not path.is_relative_to(root) or path in stack or not path.is_file():
+            return
+        if path.stat().st_size > 1024*1024:
+            raise ValueError('Playbook task inventory exceeds size limit')
+        reads += 1
+        payload = yaml.safe_load(path.read_text(encoding='utf-8'))
+        entries = payload if isinstance(payload, list) else [payload]
+        lineage = (*stack, path)
+        if not playbook:
+            visit(entries, path.parent, variables, lineage)
+            return
+        for play in entries:
             if not isinstance(play, dict):
                 continue
-            if bool(play.get("gather_facts", False)):
-                tasks.append("Gathering Facts")
-            for section in ("pre_tasks", "tasks", "post_tasks", "handlers"):
-                for item in play.get(section) or []:
-                    if not isinstance(item, dict):
-                        continue
-                    name = str(item.get("name") or "").strip()
-                    if name:
-                        tasks.append(name)
+            scoped = {**variables, **(play.get('vars') if isinstance(play.get('vars'), dict) else {})}
+            if play.get('import_playbook'):
+                load(play['import_playbook'], path.parent, scoped, lineage, playbook=True)
+                continue
+            if bool(play.get('gather_facts', False)):
+                tasks.append('Gathering Facts')
+            for section in ('pre_tasks', 'tasks', 'post_tasks', 'handlers'):
+                visit(play.get(section) or [], path.parent, scoped, lineage)
+
+    def visit(items: list, directory: Path, variables: dict[str, Any], stack: tuple[Path, ...]) -> None:
+        """Preserve repeated task names and task-file order across runtime stages."""
+        for item in items:
+            if not isinstance(item, dict) or len(tasks) >= 10000:
+                continue
+            scoped = {**variables, **(item.get('vars') if isinstance(item.get('vars'), dict) else {})}
+            name = render(item.get('name'), scoped).strip()
+            if name:
+                tasks.append(name)
+            for key in ('include_tasks', 'import_tasks', 'ansible.builtin.include_tasks', 'ansible.builtin.import_tasks'):
+                included = item.get(key)
+                if isinstance(included, dict):
+                    included = included.get('file')
+                if included:
+                    load(included, directory, scoped, stack, playbook=False)
+            for section in ('block', 'rescue', 'always'):
+                visit(item.get(section) or [], directory, scoped, stack)
+
+    try:
+        load(f'{task_name}.yml', root, {}, (), playbook=True)
     except Exception as exc:
         _log(SERVICE, f"failed to load playbook tasks for {task_name}: {exc}", level="WARNING")
         _PLAYBOOK_TASK_CACHE[task_name] = ()
         return ()
 
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for item in tasks:
-        if item in seen:
-            continue
-        seen.add(item)
-        deduped.append(item)
-    result = tuple(deduped)
+    result = tuple(tasks)
     _PLAYBOOK_TASK_CACHE[task_name] = result
     return result
 
@@ -1645,9 +1688,12 @@ def _profile_aware_vps_update_command(
     *,
     pb7_installed: bool | None = None,
     pb8_installed: bool | None = None,
+    pb9_installed: bool | None = None,
 ) -> str:
     """Resolve one logical bulk update from confirmed installs, then saved profile."""
     normalized = _normalize_vps_deploy_command(command)
+    if pb9_installed is True and normalized in {COMMAND_VPS_UPDATE_RUNTIME, COMMAND_VPS_UPDATE_PBGUI_RUNTIME}:
+        return normalized
     profile = str(runtime_profile or "pb7").strip().lower()
     if profile not in VPS_RUNTIME_PROFILES:
         profile = "pb7"
@@ -1827,10 +1873,17 @@ def _parse_ansible_task_progress(hostname: str, log_text: str, *, command: str |
     if recap:
         current_index = total_steps
     elif step:
-        try:
-            current_index = playbook_tasks.index(step)
-        except ValueError:
-            current_index = 0
+        cursor = 0
+        for observed in task_matches:
+            # Handlers may flush before the play's remaining ordinary tasks.
+            # Keep their label visible without jumping to the end of the plan.
+            if observed.group(1) != 'TASK':
+                continue
+            try:
+                current_index = max(current_index, playbook_tasks.index(observed.group(2).strip(), cursor))
+                cursor = current_index + 1
+            except ValueError:
+                continue
 
     return {
         "started_at": started_at,
@@ -3485,7 +3538,8 @@ class VPSManagerService:
             return {"done": done, "total": total, "percent": percent}
         done = safe_current
         total = safe_total
-        percent = max(0, min(100, (done / total) * 100)) if total else 0
+        cap = 100 if normalized_status in {"failed", "error", "timeout", "canceled", "cancelled", "unreachable"} else 99
+        percent = max(0, min(cap, (done / total) * 100)) if total else 0
         return {"done": done, "total": total, "percent": percent}
 
     def _prune_deploy_progress_cache(self, active_keys: set[tuple[str, str, str]] | None = None) -> None:
@@ -4010,7 +4064,8 @@ class VPSManagerService:
     def _build_pb9_overview_fields(self, meta: dict[str, Any]) -> dict[str, Any]:
         """Share local and remote PB9 cells using cached host and upstream facts only."""
         installed = bool(meta.get("pb9installed", meta.get("pb9ready")))
-        blocked = bool(meta.get("pb9blocked"))
+        layout = str(meta.get('pb9layout') or 'unknown')
+        blocked = bool(meta.get("pb9blocked")) or layout == 'legacy'
         commit = str(meta.get("pb9c") or "")
         github = self._build_cached_github_status("pb9", commit, current_branch="v9")
         branch = _pb8_branch_label(meta.get("pb9b"), github, default_branch="v9")
@@ -4020,10 +4075,13 @@ class VPSManagerService:
             "pb9_branch": f"{branch} ({_short_commit(commit)})",
             "pb9_github": github,
             "pb9_installed": installed,
+            "pb9_config_layout": layout,
             "pb9_wheel_required": installed and not bool(meta.get("pb9wheel")),
             "pb9_runtime_ready": bool(meta.get("pb9ready")) and not blocked,
             "pb9_runtime_blocked": blocked,
-            "pb9_runtime_reason": str(meta.get("pb9reason") or ("PB9 runtime unavailable; run Update PB9" if blocked else "")),
+            "pb9_runtime_reason": str(meta.get("pb9reason") or (
+                "Update PB9: the installed runtime uses the pre-PR #2318 risk layout." if layout == 'legacy'
+                else "PB9 runtime unavailable; run Update PB9" if blocked else "")),
         }
 
     def _build_master_status(self, coindata_ok: bool) -> dict[str, Any]:
@@ -4059,6 +4117,8 @@ class VPSManagerService:
             "pb9_installed": bool(summary_row.get("pb9_installed")),
             "pb9_action_allowed": load_ini("main", "role").strip().lower() == "master",
             "pb9_runtime_ready": bool(summary_row.get("pb9_runtime_ready")),
+            "pb9_runtime_blocked": bool(summary_row.get("pb9_runtime_blocked")),
+            "pb9_config_layout": str(summary_row.get("pb9_config_layout") or 'unknown'),
             "pb9_runtime_reason": str(summary_row.get("pb9_runtime_reason") or ""),
             "pb8_runtime_ready": bool(summary_row.get("pb8_runtime_ready")),
             "pb8_runtime_blocked": bool(summary_row.get("pb8_runtime_blocked")),
@@ -4140,8 +4200,10 @@ class VPSManagerService:
             "pb9_action_allowed": bool(pb9_action["allowed"]),
             "pb9_action_reason": str(pb9_action["reason"]),
             "pb9_install_profile": str(pb9_action["profile"]),
-            "pb9_runtime_ready": bool(host_meta.get("pb9ready")),
-            "pb9_runtime_reason": str(host_meta.get("pb9reason") or ""),
+            "pb9_runtime_ready": bool(summary_row.get("pb9_runtime_ready")),
+            "pb9_runtime_blocked": bool(summary_row.get("pb9_runtime_blocked")),
+            "pb9_config_layout": str(summary_row.get("pb9_config_layout") or 'unknown'),
+            "pb9_runtime_reason": str(summary_row.get("pb9_runtime_reason") or ""),
             "pb8_free_disk_bytes": int(pb8_action["free_disk_bytes"]),
             "pb8_required_free_disk_bytes": int(pb8_action["required_free_disk_bytes"]),
             "pb8_runtime_ready": bool(summary_row.get("pb8_runtime_ready")),
@@ -5303,24 +5365,40 @@ class VPSManagerService:
             telemetry_fresh = self._host_telemetry_fresh(host_state)
             pb7_action = _pb7_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
             pb8_action = _pb8_remote_action_status(host_state, telemetry_fresh=telemetry_fresh)
+            pb9_action = _pb8_remote_action_status(host_state, telemetry_fresh=telemetry_fresh, product='pb9')
             normalized_command = _profile_aware_vps_update_command(
                 requested_command,
                 str(getattr(vps, "runtime_profile", "pb7") or "pb7"),
                 pb7_installed=pb7_action["installed"] if telemetry_fresh else None,
                 pb8_installed=pb8_action["installed"] if telemetry_fresh else None,
+                pb9_installed=pb9_action["installed"] if telemetry_fresh else None,
             )
             command_text = _vps_deploy_command_text(normalized_command)
             vps.command = normalized_command
             vps.command_text = command_text
             command_extra_vars = dict(extra_vars or {})
-            if normalized_command in PB7_UPDATE_COMMANDS:
+            conditional_runtime = normalized_command in {COMMAND_VPS_UPDATE_RUNTIME, COMMAND_VPS_UPDATE_PBGUI_RUNTIME}
+            if conditional_runtime:
+                # Only fresh, confirmed installations may participate. Never trust
+                # client-supplied selection flags or infer PB9 from a PB7/PB8 profile.
+                if not telemetry_fresh:
+                    raise ValueError('Fresh host telemetry is required before updating installed Passivbot runtimes.')
+                command_extra_vars.update({
+                    'pbgui_update_pb7': pb7_action['installed'] is True,
+                    'pbgui_update_pb8': pb8_action['installed'] is True,
+                    'pbgui_update_pb9': pb9_action['installed'] is True,
+                })
+            if normalized_command in PB7_UPDATE_COMMANDS or (conditional_runtime and pb7_action['installed']):
                 if not pb7_action["allowed"]:
                     raise ValueError(str(pb7_action["reason"]))
                 command_extra_vars["pb7_min_free_bytes"] = int(pb7_action["required_free_disk_bytes"])
-            if normalized_command in PB8_UPDATE_COMMANDS:
+            if normalized_command in PB8_UPDATE_COMMANDS or (conditional_runtime and pb8_action['installed']):
                 if not pb8_action["allowed"]:
                     raise ValueError(str(pb8_action["reason"]))
                 command_extra_vars["pb8_min_free_bytes"] = int(pb8_action["required_free_disk_bytes"])
+            if normalized_command == COMMAND_VPS_UPDATE_PB9 or (conditional_runtime and pb9_action['installed']):
+                if not pb9_action['allowed']:
+                    raise ValueError(str(pb9_action['reason']))
             command_extra_vars.update(self._credential_playbook_vars(hostname, host_state))
             self.vpsmanager.update_vps(vps, debug=debug, extra_vars=command_extra_vars or None)
             task_log_name = vps._task_log_path(vps.command, COMMAND_VPS_UPDATE).name

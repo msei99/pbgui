@@ -29,7 +29,8 @@ class Lease:
 def restart_state(monkeypatch):
     """Isolate every real service, runtime scan and handoff side effect."""
     leases = (Lease(), Lease(), Lease())
-    for name, value in (("_api_restart_handoff_task", None), ("_api_restart_lease", None),
+    for name, value in (("_server_restart_task", None), ("_server_restart_request", {}),
+                        ("_api_restart_handoff_task", None), ("_api_restart_lease", None),
                         ("_sse_subscribers", [])):
         monkeypatch.setattr(server, name, value)
     monkeypatch.setattr(server, '_log', lambda *args, **kwargs: None)
@@ -65,6 +66,7 @@ def test_acceptance_waits_for_preflight_and_schedules_all_stale_services(monkeyp
         await asyncio.wait_for(entered.wait(), 2)
         assert not request.done()
         assert not scheduled
+        assert [lease.detaches for lease in restart_state[:2]] == [1, 1]
         assert server._api_restart_pending()
         release.set()
         result = await asyncio.wait_for(request, 2)
@@ -79,18 +81,33 @@ def test_acceptance_waits_for_preflight_and_schedules_all_stale_services(monkeyp
     asyncio.run(scenario())
 
 
-def test_real_blocker_rejects_without_starting_services(monkeypatch, restart_state):
-    """A protected operation returns its reason and releases every reservation."""
+def test_blocker_queues_once_and_restarts_automatically(monkeypatch, restart_state):
+    """Protected work finishes naturally; duplicates do not create another handoff."""
+    busy = True
+    scheduled = []
     monkeypatch.setattr(server, '_restart_block_state',
-                        lambda: asyncio.sleep(0, result=(True, 'PB9 inspection in progress')))
+                        lambda: asyncio.sleep(0, result=(busy, 'PB9 inspection in progress' if busy else '')))
     monkeypatch.setattr(server, '_restart_current_api_systemd_unit',
-                        lambda *args: pytest.fail('Blocked restart must not schedule services'))
-    with pytest.raises(HTTPException) as caught:
-        asyncio.run(server.server_restart(session=object()))
-    assert caught.value.status_code == 409
-    assert 'PB9 inspection' in caught.value.detail
-    assert server._api_restart_lease is None
-    assert [lease.releases for lease in restart_state] == [1, 1, 1]
+                        lambda units: scheduled.append(units) or True)
+
+    async def scenario():
+        nonlocal busy
+        result = await server.server_restart(session=object())
+        assert result['restart_request']['state'] == 'waiting'
+        assert 'PB9 inspection' in result['restart_request']['reason']
+        assert not scheduled
+        owner = server._server_restart_task
+        assert (await server.server_restart(session=object()))['ok']
+        assert server._server_restart_task is owner
+        assert [lease.releases for lease in restart_state] == [0, 0, 0]
+        busy = False
+        assert (await asyncio.wait_for(asyncio.shield(owner), 2))['ok']
+        assert scheduled == [[]]
+        await server._shutdown_requested_restart()
+        assert not server._api_restart_pending()
+        assert [lease.releases for lease in restart_state] == [1, 1, 1]
+
+    asyncio.run(scenario())
 
 
 def test_cancelled_lock_acquisition_releases_late_leases(monkeypatch, restart_state):
@@ -108,12 +125,65 @@ def test_cancelled_lock_acquisition_releases_late_leases(monkeypatch, restart_st
     async def scenario():
         task = asyncio.create_task(server.server_restart(session=object()))
         assert await asyncio.to_thread(entered.wait, 2)
-        task.cancel()
+        server._server_restart_task.cancel()
         release.set()
         with pytest.raises(asyncio.CancelledError):
             await task
         assert [lease.releases for lease in restart_state] == [1, 1, 1]
 
+    asyncio.run(scenario())
+
+
+def test_busy_lifecycle_lock_retries_before_scheduling(monkeypatch, restart_state):
+    """A transient lock conflict queues the same request and acquires only once free."""
+    attempts = []
+
+    def acquire():
+        """Model one competing service action without touching actual locks."""
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise server.ServiceLifecycleBusyError('Another service operation is running')
+        return restart_state
+
+    monkeypatch.setattr(server, '_acquire_api_restart_leases', acquire)
+    monkeypatch.setattr(server, '_restart_block_state', lambda: asyncio.sleep(0, result=(False, '')))
+    monkeypatch.setattr(server, '_restart_current_api_systemd_unit', lambda units: True)
+
+    async def scenario():
+        result = await server.server_restart(session=object())
+        assert result['restart_request']['state'] == 'waiting'
+        assert server._api_restart_pending()
+        assert (await asyncio.wait_for(asyncio.shield(server._server_restart_task), 2))['ok']
+        assert len(attempts) == 2
+        await server._shutdown_requested_restart()
+        assert not server._api_restart_pending()
+    asyncio.run(scenario())
+
+
+def test_browser_disconnect_does_not_cancel_registered_restart(monkeypatch, restart_state):
+    """A lost HTTP connection leaves one API-owned intent, joined during shutdown."""
+    monkeypatch.setattr(server, '_restart_current_api_systemd_unit', lambda units: True)
+
+    async def scenario():
+        entered, release = asyncio.Event(), asyncio.Event()
+
+        async def inspect():
+            """Hold a synthetic admission check while the original browser disconnects."""
+            entered.set()
+            await release.wait()
+            return False, ''
+
+        monkeypatch.setattr(server, '_restart_block_state', inspect)
+        request = asyncio.create_task(server.server_restart(session=object()))
+        await entered.wait()
+        request.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await request
+        assert server._api_restart_pending()
+        release.set()
+        assert (await asyncio.wait_for(asyncio.shield(server._server_restart_task), 2))['ok']
+        await server._shutdown_requested_restart()
+        assert not server._api_restart_pending()
     asyncio.run(scenario())
 
 
@@ -157,17 +227,16 @@ def test_cancellation_during_preparation_drains_worker(monkeypatch, restart_stat
     async def scenario():
         request = asyncio.create_task(server.server_restart(session=object()))
         assert await asyncio.to_thread(entered.wait, 2)
-        request.cancel()
+        server._server_restart_task.cancel()
         await asyncio.sleep(0)
-        request.cancel()
+        server._server_restart_task.cancel()
         release.set()
         if step == 'schedule':
             assert (await request)['ok']
-            assert server._api_restart_pending()
-            await server._shutdown_requested_restart()
         else:
             with pytest.raises(asyncio.CancelledError):
                 await request
+        await server._shutdown_requested_restart()
         assert not server._api_restart_pending()
         assert [lease.releases for lease in restart_state] == [1, 1, 1]
         assert cleaned == ([replacement] if step == 'replacement' else [])
@@ -201,10 +270,13 @@ def test_new_memory_owner_before_scheduling_blocks_restart(monkeypatch, restart_
     monkeypatch.setattr(server, '_restart_memory_block_reason', lambda: 'new protected operation')
     monkeypatch.setattr(server, '_restart_current_api_systemd_unit',
                         lambda units: pytest.fail('Late protected work must block scheduling'))
-    with pytest.raises(HTTPException) as caught:
-        asyncio.run(server.server_restart(session=object()))
-    assert caught.value.status_code == 409
-    assert [lease.releases for lease in restart_state] == [1, 1, 1]
+    async def scenario():
+        result = await server.server_restart(session=object())
+        assert result['restart_request']['state'] == 'waiting'
+        assert result['restart_request']['reason'] == 'new protected operation'
+        await server._shutdown_requested_restart()
+        assert [lease.releases for lease in restart_state] == [1, 1, 1]
+    asyncio.run(scenario())
 
 
 @pytest.mark.parametrize('payload', [None, [], {}, {'active': 'false'}])

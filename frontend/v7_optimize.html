@@ -22,7 +22,7 @@
 <title>PBGui - %%OPTIMIZE_LABEL%% Optimize</title>
 <link rel="stylesheet" href="/app/css/modals_shared.css?v=3">
 <script src="/app/js/optimize_editor_adapter.js?v=21"></script>
-<script src="/app/js/optimize_v9_editor.js?v=18"></script>
+<script src="/app/js/optimize_v9_editor.js?v=19"></script>
 <link rel="stylesheet" href="/app/css/metadata_fields.css?v=2">
 <script src="/app/js/floating_window.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/ai_loop_templates.css?v=6">
@@ -5591,7 +5591,7 @@ function setPb8RuntimeWarning(error) {
   var detail = el('pb8-runtime-warning-detail');
   var visible = !!error;
   if (detail && visible) {
-    detail.textContent = (error && error.message) || (optimizeEditorAdapter.isV9 ? 'Native PB9 runtime is unavailable. Check Runtime paths.' : 'Passivbot V8 is unavailable. Run Update PB8.');
+    detail.textContent = (error && error.message) || (optimizeEditorAdapter.isV9 ? 'Native PB9 runtime is unavailable. Run Update PB9 on the local master.' : 'Passivbot V8 is unavailable. Run Update PB8.');
   }
   document.body.classList.toggle('pb8-runtime-warning-visible', visible);
 }
@@ -12532,11 +12532,12 @@ function renderConfigs() {
   configs.forEach(function(cfg, index) {
     var tr = existing.get(cfg.name) || document.createElement('tr');
     var signature = JSON.stringify([cfg.name, cfg.exchange, cfg.strategy, cfg.start_date, cfg.end_date,
-      cfg.seed_mode, cfg.seed_source, cfg.starting_config, cfg.modified]);
+      cfg.seed_mode, cfg.seed_source, cfg.starting_config, cfg.modified, cfg.invalid, cfg.config_error]);
     tr.setAttribute('data-name', cfg.name);
     tr.classList.toggle('selected', state.selectedConfigs.has(cfg.name));
     if (tr.configSignature !== signature) {
       var flags = [];
+      if (cfg.invalid) flags.push('<span class="metric-pill" title="' + escapeHtml(cfg.config_error || '') + '">Incompatible PB9 config — delete and recreate</span>');
       var seedMode = cfg.seed_mode || (cfg.starting_config ? 'self' : 'none');
       if (seedMode === 'self') flags.push('<span class="metric-pill">seed: self</span>');
       if (seedMode === 'path') flags.push('<span class="metric-pill">seed: path</span>');
@@ -12550,8 +12551,8 @@ function renderConfigs() {
         + '<td>' + (flags.join('') || '<span class="muted">-</span>') + '</td>'
         + '<td class="muted">' + escapeHtml(formatIso(cfg.modified)) + '</td>'
         + '<td class="actions-cell">'
-        + '<button class="icon-btn cfg-edit" data-name="' + escapeHtml(cfg.name) + '" title="Edit config">✏️</button>'
-        + '<button class="icon-btn cfg-queue" data-name="' + escapeHtml(cfg.name) + '" title="Queue config">▶</button>'
+        + '<button class="icon-btn cfg-edit" data-name="' + escapeHtml(cfg.name) + '" title="Edit config"' + (cfg.invalid ? ' disabled' : '') + '>✏️</button>'
+        + '<button class="icon-btn cfg-queue" data-name="' + escapeHtml(cfg.name) + '" title="Queue config"' + (cfg.invalid ? ' disabled' : '') + '>▶</button>'
         + (!optimizeEditorAdapter.isV8 ? '<button class="icon-btn cfg-migrate-v8" data-name="' + escapeHtml(cfg.name) + '" title="Convert to PB8 Optimize">V8</button>' : '')
         + (optimizeEditorAdapter.isV8 && !optimizeEditorAdapter.isV9 ? '<button class="icon-btn" data-migrate-pb9-optimize="config" data-config-name="' + escapeHtml(cfg.name) + '" title="Open as PB9 Optimize">V9</button>' : '')
         + '<button class="icon-btn danger cfg-delete" data-name="' + escapeHtml(cfg.name) + '" title="Delete config">🗑</button>'

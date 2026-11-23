@@ -122,27 +122,23 @@ def test_pb8_live_skip_requires_current_commit_and_complete_runtime(tmp_path, mo
     assert not status.pb8_live_current(pbgdir, repo, python, COMMIT)
 
 
-def test_pb8_live_update_skips_only_verified_normal_updates() -> None:
-    """The fast path precedes wheel preparation and excludes branch switches."""
-    play = yaml.safe_load(pb8_playbook_source("vps-update-pb8.yml"))[0]
-    tasks = {task["name"]: task for task in play["tasks"]}
-    names = list(tasks)
-    skip = tasks["Skip PB8 update for an already current live runtime"]
-    assert skip["meta"] == "end_host"
-    assert "not pb8_branch_switch" in skip["when"]
-    assert "pb8_current_live_wheel" in str(skip["when"])
-    assert "pb8_current_pbrun.rc == 0" in skip["when"]
-    assert names.index("Skip PB8 update for an already current live runtime") < names.index(
-        "Measure PB8 disk state before changes"
-    )
-    assert names.index("Skip PB8 update for an already current live runtime") < names.index(
-        "Prepare central PB8 wheels before runtime changes"
-    )
-    assert tasks["Resolve official PB8 commit before checking the installed live runtime"]["register"] == "pb8_preflight_head"
-    preparation = yaml.safe_load(pb8_playbook_source("tasks/pb8_live_wheels_prepare.yml"))
-    resolve = next(task for task in preparation if task["name"] == "Resolve immutable PB8 wheel source commit on controller")
-    assert resolve["register"] == "pb8_controller_head"
-    assert resolve["when"] == "not pb8_branch_switch or pb8_target_commit == ''"
+def test_pb8_update_skips_verified_wheels_independently_of_pbrun() -> None:
+    """All profiles compare prepared wheels and retain normal cleanup handlers."""
+    for filename in ('vps-update-pb8.yml', 'master-update-pb8.yml'):
+        play = yaml.safe_load(pb8_playbook_source(filename))[0]
+        tasks = {task['name']: task for task in play['tasks']}
+        assert not any(task.get('meta') == 'end_host' for task in play['tasks'])
+        assert tasks['Install verified PB8 wheels']['when'] == 'not pb8_wheel_match.wheels_match | bool'
+        assert 'not pb8_wheel_match.runtime_current | bool' in str(tasks[
+            'Restart managed PB8 live bots after successful update']['when'])
+        assert not any('pb8_current_pbrun' in str(task) for task in play['tasks'])
+    preparation = yaml.safe_load(pb8_playbook_source('tasks/pb8_live_wheels_prepare.yml'))
+    names = [task['name'] for task in preparation]
+    assert names.index('Compare prepared PB8 wheels with the installed runtime') < names.index(
+        'Download binary PB8 dependencies before changing the runtime')
+    resolve = next(task for task in preparation if task['name'] == 'Resolve immutable PB8 wheel source commit on controller')
+    assert resolve['register'] == 'pb8_controller_head'
+    assert resolve['when'] == "not pb8_branch_switch or pb8_target_commit == ''"
 
 
 def test_cleanup_waits_for_both_wheel_installs(tmp_path, monkeypatch):
@@ -305,12 +301,10 @@ def test_combined_update_skips_verified_pb7_runtime(playbook):
     """A PBGui-only change leaves verified PB7 bots and wheels alone."""
     spec = yaml.safe_load(Path(playbook).read_text())[0]
     tasks = {task["name"]: task for task in spec["tasks"]}
-    assert "Inspect installed PB7 wheel receipt" in tasks
+    assert "Prepare central PB7 wheels before runtime changes" in tasks
     decision = tasks["Decide whether PB7 requires an update"]["set_fact"]["pb7_update_required"]
-    assert "checkout_required=true" in decision
-    assert "pb7_wheel_status.stdout" in decision
+    assert "not (pb7_wheel_match.runtime_current | bool)" in decision
     for name in (
-        "Prepare central PB7 wheels before runtime changes",
         "Stop PBRun before changing PB7 checkout",
         "Stop PB7 processes before changing checkout",
         "Checkout verified pinned Passivbot v7",

@@ -273,14 +273,15 @@ def test_playbook_prepares_binaries_before_runtime_guard_and_never_compiles(play
     install = next(task for task in tasks if task['name'] == 'Install verified PB8 wheels')
     assert '--only-binary=:all:' in install['command']['argv']
     assert '-e' not in install['command']['argv']
-    assert 'when' not in install
+    assert install['when'] == 'not pb8_wheel_match.wheels_match | bool'
     assert names.index('Validate centrally built PB8 runtime') < names.index('Mark validated PB8 runtime available')
     prep = yaml.safe_load(pb8_playbook_source('tasks/pb8_live_wheels_prepare.yml'))
     download = next(task for task in prep if task['name'].startswith('Download binary PB8 dependencies'))
     assert '--only-binary=:all:' in download['command']['argv']
     assert '{{ pb8_wheel_extras }}' in download['command']['argv'][-1]
     seed = next(task for task in prep if task['name'] == 'Seed reusable wheel cache on target masters')
-    assert seed['when'] == "pb8_install_profile == 'full'"
+    assert "pb8_install_profile == 'full'" in seed['when']
+    assert 'not pb8_wheel_match.runtime_current | bool' in seed['when']
     assert prep[-2]['name'].startswith('Check unpacked binary installation capacity')
     assert prep[-1]['name'] == 'Check PB8 receipt path before runtime changes'
 

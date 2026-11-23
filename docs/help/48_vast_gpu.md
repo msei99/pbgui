@@ -40,7 +40,7 @@ The remaining replacement budget includes confirmed, already allocated and pendi
 
 Pool planning matches waiting jobs to idle rentals using each rental's recorded worker image, PB8 revision and CPU allocation. A free older rental cannot prevent renting a worker required by a newer job. Offer selection and rental job-profile choices use the same compatibility check as dispatch; unsupported jobs remain waiting with a useful message while compatible jobs continue.
 
-New rentals use official PB8 revision `b9d6692ea` with the merged PR #1871 invalid-candidate protection and the published HSL history-cache and adaptive CUDA memory overlays. The upstream HSL fix prevents a closing loss that exhausts cash from causing a false held-position candle valuation error. Existing rentals retain their original image and revision. Fresh calibration and real checkpoint/resume acceptance remain pending; focused offline tests and a bounded RTX 3060 memory/result comparison have passed.
+New rentals use official PB8 revision `15d6404f` with the upstream backtest EMA and fresh-population fixes, retaining the published rolling CPU HSL history, GPU history-cache and adaptive CUDA memory overlays. Job validation and calibration use the same immutable image. Existing rentals retain their original image and revision. Old calibration measurements are not reused for the new revision. Rust, optimizer/Suite and offline checkpoint-sampling tests passed; physical GPU performance, fresh calibration and a real optimizer checkpoint/resume run remain unverified for this image.
 
 The jobs view reuses saved throughput measurements for completed, failed and cancelled jobs. It reads a finished job's optimizer log only when its throughput snapshot is still missing.
 
@@ -550,7 +550,7 @@ Valid Pareto fronts with more than 1,000 results remain eligible for stagnation 
 
 Performance comparison actions are disabled while a comparison request is running, preventing duplicate submissions.
 
-The October upstream worker candidate targets PB8 `b9d6692ea` and includes merged PR #1871 without the temporary patch. It is not the active published image yet. New HSL budget scaling is blocked during preparation and checked again against each actual rental at dispatch. Blocked jobs remain waiting; compatible following jobs can run. Activation also requires compatibility-aware pool scheduling so an idle older rental cannot suppress a required compatible rental. Old calibration profiles remain tied to their measured revision and must not be reused for the candidate.
+The historical October worker used PB8 `b9d6692ea`, including merged PR #1871 without the temporary patch. Both that revision and the current worker support HSL budget scaling. Older incompatible workers are checked during preparation and dispatch: blocked jobs remain waiting, while compatible following jobs can run. Pool scheduling matches each job to the rental's actual image/revision. Old calibration profiles remain tied to their measured revision.
 
 Older workers reject the new HSL field even when it is `false`. Preparation removes only that disabled field from the Cloud copy and preserves the original config. Previously frozen jobs containing it must be prepared again; their immutable snapshots are not rewritten during dispatch.
 

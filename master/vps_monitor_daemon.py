@@ -51,12 +51,14 @@ class VPSMonitorRPCDaemon:
         monitor: VPSMonitor | None = None,
         streamer: AsyncLogStreamer | None = None,
         expected_uid: int | None = None,
+        code_serial: str = "",
     ) -> None:
         self.socket_path = Path(socket_path) if socket_path is not None else default_socket_path()
         self.monitor = monitor or VPSMonitor()
         self.streamer = streamer or AsyncLogStreamer(self.monitor.pool)
         self.expected_uid = os.getuid() if expected_uid is None else int(expected_uid)
         self.boot_id = uuid.uuid4().hex
+        self.code_serial = str(code_serial)
         self.revision = 0
         self._state_digest = ""
         self._server: asyncio.AbstractServer | None = None
@@ -218,6 +220,7 @@ class VPSMonitorRPCDaemon:
             ),
             "capabilities": list(RPC_CAPABILITIES),
             "boot_id": self.boot_id,
+            "code_serial": self.code_serial,
         }
         encoded = json.dumps(stable, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
         digest = hashlib.sha256(encoded).hexdigest()

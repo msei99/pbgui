@@ -1,0 +1,9 @@
+---
+# The controller selects only freshly confirmed installed runtimes per host.
+# Reuse each generation's guarded wheel/update workflow without adding installs.
+- import_playbook: vps-update-pb7.yml
+  when: pbgui_update_pb7 | default(false) | bool
+- import_playbook: vps-update-pb8.yml
+  when: pbgui_update_pb8 | default(false) | bool
+- import_playbook: vps-update-pb9.yml
+  when: pbgui_update_pb9 | default(false) | bool

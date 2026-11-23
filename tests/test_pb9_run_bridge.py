@@ -76,7 +76,7 @@ def test_live_validation_uses_live_only_and_preserves_inline_source(validation_r
     env = validation_runtime
     config = {"config_version": "v9.0.0", "live": {"account": {"user": "alice"}},
               "bot": {"long": {"enabled": True}},
-              "coin_overrides": {"BTC": {"bot": {"long": {"hsl": {"enabled": False}}}}}}
+              "coin_overrides": {"BTC": {"bot": {"long": {"risk": {"hsl": {"enabled": False}}}}}}}
     before = copy.deepcopy(config)
     result = pb9_config.validate_pb9_live_config(config, env.root, env.python)
     assert result["valid"] is True

@@ -12,6 +12,8 @@
   if (initial.searchParams.get('paths') === '1') { byId('runtime-fields').hidden = false; byId('runtime-toggle').setAttribute('aria-expanded', 'true'); }
   const dirty = () => editor.value !== state.clean || (!!editor.value && filename.value.trim() !== state.name);
   const errorMessages = {
+    incompatible_pb9_config:'This PB9 development config is incompatible. Delete it and create a new config; no automatic migration is performed.',
+    runtime_upgrade_required:'Update PB9 first: this editor requires the current post-PR #2318 risk layout.',
     runtime_paths_invalid:'PB9 paths were rejected. Check the separate checkout and environment.',
     runtime_not_detected:'A separate PB9 runtime is required. Check Runtime paths.',
     config_directory_not_private:'The PB9 config directory must be owned by this user with permissions 0700.',

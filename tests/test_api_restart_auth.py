@@ -548,10 +548,41 @@ def test_missing_package_check_capability_marks_persistent_monitor_stale(monkeyp
     assert stale[0]["reason"] == "package check capability missing"
 
 
+@pytest.mark.parametrize("serial,available,in_process,expected", [
+    ("2051", True, False, True),
+    ("", True, False, True),
+    ("2052", True, False, False),
+    ("2051", False, False, False),
+    ("2051", True, True, False),
+])
+def test_monitor_restart_tracks_startup_serial_even_with_all_capabilities(
+    monkeypatch, serial, available, in_process, expected
+) -> None:
+    """An old monitor cannot evade restart merely by supporting earlier RPC features."""
+    monkeypatch.setattr(PBApiServer, "_read_serial", lambda: 2052)
+    monkeypatch.setattr(PBApiServer, "_vps_monitor_in_process", in_process)
+    monkeypatch.setattr(credential_process_registry, "running_relevant_processes", lambda _root: [])
+    monkeypatch.setattr(credential_process_registry, "process_barrier_readiness",
+                        lambda _root, processes: {"services": []})
+    monkeypatch.setattr(PBApiServer, "_vps_monitor", SimpleNamespace(
+        upstream_release_capability=True, package_check_capability=True,
+        available=available, code_serial=serial,
+    ))
+    stale = PBApiServer._runtime_service_restart_state()["stale_services"]
+    assert bool(stale) is expected
+    if expected:
+        assert len(stale) == 1
+        assert stale[0]["unit"] == "pbgui-vps-monitor.service"
+        assert stale[0]["running_serial"] == (serial or "legacy")
+
+
 def test_blocked_restart_releases_master_update_reservation(monkeypatch) -> None:
     """Shutdown cancels a waiting restart and releases its update reservation."""
     class Lease:
         released = False
+
+        def detach(self) -> None:
+            """Model transfer to the API-owned waiting restart."""
 
         def release(self) -> None:
             self.released = True

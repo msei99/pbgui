@@ -13,6 +13,39 @@ import pytest
 import pb9_runtime
 
 
+@pytest.mark.parametrize('expression,expected', [
+    ("{'hsl': {}, 'unstuck': {}, 'risk': {}}", 'legacy'),
+    ("{'risk': {'hsl': {}, 'unstuck': {}}}", 'current'),
+    ("{'risk': build_risk()}", 'unknown'),
+    ("{'risk': {'hsl': {}, 'unstuck': {}, **other}}", 'unknown'),
+    ("{'risk': {'hsl': {}, 'unstuck': {}}, 'hsl': {}}", 'legacy'),
+    ("{'risk': {'hsl': {}, 'hsl': {}, 'unstuck': {}}}", 'unknown'),
+])
+def test_static_config_layout_reads_paths_without_executing_source(tmp_path, expression, expected):
+    """Config schema v9.0.0 alone cannot distinguish development risk layouts."""
+    repo = tmp_path / 'pb9'; source = repo / 'src/config/bot_defaults.py'
+    source.parent.mkdir(parents=True)
+    marker = tmp_path / 'executed'
+    source.write_text(f'from pathlib import Path\nPath({str(marker)!r}).touch()\n'
+                      f'def get_common_bot_defaults():\n    return {expression}\n', encoding='utf-8-sig')
+    assert pb9_runtime.pb9_source_config_layout(repo) == expected
+    assert not marker.exists()
+
+
+def test_static_config_layout_rejects_external_and_oversized_sources(tmp_path):
+    """Do not follow external source links or parse unbounded files."""
+    repo = tmp_path / 'pb9'; source = repo / 'src/config/bot_defaults.py'
+    source.parent.mkdir(parents=True)
+    outside = tmp_path / 'other.py'
+    outside.write_text("def get_common_bot_defaults():\n    return {'hsl':{},'unstuck':{}}")
+    source.symlink_to(outside)
+    assert pb9_runtime.pb9_source_config_layout(repo) == 'unknown'
+    source.unlink(); source.write_bytes(b' ' * 262145)
+    assert pb9_runtime.pb9_source_config_layout(repo) == 'unknown'
+    for path in [None, '', ' ', '.']:
+        assert pb9_runtime.pb9_source_config_layout(path) == 'unknown'
+
+
 @pytest.fixture
 def layout(tmp_path):
     """Create source, environment and inert native/entry-point artifacts."""

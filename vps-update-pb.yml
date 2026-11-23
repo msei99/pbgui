@@ -140,19 +140,12 @@
       register: pb7_preflight
       changed_when: false
 
-    - name: Inspect installed PB7 wheel receipt
-      command:
-        argv: ["{{ pbgui_python }}", "{{ pbgdir }}/pb_wheel_status.py", "{{ pbgdir }}", --check-product, pb7, --repo, "{{ pb7dir }}", --python, "{{ pb7venv }}/bin/python"]
-      register: pb7_wheel_status
-      changed_when: false
+    - name: Prepare central PB7 wheels before runtime changes
+      include_tasks: tasks/pb7_wheels_prepare.yml
 
     - name: Decide whether PB7 requires an update
       set_fact:
-        pb7_update_required: "{{ 'checkout_required=true' in pb7_preflight.stdout or not ((pb7_wheel_status.stdout | from_json).installed | bool) }}"
-
-    - name: Prepare central PB7 wheels before runtime changes
-      include_tasks: tasks/pb7_wheels_prepare.yml
-      when: pb7_update_required
+        pb7_update_required: "{{ not (pb7_wheel_match.runtime_current | bool) }}"
 
     - name: Stop PBRun before changing PB7 checkout
       script: setup/vps_service_control.sh stop PBRun

@@ -602,7 +602,7 @@ def test_editor_page_uses_authenticated_same_origin_mount(endpoint):
     assert "%%" not in response.text
     assert "fixture-auth" not in response.text
     assert "fixture-private-ini-value" not in response.text
-    assert '/app/js/pb9_editor.js?v=1' in response.text
+    assert '/app/js/pb9_editor.js?v=2' in response.text
     assert not endpoint.snapshots
 
 
@@ -649,7 +649,7 @@ def test_editor_page_renderer_retains_trusted_mounted_prefix(monkeypatch):
         response = client.get("/api/pb9/main_page", headers={"Authorization": "Bearer fixture-auth"})
     assert response.status_code == 200
     assert 'window.API_BASE = "/mounted/api/pb9"' in response.text
-    assert 'src="/mounted/app/js/pb9_editor.js?v=1"' in response.text
+    assert 'src="/mounted/app/js/pb9_editor.js?v=2"' in response.text
     assert 'href="/mounted/app/css/sidebar_layout.css?v=4"' in response.text
     assert "%%" not in response.text
 

@@ -35,3 +35,30 @@ Runtime paths containing `%` are currently unsupported by the INI slot writer an
 Requests and documents have separate one-MiB limits. The document limit counts ASCII-escaped JSON and the native transport includes additional runtime identity, so a compact or non-ASCII request can reach a limit below one MiB on the wire. JSON nesting is limited to 64 levels and filenames to 255 UTF-8 bytes. Only inline configurations are supported; file-backed coin lists/overrides and symbol-map-dependent sources are rejected. The library scan is bounded to 1,000 directory entries.
 
 Native helper ownership currently requires Linux. Stop/shutdown cancels in-flight native checks; an atomic save already published remains saved. Revision locks coordinate PBGui writers; unrelated same-user filesystem editors do not participate in that lock protocol. A real v9/Rust installation is required for native testing; offline browser tests use isolated fixtures.
+
+## Current PB9 risk layout
+
+PBGui requires the post-PR #2318 PB9 risk layout. Older PB9 development configs
+are shown as incompatible and cannot be edited, saved, queued, started or resumed.
+Delete them explicitly and create new configs from the current native template.
+PBGui does not migrate, rewrite or automatically delete them. Existing stop and
+delete safeguards for enabled or running instances remain in place. Old result
+charts and metrics remain readable; launching their old configuration is blocked.
+
+Directional HSL and Unstuck settings are under `bot.<scope>.risk`. Portfolio HSL
+is under `bot.portfolio.risk.hsl`. The shared realized-loss memory is configured
+under `bot.portfolio.risk.loss_realization.memory_ema_span_minutes`. Its loss gate
+has an explicit `enabled` switch and a separate `max_realized_drawdown_fraction`
+in `[0, 1)`, required only when enabled. The old `unstuck.close_fraction` is removed.
+These fields use the normal GUI controls and native parameter help.
+
+GPU execution requires a policy supported by the installed PB9 native preflight.
+In this revision, active Unstuck or the realized-loss gate requires CPU, including
+scenario and coin overrides. PBGui rejects unsupported GPU requests before launch
+or rental and never silently disables risk settings. A worker built for a different
+PB9 source revision cannot run the job.
+
+The existing reviewed PB8-to-PB9 converter uses the installed official converter
+and must produce this current layout. It creates an unsaved draft; it does not
+convert existing PB9 development configs. Update the separate PB9 runtime if the
+editor reports that its native template is too old.
