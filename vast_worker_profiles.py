@@ -3,6 +3,7 @@ from dataclasses import dataclass
 import re
 
 from vast_provider import VastError
+from passivbot_runtime import pb9_release_commit
 
 SERVICE = 'Vast'
 
@@ -28,8 +29,8 @@ class WorkerProfile:
         return self
 
 
-PB9 = WorkerProfile('pb9','bf7329b039595e65acdf5c14475078912aeede96',
-                    'ghcr.io/msei99/pbgui-pb9-worker@sha256:7ee6a7bf0f6bb0c235e87ab2988efd1d2f0529f4348f1d9c20a13d8384395bcb','v9.0.0',
+PB9 = WorkerProfile('pb9',pb9_release_commit(),
+                    'ghcr.io/msei99/pbgui-pb9-worker@sha256:2570575aa0cc7c9745b5e86382a2dfdf162279bb42850a981e57eaffb342f258','v9.0.0',
                     'https://github.com/enarjord/passivbot')
 
 

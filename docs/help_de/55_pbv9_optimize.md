@@ -390,8 +390,8 @@ Native Cloud-Pakete enthalten dieselben Startoptionen und verwalteten Seeds.
 Lokale Pfade werden durch geprüfte Paketpfade ersetzt. Exportiert werden die
 Trainingseingaben der ausgewählten Szenarien. Lokale Checkpoints verwenden
 lokales Resume; Cloud Requeue startet einen neuen Job. Der Worker ist auf den
-öffentlichen Stand `bf7329b03` gepinnt. Vor der Vorbereitung muss die lokale PB9-Quelle
-dazu passen; die bestehende Installation wird nicht automatisch aktualisiert.
+öffentlichen Stand `7e3f6d4e` gepinnt. Vor der Vorbereitung muss die lokale PB9-Quelle
+dazu passen. Validate prüft dies vor der Konfigurationsvorbereitung; Queue lehnt Abweichungen vor dem Anlegen eines Jobs und vor dem Zugriff auf Vast-Zugangsdaten ab. Install PB9 / Update PB9 installiert standardmäßig denselben Release-Commit. Eine ausdrücklich gewählte andere Branch-Version bleibt lokal nutzbar, für Vast muss die Quelle übereinstimmen. Die bestehende Installation wird nicht automatisch aktualisiert.
 Ein lokaler Vorbereitungsbericht kann Cloud-Eingaben mit abweichender
 Datensatzidentität ablehnen. Die native Prüfung wird nicht umgangen.
 
@@ -406,7 +406,7 @@ Max kann die CPU-Vorbereitung beschleunigen, verändert aber den Suchablauf.
 PB8-GPU-Vorbewertungen sind nicht direkt mit vollständigen PB9-GPU-Auswertungen
 vergleichbar.
 
-Der aktuelle Worker ist auf den offiziellen v9-Stand `bf7329b03` (einschließlich PR #2305) gepinnt und enthält die
+Der aktuelle Worker ist auf den offiziellen v9-Stand `7e3f6d4e` (mit dem aktuellen Risikolayout nach PR #2318) gepinnt und enthält die
 Altersauflösung numerischer Hyperliquid-Markt-IDs. Offline-Alterstests und native
 CLI/Cohort-Prüfungen sind bestanden. Für diese Revision gibt es keine neue
 Leistungsmessung auf einer echten GPU.

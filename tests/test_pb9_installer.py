@@ -51,6 +51,11 @@ def test_official_guard_fetches_generation_branch(tmp_path, monkeypatch, scope, 
         git('-C', upstream, 'add', 'src')
         git('-C', upstream, 'commit', '-qm', branch)
         commits[branch] = git('-C', upstream, 'rev-parse', 'HEAD')
+    # v9 HEAD may move after this PBGui release; the selected pin stays older.
+    (upstream / 'new-v9-source.txt').write_text('new upstream revision\n')
+    git('-C', upstream, 'add', 'new-v9-source.txt')
+    git('-C', upstream, 'commit', '-qm', 'new v9 HEAD after release')
+    branch_heads = {**commits, 'v9': git('-C', upstream, 'rev-parse', 'HEAD')}
     git('-C', upstream, 'checkout', '-q', 'master')
     checkout = tmp_path/product
     git('clone', *([] if existing else ['--no-checkout']), upstream, checkout)
@@ -66,9 +71,10 @@ def test_official_guard_fetches_generation_branch(tmp_path, monkeypatch, scope, 
         context.update(wrapper['vars'])
     for key in ('passivbot_product', 'passivbot_major', 'passivbot_default_branch'):
         context[key] = render.from_string(play['vars'][key]).render(context)
+    context['pb8_target_commit'] = commits['v9'] if product == 'pb9' else ''
     suffix = 'for an existing checkout' if existing else 'for a new checkout'
     task = next(task for task in play['tasks']
-                if task.get('name', '').startswith('Fetch and verify latest official Passivbot')
+                if task.get('name', '').startswith('Fetch and verify selected official Passivbot')
                 and task['name'].endswith(suffix))
     argv = [render.from_string(str(value)).render(context) for value in task['command']['argv']]
     assert argv[argv.index('--fetch-url')+1] == 'https://github.com/enarjord/passivbot.git'
@@ -78,8 +84,8 @@ def test_official_guard_fetches_generation_branch(tmp_path, monkeypatch, scope, 
     assert result.returncode == 0, result.stderr
     branch = 'v9' if product == 'pb9' else 'master'
     ref = f'refs/remotes/pbgui-pb7-pin/{branch}'
-    assert argv[argv.index('--ref')+1] == ref
-    assert git('-C', checkout, 'rev-parse', ref) == commits[branch]
+    assert argv[argv.index('--ref')+1] == (commits['v9'] if product == 'pb9' else ref)
+    assert git('-C', checkout, 'rev-parse', ref) == branch_heads[branch]
     assert (git('-C', checkout, 'rev-parse', 'HEAD'), git('-C', checkout, 'status', '--porcelain')) == before
 
 

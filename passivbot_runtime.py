@@ -16,6 +16,18 @@ _SCHEMA_RE = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
 _SCHEMA_GENERATIONS = {"8": "pb8", "9": "pb9"}
 
 
+def pb9_release_commit():
+    """Read the bounded public PB9 source pin shared by installer and cloud worker."""
+    path = Path(__file__).with_name('pb9_ref.txt')
+    if path.is_symlink() or path.stat().st_size > 128:
+        raise ValueError('Invalid PB9 release pin file')
+    with path.open(encoding='ascii') as handle:
+        value = handle.read(128).strip()
+    if not re.fullmatch(r'[0-9a-f]{40}', value):
+        raise ValueError('PB9 release pin must be a full Git commit')
+    return value
+
+
 def read_source_string_literal(source: str | bytes, name: str, *, source_name: str = "Passivbot source") -> str:
     """Read one literal declaration without executing source, bounded to 256 KiB.
 

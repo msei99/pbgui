@@ -40,6 +40,7 @@ PREVIOUS_REVISION = "69227b75e808f8ce1f4b8949350b3311916bd377"
 ORIGINAL_REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
 # Persisted rental intents keep their own immutable image/revision pair.
 SUPPORTED_RENTAL_IMAGE_REVISIONS = {
+    'ghcr.io/msei99/pbgui-pb9-worker@sha256:7ee6a7bf0f6bb0c235e87ab2988efd1d2f0529f4348f1d9c20a13d8384395bcb': 'bf7329b039595e65acdf5c14475078912aeede96',
     IMAGE: REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:3aa5c16b22a62983ec5dc46862c21c2d959856bf2362d4d9b39e3ded61f000cf": LEGACY_B9_REVISION,
     "ghcr.io/msei99/pbgui-pb9-worker@sha256:9a8a4bbb6c5dfb8f927e1652dd52894da83f4bff03b74d0422814d0b3941d99b": "1b5805ed52c9fdf8eab6d21ed938e2c73edda85b",

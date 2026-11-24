@@ -79,11 +79,11 @@ def test_unknown_worker_profile_never_uses_pb8(value):
 def test_native_published_profile_is_bound_to_reviewed_digest_and_source():
     """Native rentals use the exact verified native image, independently of PB8."""
     profile = worker_profile('pb9').require_published()
-    assert profile.image == 'ghcr.io/msei99/pbgui-pb9-worker@sha256:7ee6a7bf0f6bb0c235e87ab2988efd1d2f0529f4348f1d9c20a13d8384395bcb'
-    assert profile.revision == 'bf7329b039595e65acdf5c14475078912aeede96'
+    assert profile.image == 'ghcr.io/msei99/pbgui-pb9-worker@sha256:2570575aa0cc7c9745b5e86382a2dfdf162279bb42850a981e57eaffb342f258'
+    assert profile.revision == '7e3f6d4ea37e6ff0713ffb37a73a52a886072706'
     assert profile.image != worker_profile('pb8').image
     from vast_image_layers import IMAGE_LAYERS
-    assert len(IMAGE_LAYERS[profile.image]) == 62
+    assert len(IMAGE_LAYERS[profile.image]) == 71
     assert all(size > 0 for size in IMAGE_LAYERS[profile.image].values())
 
 

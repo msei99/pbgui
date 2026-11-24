@@ -357,8 +357,11 @@ same explicit PB9 mode. Fresh master installation still installs PB7/PB8;
 PB9 reuses the PB8 binary build, update lock and validation workflow. Its source
 is a sibling `pb9` directory and its environment is `venv_pb9`; neither may
 share or overlap PBGui, PB7 or PB8. The local standalone installer preserves
-configured absolute PB9 paths. The normal update follows the official `v9`
-branch; it does not retain a temporary local PR checkout automatically.
+configured absolute PB9 paths. Standard installation and updates select the
+reviewed official commit in `pb9_ref.txt`, matching this release's Vast worker.
+Explicit branch selection remains available for local testing; Vast rejects a
+different source/schema before queueing. A temporary local PR checkout is not
+retained automatically.
 The selected commit must declare a v9 config schema before checkout or stopping
 PB9 live instances. PB7/PB8 instances are not selected by that stop operation.
 

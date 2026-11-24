@@ -15,6 +15,7 @@ DOCUMENTED_SCRIPT_DIRS = {
     "tools": "Developer audit and comparison tools intentionally report to stdout.",
 }
 PRINT_ALLOWLIST = {
+    "setup/vast_gpu_benchmark/verify_pb8_current.py": "Offline worker-verification CLI emits only source fingerprints and synthetic verification results as JSON from its explicit main entry point.",
     "pb8_wheels.py": "Offline wheel-build CLI prints its non-secret result for the invoking playbook.",
     "pb_wheel_status.py": "Runtime wheel-status CLI prints its non-secret receipt result for the invoking playbook.",
     "tools/code_impact.py": "Offline developer CLI emits the reviewed AST impact inventory as JSON on stdout.",

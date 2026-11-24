@@ -3,6 +3,8 @@ import copy
 from pathlib import Path
 
 from vast_provider import VastError
+from logging_helpers import human_log as _log
+from logging_helpers import human_log as _log
 from vast_worker_profiles import worker_profile
 
 SERVICE = 'Vast'
@@ -12,6 +14,19 @@ def _adapter():
     """Use the same selected native source, cancellation and metadata owner as Optimize."""
     from api.optimize_v9 import engine
     return engine.native
+
+
+def _worker_source_issue(identity, profile):
+    """Apply one immutable source/schema rule to previews and final export admission."""
+    if (identity.get('commit') != profile.revision
+            or identity.get('config_schema') != profile.schema):
+        return {'path': 'worker', 'code': 'worker_source_mismatch', 'status': 409,
+                'message': ('The local PB9 version does not match this PBGui release\'s Vast worker. '
+                            'Open System > VPS Manager > local master and run Update PB9 to install '
+                            'the matching version. An explicitly selected different branch can still '
+                            'be used locally; Vast requires the release-matched version.'),
+                'suggestions': []}
+    return None
 
 
 def _launch_options(source):
@@ -31,10 +46,29 @@ def validate(config,iterations=None,workers=None,*,use_adg=False):
     from pb9_config import PB9ConfigError
     errors=[]
     try:
-        source=_adapter().prepare(config)
-        metadata=_adapter().metadata()
+        native = _adapter()
+        profile = worker_profile('pb9').require_published()
+        identity = native.runtime(strict=True)
+        if not identity.get('ready'):
+            return [{'path': 'worker', 'code': 'runtime_unavailable', 'status': 409,
+                     'message': 'The local PB9 runtime is unavailable. Open System > VPS Manager > local master and run Update PB9.',
+                     'suggestions': []}]
+        issue = _worker_source_issue(identity, profile)
+        if issue:
+            return [issue]
+        source=native.prepare(config)
+        metadata=native.metadata()
+    except VastError as exc:
+        return [{'path': 'worker', 'code': 'worker_unavailable', 'status': exc.status,
+                 'message': str(exc), 'suggestions': []}]
     except PB9ConfigError as exc:
         return [{'path':'config','message':str(exc),'suggestions':[]}]
+    except RuntimeError as exc:
+        _log(SERVICE, 'PB9 cloud source identity could not be verified', level='WARNING',
+             meta={'error_type': type(exc).__name__})
+        return [{'path': 'worker', 'code': 'source_unverified', 'status': 409,
+                 'message': 'The local PB9 source identity cannot be verified. A clean, release-matched PB9 installation is required for Vast.',
+                 'suggestions': []}]
     bt=source.get('backtest',{})
     opt=source.get('optimize',{})
     if bt.get('hlcvs_data_dir'):
@@ -61,7 +95,8 @@ def prepare(source,iterations,workers,use_adg):
     from vast_history import freeze_relative_dates
     profile=worker_profile('pb9').require_published()
     errors=validate(source,iterations,workers,use_adg=use_adg)
-    if errors:raise VastError('; '.join(item['path']+': '+item['message'] for item in errors),422)
+    if errors:
+        raise VastError('; '.join(item['message'] for item in errors), errors[0].get('status', 422))
     config=copy.deepcopy(source);config.pop('pbgui',None)
     opt=config.setdefault('optimize',{})
     opt.update(backend='gpu',iters=iterations,n_cpus=workers)
@@ -77,8 +112,9 @@ def prepare(source,iterations,workers,use_adg):
         plan_config['backtest']['suite_enabled'] = True
         plan_config['backtest']['scenarios'] = [item for item in plan_config['backtest']['scenarios'] if isinstance(item, dict) and item.get('label') in selected]
     plan=get_pb9_optimize_cloud_plan(plan_config,*native.options(),cancel_event=native.stop_flag())
-    if plan['source']['commit']!=profile.revision or plan['source']['config_schema']!=profile.schema:
-        raise VastError('PB9 source differs from the pinned cloud worker; rebuild the worker before exporting.',409)
+    issue = _worker_source_issue(plan['source'], profile)
+    if issue:
+        raise VastError(issue['message'], issue['status'])
     plans=plan['data_plans']
     projection=copy.deepcopy(plans[0])
     # Native helper has already applied each scenario. Legacy helpers below

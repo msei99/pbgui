@@ -19,7 +19,8 @@
     pb8_branch_switch: "{{ (pb8_branch | default('') | string | trim | length) > 0 }}"
     pb8_target_branch: "{{ pb8_branch | default(passivbot_default_branch) }}"
     pb8_source_branch_value: "{{ pb8_source_branch | default(pb8_target_branch) }}"
-    pb8_target_commit: "{{ pb8_commit | default('') }}"
+    passivbot_release_commit: "{{ (lookup('file', playbook_dir + '/pb9_ref.txt') | trim) if passivbot_product == 'pb9' else '' }}"
+    pb8_target_commit: "{{ pb8_commit | default(passivbot_release_commit if not pb8_branch_switch else '', true) }}"
     pb8_remote_name_value: "{{ pb8_remote_name | default('origin') }}"
     pb8_remote_url_value: "{{ pb8_remote_url | default('') }}"
     pb8_selected_ref: "{{ pb8_target_commit if pb8_target_commit != '' else 'refs/remotes/' ~ pb8_remote_name_value ~ '/' ~ pb8_source_branch_value }}"
@@ -120,7 +121,7 @@
           - "{{ pb8dir }}"
       when: not pb8_git.stat.exists
 
-    - name: Fetch and verify latest official Passivbot v{{ passivbot_major }} for an existing checkout
+    - name: Fetch and verify selected official Passivbot v{{ passivbot_major }} for an existing checkout
       command:
         argv:
           - python3
@@ -128,7 +129,7 @@
           - --repo
           - "{{ pb8dir }}"
           - --ref
-          - "refs/remotes/pbgui-pb7-pin/{{ passivbot_default_branch }}"
+          - "{{ pb8_target_commit if pb8_target_commit != '' else 'refs/remotes/pbgui-pb7-pin/' ~ passivbot_default_branch }}"
           - --expected-major
           - "{{ passivbot_major }}"
           - --fetch-branch
@@ -140,7 +141,7 @@
         - pb8_git.stat.exists
         - not pb8_branch_switch
 
-    - name: Fetch and verify latest official Passivbot v{{ passivbot_major }} for a new checkout
+    - name: Fetch and verify selected official Passivbot v{{ passivbot_major }} for a new checkout
       command:
         argv:
           - python3
@@ -148,7 +149,7 @@
           - --repo
           - "{{ pb8dir }}"
           - --ref
-          - "refs/remotes/pbgui-pb7-pin/{{ passivbot_default_branch }}"
+          - "{{ pb8_target_commit if pb8_target_commit != '' else 'refs/remotes/pbgui-pb7-pin/' ~ passivbot_default_branch }}"
           - --expected-major
           - "{{ passivbot_major }}"
           - --fetch-branch

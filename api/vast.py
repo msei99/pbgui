@@ -1380,6 +1380,11 @@ def _queue_preparation_job(body: PrepareJobRequest, *, runtime="pb8") -> dict:
                 raise VastError("Optimizer config not found", 404)
             source_sha256 = digest(path)
             config = load_pb8_config(path)
+        if runtime == 'pb9':
+            from vast_pb9 import validate
+            issues = validate(config, body.iterations, body.workers, use_adg=body.use_adg)
+            if issues:
+                raise VastError('; '.join(item['message'] for item in issues), issues[0].get('status', 422))
         store = JobStore()
         with _PREPARATION_LOCK:
             if _PREPARATION_STOPPING:

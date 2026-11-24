@@ -364,9 +364,11 @@ wenn es konfiguriert ist.
 PB9 nutzt denselben Wheel-Bau, dieselbe Update-Sperre und Prüfung wie PB8.
 Quellcode liegt im benachbarten Verzeichnis `pb9`, die Umgebung in `venv_pb9`.
 Diese Pfade dürfen PBGui, PB7 und PB8 weder teilen noch überlappen. Der lokale
-eigenständige Installer erhält konfigurierte absolute PB9-Pfade. Normale Updates
-folgen dem offiziellen Branch `v9`; ein temporärer lokaler PR-Stand wird dabei
-nicht automatisch beibehalten. Vor Checkout und Stoppen verwalteter PB9-Bots
+eigenständige Installer erhält konfigurierte absolute PB9-Pfade. Standard-Installation
+und Updates verwenden den geprüften offiziellen Commit aus `pb9_ref.txt`, passend
+zum Vast-Worker dieses Releases. Eine ausdrücklich gewählte andere Branch-Version
+bleibt für lokale Tests möglich; Vast lehnt abweichende Quellen/Schemas vor dem
+Einreihen ab. Ein temporärer lokaler PR-Stand wird nicht automatisch beibehalten. Vor Checkout und Stoppen verwalteter PB9-Bots
 muss der ausgewählte Commit ein v9-Konfigurationsschema besitzen. PB7/PB8-Bots
 werden von diesem Stoppen nicht ausgewählt.
 
@@ -383,3 +385,5 @@ Deinstallation berücksichtigt auch `pb9` und `venv_pb9` unter dem ausgewählten
 Elternverzeichnis; darauf weist ihre Bestätigung hin.
 
 Der gemeinsame Kopfbereich für lokalen Master und entfernte Hosts enthält eine **PB9**-Karte mit Version, Branch und Bereitschaft. Vorhandene PB9-Dateien belegen noch keine Kompatibilität: Beim Risikolayout vor PR #2318 erscheint **Update PB9**, ohne Formatinformation bleibt die Kompatibilität unbekannt. Auch die Update-PB9-Aktion wird entsprechend hervorgehoben. Statusänderungen erhalten die aktuelle Ansicht.
+
+PB9 wird bei Standard-Installation und Update auf den geprüften Commit aus `pb9_ref.txt` gesetzt, passend zum veröffentlichten Vast-Worker dieses PBGui-Releases. Ein beweglicher v9-HEAD wird dabei nicht verwendet. Eine ausdrücklich gewählte Branch-Version bleibt für lokale Tests möglich; Vast prüft vor dem Einreihen die genaue Quellen- und Schemaübereinstimmung.

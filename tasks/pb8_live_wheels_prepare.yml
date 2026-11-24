@@ -31,21 +31,21 @@
     ansible_python_interpreter: "{{ ansible_playbook_python }}"
   register: pb8_controller_head
   changed_when: false
-  when: not pb8_branch_switch or pb8_target_commit == ''
+  when: pb8_target_commit == ''
 
 - name: Pin resolved {{ passivbot_label | default('PB8') }} wheel source commit
   set_fact:
     pb8_wheel_commit: "{{ {'stdout': (pb8_controller_head.stdout | from_json).commit} }}"
-  when: not pb8_branch_switch or pb8_target_commit == ''
+  when: pb8_target_commit == ''
 
 - name: Pin explicitly selected {{ passivbot_label | default('PB8') }} wheel source commit
   set_fact:
     pb8_wheel_commit: "{{ {'stdout': pb8_target_commit} }}"
-  when: pb8_branch_switch and pb8_target_commit != ''
+  when: pb8_target_commit != ''
 
 - name: Read target official {{ passivbot_label | default('PB8') }} head for confirmation
   command:
-    argv: [git, rev-parse, "refs/remotes/pbgui-pb7-pin/{{ passivbot_default_branch }}^{commit}"]
+    argv: [git, rev-parse, "{{ (pb8_target_commit if pb8_target_commit != '' else 'refs/remotes/pbgui-pb7-pin/' ~ passivbot_default_branch) ~ '^{commit}' }}"]
   args:
     chdir: "{{ pb8dir }}"
   register: pb8_target_head

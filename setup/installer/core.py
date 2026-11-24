@@ -543,9 +543,16 @@ def _clone_installer_wheel_source(product: str, stage: Path, log: LogCallback) -
                       "https://github.com/enarjord/passivbot.git", repo], log, timeout=900)
         _run_command(["git", "-C", repo, "fetch", "origin", PB7_PINNED_COMMIT], log, timeout=900)
         _run_command(["git", "-C", repo, "checkout", "--detach", PB7_PINNED_COMMIT], log)
+    elif product == 'pb9':
+        from passivbot_runtime import pb9_release_commit
+        commit = pb9_release_commit()
+        _run_command(["git", "init", repo], log)
+        _run_command(["git", "-C", repo, "fetch", "--depth", "1",
+                      "https://github.com/enarjord/passivbot.git", commit], log, timeout=900)
+        _run_command(["git", "-C", repo, "checkout", "--detach", "FETCH_HEAD"], log)
     else:
         _run_command(["git", "clone", "--filter=blob:none", "--depth", "1", "--branch",
-                      "v9" if product == "pb9" else "master", "https://github.com/enarjord/passivbot.git", repo], log, timeout=900)
+                      "master", "https://github.com/enarjord/passivbot.git", repo], log, timeout=900)
     verify_passivbot_major(repo, {"pb7": 7, "pb8": 8, "pb9": 9}[product])
     return repo
 

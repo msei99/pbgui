@@ -140,8 +140,9 @@ class NativeOptimizeEngine(OptimizeEngine):
         config_valid=not errors
         if not profile['published']:
             errors.append({'path':'worker','message':profile['reason']})
+        metrics = [] if any(item.get('path') == 'worker' for item in errors) else self.native.metadata()['scoring']['metrics']
         return {'config_valid':config_valid,'valid':not errors,'errors':errors,'warnings':[],
-                'metrics':self.native.metadata()['scoring']['metrics'],**profile}
+                'metrics':metrics,**profile}
 
     def _effective_optimize_value(self,config,key,default=None):
         """Use native metadata defaults only when an authored value is omitted."""

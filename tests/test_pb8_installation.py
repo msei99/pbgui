@@ -181,7 +181,7 @@ def test_pb8_playbooks_validate_before_restarting_live_processes(playbook_path: 
 
     role_index = source.index("Read ")
     assert_index = source.index("Require ")
-    verify_index = source.index("Fetch and verify latest official Passivbot v8")
+    verify_index = source.index("Fetch and verify selected official Passivbot v8")
     checkout_index = source.index("Checkout verified official Passivbot v8 commit")
     assert role_index < assert_index < verify_index < checkout_index
     assert "https://github.com/enarjord/passivbot.git" in source
@@ -415,7 +415,7 @@ def test_pb8_playbooks_validate_optional_branch_before_checkout(playbook_path: s
     assert source.index("Require selected PB8 commit to belong to source branch") < verify
     assert verify < source.index("Mark PB8 runtime unavailable for branch checkout") < checkout
     assert "--expected-major\n          - \"8\"" in source
-    assert "Fetch and verify latest official Passivbot v8" in source
+    assert "Fetch and verify selected official Passivbot v8" in source
     assert "Checkout verified official Passivbot v8 commit" in source
 
 

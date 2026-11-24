@@ -138,7 +138,7 @@ def test_pb8_update_skips_verified_wheels_independently_of_pbrun() -> None:
         'Download binary PB8 dependencies before changing the runtime')
     resolve = next(task for task in preparation if task['name'] == 'Resolve immutable PB8 wheel source commit on controller')
     assert resolve['register'] == 'pb8_controller_head'
-    assert resolve['when'] == "not pb8_branch_switch or pb8_target_commit == ''"
+    assert resolve['when'] == "pb8_target_commit == ''"
 
 
 def test_cleanup_waits_for_both_wheel_installs(tmp_path, monkeypatch):
