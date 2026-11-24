@@ -747,13 +747,21 @@ async def approve_proposal(
             _owner(session), proposal_id, body.payload_digest, body.conversation_id,
             **({"review_token": body.review_token} if body.review_token else {})
         )
-        if result.get("action") == "reviewed_config_change":
-            return _json(result)  # No agent continuation and no restored action permissions.
+        native_config_saved = (
+            result.get("action") == "reviewed_config_change"
+            and result.get("status") == "executed"
+            and result.get("version") == "v9"
+            and result.get("kind") == "optimizer"
+            and result.get("mode") == "save"
+            and not get_ai_capability_service().analysis_only(_owner(session), body.conversation_id)
+        )
+        if result.get("action") == "reviewed_config_change" and not native_config_saved:
+            return _json(result)  # Research-derived changes never restore action permissions.
         if result.get("status") == "executed" or (result.get('action') == 'vast_host_block' and result.get('status') == 'failed'):
             chat_service = get_ai_chat_service()
             continuation_result = {
                 key: result.get(key)
-                for key in ("proposal_id", "status", "action", "name", "queued_count", "template", "jev_result", "issue_url", "review_id", "publication_status")
+                for key in ("proposal_id", "status", "action", "name", "version", "kind", "mode", "queued_count", "template", "jev_result", "issue_url", "review_id", "publication_status")
                 if result.get(key) is not None
             }
             if result.get('action') == 'vast_host_block':
@@ -769,7 +777,13 @@ async def approve_proposal(
                     )
                 except Exception as exc:
                     _log(SERVICE, f"Approved analysis result could not be attached to chat: {type(exc).__name__}", level="WARNING")
-            if result.get("action") == "jev_analysis":
+            if native_config_saved:
+                continuation_guidance = (
+                    "The native PB9 optimizer config is saved. Continue the user's requested PB9 workflow; "
+                    "prepare the separately reviewed Vast proposal if requested. Config approval does not "
+                    "authorize queueing, job execution, a paid rental or changes to shared rental settings."
+                )
+            elif result.get("action") == "jev_analysis":
                 continuation_guidance = (
                     "Explain the Jev result from this approved action without calling Jev again "
                     "for the same decision."
@@ -796,7 +810,7 @@ async def approve_proposal(
                     True,
                 )
                 result["continuation"] = continuation
-            except AIChatError as exc:
+            except Exception as exc:
                 _log(SERVICE, f"Approved action continuation was not started: {type(exc).__name__}", level="WARNING")
                 result["continuation"] = {"status": "not_started"}
         return _json(result)
@@ -875,9 +889,14 @@ async def cancel_research(research_id: str, session: SessionToken = Depends(requ
 
 
 @router.get('/loop-template-options')
-def loop_template_options(session: SessionToken = Depends(require_auth)) -> JSONResponse:
+def loop_template_options(session: SessionToken = Depends(require_auth), version: str = 'v8') -> JSONResponse:
     """Return local prompt-builder choices without starting jobs or fetching markets."""
-    from api.optimize_v8 import _configs_dir, _CONFIG_FILENAME
+    from loop_runtime import LoopRuntime
+    try:
+        api = LoopRuntime(version).api()
+    except ValueError:
+        raise HTTPException(422, 'Select PB8 or PB9 optimizer') from None
+    _configs_dir, _CONFIG_FILENAME = api._configs_dir, api._CONFIG_FILENAME
 
     # Only names are needed here. The full listing scans managed backtests and
     # seed metadata, delaying choices even when result summaries are disabled.

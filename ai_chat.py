@@ -146,6 +146,8 @@ _CAPABILITY_ACTIVITY = {
     "preview_pb8_scenario_template": "Generating a PB8 scenario preview",
     "list_optimizer_runs": "Reading optimizer runs",
     "list_pb8_optimizer_queue": "Reading the PB8 optimizer queue",
+    "list_optimizer_queue": "Reading the selected optimizer queue",
+    "get_vast_optimizer_job": "Reading the cloud optimizer job",
     "rank_optimizer_run_candidates": "Scanning all Pareto candidates",
     "present_user_choices": "Preparing clarification choices",
     "list_backtests": "Reading backtest summaries",
@@ -181,6 +183,8 @@ _CAPABILITY_RESULT_ACTIVITY = {
     "preview_pb8_scenario_template": "PB8 scenario preview loaded; model is processing results",
     "list_optimizer_runs": "Optimizer runs loaded; model is processing results",
     "list_pb8_optimizer_queue": "PB8 optimizer queue loaded; model is processing results",
+    "list_optimizer_queue": "Optimizer queue loaded; model is processing results",
+    "get_vast_optimizer_job": "Cloud optimizer job loaded; model is processing results",
     "rank_optimizer_run_candidates": "Complete Pareto ranking loaded; model is processing results",
     "present_user_choices": "Clarification choices ready",
     "list_backtests": "Backtest summaries loaded; model is processing results",
@@ -2755,7 +2759,7 @@ class AIChatService:
                 or name in data or not isinstance(tool, str)
                 or tool not in readable or not isinstance(args, dict)):
                 raise AIChatError("Jev PBGui source must use a unique name and a read-only capability")
-            result = await self.capabilities.dispatch(owner, conversation_id, tool, args)
+            result = await self._dispatch_page_capability(owner, conversation_id, tool, args)
             data[name] = self.capabilities._sanitize_config(self.capabilities._strip_paths(result))
         try:
             payload = prepare_user_jev_payload(model, spec, data)
@@ -4276,6 +4280,14 @@ class AIChatService:
                 action.get("type") == "chat.quick_replies" for action in conversation.ui_actions
             ))
 
+    async def _dispatch_page_capability(self, owner, conversation_id, tool, arguments):
+        """Bind all providers' optimizer actions to the authenticated page generation."""
+        async with self.state_lock:
+            conversation = self._owned_conversation(owner, conversation_id)
+            context = copy.deepcopy(conversation.context)
+        args = AICapabilityService.page_arguments(tool, arguments, context)
+        return await self.capabilities.dispatch(owner, conversation_id, tool, args)
+
     async def _agent_capability_result(
         self,
         owner: str,
@@ -4294,9 +4306,11 @@ class AIChatService:
                 "error": "Capability arguments must be a valid JSON object; correct the arguments and try again.",
             }
         args = arguments
+        async with self.state_lock:
+            page_key = self._owned_conversation(owner, conversation_id).context.get("page_key")
         try:
             request_key = json.dumps(
-                {"name": name, "arguments": args},
+                {"name": name, "arguments": args, "page_key": page_key},
                 allow_nan=False,
                 sort_keys=True,
                 separators=(",", ":"),
@@ -4311,7 +4325,7 @@ class AIChatService:
             _CAPABILITY_ACTIVITY.get(name, "Using a PBGui capability"),
         )
         try:
-            result = await self.capabilities.dispatch(owner, conversation_id, name, args)
+            result = await self._dispatch_page_capability(owner, conversation_id, name, args)
             await self._capture_ui_action(owner, conversation_id, result, wait_for_browser=True)
             output = {"success": True, "result": result}
         except AICapabilityError as exc:
@@ -5471,7 +5485,7 @@ class AIChatService:
             _CAPABILITY_ACTIVITY.get(tool, "Using a PBGui capability"),
         )
         try:
-            result = await self.capabilities.dispatch(
+            result = await self._dispatch_page_capability(
                 owner,
                 conversation.id,
                 tool,

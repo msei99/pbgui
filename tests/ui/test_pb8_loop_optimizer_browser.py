@@ -11,13 +11,14 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize('viewport_width,sidebar_width', [(1200, 160), (1200, 420), (720, 160)])
-def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_width):
+@pytest.mark.parametrize('runtime', ['v8', 'v9'])
+def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_width, runtime):
     """Real menu, explicit review, automatic state updates and preserved navigation with fixture-only rentals."""
     browser_api = __import__('browser_driver')
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
-    for key, value in {'API_BASE':'/api/optimize-v8','OPTIMIZE_VERSION':'v8','VERSION':'test',
+    for key, value in {'API_BASE':'/api/optimize-v8'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv'),'OPTIMIZE_VERSION':'v8'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv'),'VERSION':'test',
             'SERIAL':'1','NAV_HASH':'test','BASE_PREFIX':'','LIMITS_META':'{}',
-            'BACKTEST_VERSION':'v8','OPTIMIZE_NAV_TITLE':'PB8 Optimize','OPTIMIZE_NAV_CURRENT':'v8_optimize'}.items():
+            'BACKTEST_VERSION':'v8'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv'),'OPTIMIZE_NAV_TITLE':'PB8 Optimize'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv'),'OPTIMIZE_NAV_CURRENT':'v8_optimize'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv')}.items():
         source = source.replace('%%'+key+'%%', value)
     loop_id, worker_id = 'a' * 32, 'b' * 32
     run = dict(id=loop_id, name='Isolated replacement', status='running', phase='optimize', round=0,
@@ -27,6 +28,7 @@ def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_wi
         price_hour_usd=.08, maximum_deadline=2000010000, can_extend=True, can_edit_budget=True)
     mutations, errors = [], []
     workers = []
+    cloud_jobs = []
     with browser_api.sync_browser() as driver:
         browser = driver.chromium.launch(headless=True)
         try:
@@ -36,21 +38,21 @@ def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_wi
             page.on('pageerror', lambda error: errors.append(str(error)))
             def respond(route):
                 """Every API response is local synthetic data; no production mutations are possible."""
-                path = urlparse(route.request.url).path
-                if path in {'/audit', '/api/optimize-v8/main_page'}:
-                    html = source.replace('navCurrent: "v8_optimize"', 'navCurrent: "dashboards"') if path == '/audit' else source
+                path = urlparse(route.request.url).path.replace('/api/vast-v9/', '/api/vast/')
+                if path in {'/audit', '/api/optimize-v8/main_page'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv')}:
+                    html = source.replace('navCurrent: "v8_optimize"'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv'), 'navCurrent: "dashboards"') if path == '/audit' else source
                     route.fulfill(body=html, content_type='text/html')
                 elif path.startswith('/app/'):
                     asset = ROOT / 'frontend' / path.removeprefix('/app/')
                     route.fulfill(body=asset.read_bytes() if asset.is_file() else b'',
                         content_type='text/css' if asset.suffix=='.css' else 'text/javascript')
-                elif path == '/api/optimize-v8/loops':
+                elif path == '/api/optimize-v8/loops'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv'):
                     route.fulfill(json={'loops':[run]})
-                elif path == '/api/optimize-v8/loops/configs':
+                elif path == '/api/optimize-v8/loops/configs'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv'):
                     route.fulfill(json={'configs':[]})
-                elif path == '/api/optimize-v8/loops/options':
+                elif path == '/api/optimize-v8/loops/options'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv'):
                     route.fulfill(json={'configs':['fixture'],'profiles':[],'providers':{},'presets':[]})
-                elif path == '/api/optimize-v8/loops/'+loop_id+'/rental':
+                elif path == '/api/optimize-v8/loops/'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv')+loop_id+'/rental':
                     route.fulfill(json={'rental':rental})
                 elif path.endswith('/rental/replace-preview'):
                     route.fulfill(json={'snapshot':{'generation':0}, 'snapshot_digest':'c'*64,
@@ -62,21 +64,21 @@ def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_wi
                         gpu_replacement={'step':'deletion','reason':'Waiting for confirmed provider deletion'})
                     route.fulfill(status=202, json=run)
                 elif path == '/api/help/index':
-                    route.fulfill(json=[{'file':'43_pbv8_optimize','title':'PB8 Optimize'}])
+                    route.fulfill(json=[{'file':'43_pbv8_optimize'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv'),'title':'PB8 Optimize'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv')}])
                 elif path == '/api/help/content':
-                    route.fulfill(json={'content':'# PB8 Optimize\n\n## Replacing a GPU within the same AI Loop\nFixture guide.'})
+                    route.fulfill(json={'content':'# PB8 Optimize\n\n## Replacing a GPU within the same AI Loop\nFixture guide.'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv')})
                 elif path == '/api/vast/fragment':
                     route.fulfill(body=(ROOT/'frontend/vast.html').read_text(), content_type='text/html')
                 elif path == '/api/vast/jobs':
-                    route.fulfill(json={'jobs':[],'workers':workers,'queue':{},'supervision_available':True})
+                    route.fulfill(json={'jobs':cloud_jobs,'workers':workers,'queue':{},'supervision_available':True})
                 else:
                     route.fulfill(json={})
             page.route('**/*', respond)
             page.route_web_socket('**/*', lambda socket: socket.on_message(lambda _message: None))
             page.goto('http://pbgui.test/audit')
-            page.locator('.nav-group-btn[data-group="pbv8"]').click()
-            page.locator('.nav-item[data-page="v8_optimize"]').click()
-            page.wait_for_url('**/api/optimize-v8/main_page')
+            page.locator('.nav-group-btn[data-group="pbv8"]'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv')).click()
+            page.locator('.nav-item[data-page="v8_optimize"]'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv')).click()
+            page.wait_for_url('**/api/optimize-v8/main_page'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('43_pbv', '55_pbv' if runtime == 'v9' else '43_pbv'))
             page.locator('.sb-section[data-panel="loops-queue"]').click()
             page.get_by_role('textbox', name='Search AI Loops queue').fill('Isolated')
             main = '#loops-queue-table tr[data-key="'+loop_id+'"]'
@@ -118,7 +120,7 @@ def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_wi
             run['gpu_replacement'].update(step='capacity', reason='Optimizer attempt allowance exhausted')
             browser_api.expect(page.locator('#loop-rental-status')).to_contain_text('Optimizer attempt allowance exhausted')
             assert len(mutations) == 1 and not errors
-            workers.append(dict(id=worker_id, loop_id=loop_id, loop_owner='fixture', kind='worker',
+            workers.append(dict(id=worker_id, loop_id=loop_id, loop_owner='fixture', kind='worker', runtime='pb9' if runtime == 'v9' else 'pb8',
                 status='running', rental_state='active', instance_id=11, deadline=2000007200,
                 budget_usd=2, price_hour_usd=.08, gpu_name='Fixture GPU', host_machine_id=101))
             page.locator('.sb-section[data-panel="queue"]').click()
@@ -130,6 +132,27 @@ def test_gpu_replacement_review_wait_reload_and_guide(viewport_width, sidebar_wi
             page.get_by_role('button', name='End rental', exact=True).click()
             browser_api.expect(page.locator('#pbgui-dialog-message')).to_contain_text('The Loop can fail')
             page.locator('#pbgui-dialog-cancel').click()
+            assert len(mutations) == 1 and not errors
+            # A normal cloud job is not a local queue item. The real AI action
+            # must open its cloud log without navigating to the other runtime.
+            cloud_id = 'c' * 32
+            cloud_jobs.append({'id':cloud_id, 'config_name':'Native cloud fixture',
+                'runtime':'pb9' if runtime == 'v9' else 'pb8', 'status':'ready',
+                'rental_state':'none', 'created_at':1000, 'iterations':256, 'workers':1})
+            page.evaluate("document.dispatchEvent(new Event('visibilitychange'))")
+            page.wait_for_function("() => window.PBGuiVast && PBGuiVast.queueItems().length === 1")
+            exposed = page.evaluate("PBGuiAI.collectContext({include_controls:false}).entities")
+            assert any(item['kind'] == 'optimizer_queue_item' and item['name'] == 'vast:' + cloud_id and item['version'] == runtime for item in exposed)
+            result = page.evaluate("""async id => {
+              const request={type:'page.perform_action',target:{page_key:optimizeEditorAdapter.navCurrent},payload:{action:'show_log',entity:{kind:'optimizer_queue_item',name:'vast:'+id}}};
+              const event=new CustomEvent('pbgui:ai-ui-action',{detail:request,cancelable:true});
+              window.dispatchEvent(event);
+              if(request.browser_completion)await request.browser_completion;
+              return {handled:event.defaultPrevented,error:String(request.browser_error||'')};
+            }""", cloud_id)
+            assert result == {'handled':True,'error':''}
+            browser_api.expect(page.locator('#log-panel-title')).to_contain_text('Native cloud fixture')
+            assert '/optimize-' + runtime + '/' in page.url
             assert len(mutations) == 1 and not errors
         finally:
             browser.close()

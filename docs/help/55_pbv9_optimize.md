@@ -364,21 +364,36 @@ the profile does not replace the dispatch work cap.
 Native cloud bundles include the same launch options and managed seed artifacts.
 Host paths are replaced by verified bundle paths. Only the selected scenarios'
 training inputs are exported. Local checkpoints use local Resume; cloud Requeue
-starts a new job. The native worker is pinned to public source `7e3f6d4e`; the local
+starts a new job. The native worker is pinned to public source `9004fcd7`; the local
 PB9 source must match that worker. Validate checks this before config preparation; Queue rejects a mismatch before creating a job or accessing Vast credentials. Standard Install PB9 / Update PB9 installs the same release-pinned commit. An explicitly selected different branch remains usable locally, but Vast requires the matching source. The existing local
 installation is not updated implicitly. An imported preparation report may reject
 cloud inputs when their dataset identity differs; the worker never bypasses
 PB9's report verification.
 
-The separate AI Loops subsystem is not enabled for PB9 yet. Strategy Explorer
-remains a separate integration step.
+AI suggestions and **AI Loop Template**, **AI Loops Config**, **AI Loops Queue**
+and **AI Loops Results** use the same workflow as PB8, bound to the PB9 runtime.
+The AI reads the installed PB9 manual and native metric catalog. Global and
+Portfolio policy and sparse Long/Short overrides remain native PB9 configuration.
+Suggestions require an explicit, current user review before saving. Saving a
+suggestion does not start a job or rent a GPU.
+
+Loops require explicit model, round, attempt, duration, validation and optional
+rental budgets. They use separate PB9 definitions, history and authorization;
+CPU/GPU capacity and Vast rental limits are shared. Native PB9 backtests supply
+independent comparison evidence. Missing metrics remain unavailable, never zero
+or invented PB8 ADG/Gain aliases. Pause, stop and API restart retain owned jobs
+and resume supervision from durable state. PB9 GPU evaluation counts are native
+evaluations, not the PB8 proxy throughput unit. Strategy Explorer remains deferred.
+
+Offline tests cover temporary state and browser fixtures. No paid PB9 AI/GPU
+Loop is started as part of this integration verification.
 
 The PB9 cloud worker starts through the official native CLI, preserving prepared
 configuration reuse. Search mode is not changed automatically: Max can improve
 CPU preparation throughput but changes the search schedule. PB8 GPU proxy rates
 are not directly comparable to complete PB9 GPU evaluations.
 
-The current worker pins official v9 source `7e3f6d4e` (including the current post-PR #2318 risk layout) and includes the Hyperliquid
+The current worker pins official v9 source `9004fcd7` (including the current post-PR #2318 risk layout) and includes the Hyperliquid
 numeric market-ID age fix. The published image passed 36 offline candle-window, Rust backtest and GPU preparation tests plus native
 CLI/cohort probes; this revision has no new physical GPU performance measurement.
 
@@ -410,3 +425,7 @@ convert existing PB9 development configs. Update the separate PB9 runtime if the
 editor reports that its native template is too old.
 
 The runtime warning’s **Update PB9** link opens **VPS Manager → Master (local)**, where the existing Update PB9 action is available. It does not open Run or execute an update automatically.
+
+A normal AI-proposed Vast run also uses the PB9 config, native worker and PB9 cloud queue. The review identifies PB9 explicitly. After approval, use the returned cloud job ID for status and log viewing; the local optimizer queue is separate. AI actions on PB9 Optimize cannot create a PB8 optimizer config or switch into PB8.
+
+PB9 AI config proposals support the same typed Training/Holdout windows as PB8. The review shows native validation and the window counts. Holdout dates are excluded from optimizer training and saved with the config for later candidate validation. Saving is separate from approving a paid Vast run.

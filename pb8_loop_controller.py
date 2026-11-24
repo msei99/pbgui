@@ -70,9 +70,13 @@ async def owned_thread(function, *args, **kwargs):
 
 class LoopController:
     """Own replaceable controllers; detached native PB8 jobs survive API shutdown."""
-    def __init__(self, root, store=None, backend=None, ai=None):
-        self.store = store or LoopStore(root / 'data/loop_optimizer')
-        self.backend = backend or LoopBackend(root, self.store)
+    def __init__(self, root, store=None, backend=None, ai=None, *, runtime="v8"):
+        from loop_runtime import LoopRuntime
+        self.profile = LoopRuntime(runtime)
+        self.store = store or LoopStore(self.profile.directory(root))
+        self.store.runtime = runtime
+        self.store.runtime = runtime
+        self.backend = backend or LoopBackend(root, self.store, runtime=runtime)
         self.ai = ai or LoopAI(self.store)
         self.observers = ObserverJobs(self.store, self.backend, owned_thread)
         self._task = None
@@ -87,7 +91,7 @@ class LoopController:
     def start(self):
         if self._task is None or self._task.done():
             self._closing = False
-            self._task = asyncio.create_task(self._run(), name='pb8-loop-controller')
+            self._task = asyncio.create_task(self._run(), name=self.profile.label.lower() + '-loop-controller')
 
     async def close(self):
         self._closing = True
@@ -106,9 +110,9 @@ class LoopController:
         args = (settings['config_name'], settings) if bundle is None else (settings['config_name'], settings, bundle)
         config, overrides, fingerprint, holdouts, comparison = await owned_thread(self.backend.initial, *args)
         exclusions = copy.deepcopy(holdouts)
-        validate_change({'settings': settings, 'initial_config': config, 'initial_overrides': overrides, 'holdouts': holdouts, 'training_exclusions': exclusions}, config, overrides)
+        await owned_thread(validate_change, {'settings': settings, 'initial_config': config, 'initial_overrides': overrides, 'holdouts': holdouts, 'training_exclusions': exclusions}, config, overrides)
         record = await owned_thread(self.store.create, owner, settings, config, overrides, fingerprint, holdouts, comparison, queued=queued, training_exclusions=exclusions,
-                                    optimizer_research_version=1 if settings['execution'] in {'gpu', 'vast'} else None)
+                                    optimizer_research_version=1 if self.profile.version == "v8" and settings['execution'] in {'gpu', 'vast'} else None)
         return record
 
     def action(self, owner, loop_id, action):
@@ -790,10 +794,19 @@ class LoopController:
             await self.recover_validation(record)
             return
         if phase == 'interpret':
-            decision = await self.decision(record, 'interpret', {'metric_examples': ['gain', 'gain_strategy_eq', 'adg', 'adg_strategy_eq',
-                                          'drawdown_worst', 'drawdown_worst_strategy_eq', 'n_fills', 'sharpe_ratio'],
+            examples = ['gain', 'gain_strategy_eq', 'adg', 'adg_strategy_eq', 'drawdown_worst', 'drawdown_worst_strategy_eq', 'n_fills', 'sharpe_ratio']
+            if self.profile.native:
+                from pb9_loop_policy import metric_catalog
+                catalog, _reducers = await owned_thread(metric_catalog)
+                examples = sorted(catalog)
+            decision = await self.decision(record, 'interpret', {'metric_examples': examples,
                                           'repair_error': record.get('repair_error')})
             rubric = validate_rubric(decision.get('rubric'), record['settings']['goals'])
+            if self.profile.native:
+                from pb9_loop_policy import metric_catalog
+                metrics, _reducers = await owned_thread(metric_catalog)
+                if any(key not in metrics for rule in rubric for key in rule['metrics']):
+                    raise ValueError('PB9 evaluation rubric references an unsupported native metric')
             from ai_loop_search_limits import exposure_ceiling
             if exposure_ceiling(record['settings']) is not None and (
                     not isinstance(decision.get('reason'), str) or not decision['reason'].strip()):
@@ -905,7 +918,7 @@ class LoopController:
                     variant = resolve_variant(record, variant)
                 config = variant.get('config')
                 overrides = variant.get('overrides', record['initial_overrides'])
-                validate_change(record, config, overrides)
+                await owned_thread(validate_change, record, config, overrides)
                 job = await owned_thread(self.job, {**record, 'jobs': record['jobs'] + jobs}, 'optimizer', config, overrides, variant.get('reason', decision.get('reason', '')), **({'experiment': variant.get('experiment')} if record.get('optimizer_research_version') == 1 else {}))
                 if digest([fresh_optimizer_config(config, 0), overrides]) == digest([
                         fresh_optimizer_config(record['initial_config'], 0), record['initial_overrides']]):
@@ -1225,7 +1238,7 @@ class LoopController:
                         variant = resolve_variant(record, variant)
                         decision['variants'][index] = variant
                     if isinstance(variant, dict) and isinstance(variant.get('config'), dict):
-                        validate_change(record, variant['config'], variant.get('overrides', record['initial_overrides']))
+                        await owned_thread(validate_change, record, variant['config'], variant.get('overrides', record['initial_overrides']))
                         changes = validate_exploration(record, variant['config'], stagnation_after=next_stagnation)
                         if (changes or adaptive) and (not isinstance(variant.get('reason'), str) or not variant['reason'].strip()):
                             raise ValueError('Explain the search hypothesis in variant.reason')
@@ -1308,7 +1321,7 @@ class LoopController:
                     variant = resolve_variant(record, variant)
                 config = variant.get('config')
                 overrides = variant.get('overrides', record['initial_overrides'])
-                validate_change(record, config, overrides)
+                await owned_thread(validate_change, record, config, overrides)
                 jobs.append(await owned_thread(self.job, next_record, 'optimizer', config, overrides, variant.get('reason', ''), **({'experiment': variant.get('experiment')} if record.get('optimizer_research_version') == 1 else {})))
                 next_record = {**next_record, 'jobs': record['jobs'] + jobs}
             await owned_thread(self.commit, record, lambda row: row.update(round=next_record['round'], jobs=row['jobs'] + jobs,

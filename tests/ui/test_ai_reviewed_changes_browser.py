@@ -50,6 +50,12 @@ def review_page(request):
             'changes': [{'path': 'convergence', 'kind': 'added', 'after': {
                 'convergence_enabled': True, 'convergence_min_exact': 512,
                 'convergence_patience': 512, 'convergence_tolerance_pct': .2}}]}
+    if getattr(request, 'param', '') == 'pb9_windows':
+        conversation['analysis_only'] = False
+        proposal['preview'].update(version='v9', kind='optimizer', name='Native fixture',
+            validation={'valid': True, 'runtime': 'v9'}, effect='Save config only',
+            generated_scenario_template={'parameters': {'windows': [{'role': 'training'}] * 4},
+                                         'holdout_scenarios': [{'label': 'holdout'}]})
     pending = [proposal]
     calls, errors = [], []
     with sync_browser() as driver:
@@ -88,8 +94,13 @@ def review_page(request):
                 calls.append(('approve', body))
                 assert body['review_token'] == 'e' * 64
                 pending.clear()
-                route.fulfill(json={'proposal_id': pid, 'status': 'executed', 'action': 'reviewed_config_change',
-                                    'mode': 'save', 'kind': 'backtest', 'version': 'v8', 'name': 'test'})
+                result = {'proposal_id': pid, 'status': 'executed', 'action': 'reviewed_config_change',
+                          'mode': 'save', 'kind': 'backtest', 'version': 'v8', 'name': 'test'}
+                if getattr(request, 'param', '') == 'pb9_windows':
+                    conversation['busy'] = True
+                    result.update(kind='optimizer', version='v9', name='Native fixture',
+                                  continuation={'status': 'queued', 'conversation_id': cid})
+                route.fulfill(json=result)
             elif path.endswith('/turns'):
                 calls.append(('turn', route.request.post_data_json))
                 route.fulfill(json={})
@@ -252,3 +263,30 @@ def test_normal_vast_review_shows_paid_single_job_limits(review_page, surface):
     assert calls == []
     confirm.get_by_role('button', name='Cancel', exact=True).click()
     expect(page.get_by_role('button', name='Review changes', exact=True)).to_be_visible()
+
+
+@pytest.mark.parametrize('review_page', ['pb9_windows'], indirect=True)
+def test_native_review_shows_validated_training_and_excluded_holdout(review_page):
+    """The real shared review displays validation and saved 4+1 windows without starting work."""
+    page, calls = review_page
+    page.locator('#pbgui-ai-btn').click()
+    page.get_by_role('button', name='Review changes', exact=True).click()
+    dialog = page.locator('.pai-review-dialog')
+    for text in ('PB9 validation passed', '4 training windows', '1 holdout windows (excluded from training)', 'Save config only'):
+        expect(dialog).to_contain_text(text)
+    assert [kind for kind, _ in calls] == ['review']
+
+
+@pytest.mark.parametrize('review_page', ['pb9_windows'], indirect=True)
+def test_native_save_shows_automatic_continuation_without_submitting_a_second_turn(review_page):
+    """A server-owned continuation is visible after save, without client replay or a paid action."""
+    page, calls = review_page
+    page.locator('#pbgui-ai-btn').click()
+    page.get_by_role('button', name='Review changes', exact=True).click()
+    page.locator('.pai-review-dialog').get_by_role('button', name='Approve', exact=True).click()
+    confirm = page.locator('#pbgui-dialog-ovl')
+    expect(confirm).to_contain_text('does not authorize jobs or rentals')
+    confirm.get_by_role('button', name='Approve', exact=True).click()
+    expect(page.locator('.pai-compose textarea')).to_be_disabled()
+    expect(page.get_by_role('button', name='Stop', exact=True)).to_be_visible()
+    assert [kind for kind, _ in calls] == ['review', 'approve']

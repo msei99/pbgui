@@ -22,18 +22,21 @@ def warm_report_worker():
     from api import loop_optimizer_v8  # noqa: F401
 
 
-def build_report(root, owner, loop_id):
+def build_report(root, owner, loop_id, runtime="v8"):
     """Verify the owned archive in this process and return only the existing UI projection."""
-    from api.loop_optimizer_v8 import _DISPLAY_FIELDS, projection
+    from loop_runtime import LoopRuntime
+    api = __import__("api.loop_optimizer_" + runtime, fromlist=["engine"])
+    _DISPLAY_FIELDS, projection = api._DISPLAY_FIELDS, api.projection
     from fastapi.responses import JSONResponse
     from pb8_loop_store import LoopStore
     row = LoopStore(root).read(owner, loop_id, fields=_DISPLAY_FIELDS)
     return row['created_at'], JSONResponse({**projection(row), 'view_revision': row['_view_revision']}).body
 
 
-def build_diff(root, owner, loop_id, operation, baseline):
+def build_diff(root, owner, loop_id, operation, baseline, runtime="v8"):
     """Decode only comparison inputs, without contending with API background Python work."""
-    from api.loop_optimizer_v8 import _snapshot_diff
+    api = __import__("api.loop_optimizer_" + runtime, fromlist=["engine"])
+    _snapshot_diff = api._snapshot_diff
     from pb8_loop_store import LoopStore
     row = LoopStore(root).read(owner, loop_id, fields={'jobs', 'initial_config', 'initial_overrides'})
     return _snapshot_diff(row, operation, baseline)
@@ -42,7 +45,9 @@ def build_diff(root, owner, loop_id, operation, baseline):
 class LoopReportWorker:
     """Own two spawned workers, bounded by the API's coalesced admission registry."""
 
-    def __init__(self):
+    def __init__(self, runtime="v8"):
+        from loop_runtime import LoopRuntime
+        self.runtime = LoopRuntime(runtime).version
         self._lock = threading.RLock()
         self._closed = False
         self._slots = threading.BoundedSemaphore(8)
@@ -73,11 +78,11 @@ class LoopReportWorker:
 
     def build(self, root, owner, loop_id):
         """Read one owned display snapshot through bounded process admission."""
-        return self._execute(build_report, root, owner, loop_id)
+        return self._execute(build_report, root, owner, loop_id, self.runtime)
 
     def diff(self, root, owner, loop_id, operation, baseline):
         """Read one immutable snapshot comparison through the same bounded workers."""
-        return self._execute(build_diff, root, owner, loop_id, operation, baseline)
+        return self._execute(build_diff, root, owner, loop_id, operation, baseline, self.runtime)
 
     def _execute(self, function, root, *args):
         """Bound queued work across reports and comparisons, including multiple browser tabs."""

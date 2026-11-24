@@ -4,10 +4,14 @@ from __future__ import annotations
 SERVICE = 'AILoopObjectives'
 
 
-def validate_objective(value):
+def validate_objective(value, config=None):
     """Accept a measurable CPU goal, including metrics unavailable to GPU proxies."""
     from vast_config_validation import _METRIC_CONTRACT
     metrics = set(_METRIC_CONTRACT['supported_metrics']) | set(_METRIC_CONTRACT['exact_only_metrics'])
+    from loop_runtime import native
+    if native(config):
+        from pb9_loop_policy import metric_catalog
+        metrics, _ = metric_catalog()
     if (not isinstance(value, dict) or set(value) != {'metric', 'goal', 'reducer'}
             or not isinstance(value.get('metric'), str)
             or not isinstance(value.get('goal'), str)
@@ -21,6 +25,10 @@ def validate_objective(value):
 def scoring_objectives(config):
     """Validate every effective proxy metric/basis against the full GPU contract."""
     from vast_config_validation import METRICS, REDUCERS
+    from loop_runtime import native
+    if native(config):
+        from pb9_loop_policy import metric_catalog
+        METRICS, REDUCERS = metric_catalog()
     from pb8_loop_exploration import _scoring
     optimize = config.get('optimize')
     if not isinstance(optimize, dict):
@@ -52,7 +60,7 @@ def verify_objective_config(plan, config):
     """Accept legacy metadata and validate GPU support without imposing CPU criteria."""
     objective = plan.get('objective')
     if objective is not None:
-        validate_objective(objective)
+        validate_objective(objective, config)
         scoring_objectives(config)
 
 

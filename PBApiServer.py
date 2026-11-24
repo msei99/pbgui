@@ -132,6 +132,7 @@ from api.cluster import router as cluster_router, shutdown as cluster_shutdown
 from api.optimize_v7 import router as optimize_v7_router
 from api.optimize_v7 import startup as opt7_startup, shutdown as opt7_shutdown
 from api.loop_optimizer_v8 import router as loop_optimizer_v8_router, startup as loop8_startup, shutdown as loop8_shutdown, configure_restart_gate as loop8_configure_restart_gate
+from api.loop_optimizer_v9 import router as loop_optimizer_v9_router, startup as loop9_startup, shutdown as loop9_shutdown, configure_restart_gate as loop9_configure_restart_gate
 from api.optimize_v8 import router as optimize_v8_router
 from api.vast import router as vast_router
 from api.optimize_v8 import startup as opt8_startup, shutdown as opt8_shutdown
@@ -206,6 +207,7 @@ def _api_restart_pending() -> bool:
 
 
 loop8_configure_restart_gate(_api_restart_pending)
+loop9_configure_restart_gate(_api_restart_pending)
 
 
 def _read_serial() -> int:
@@ -425,6 +427,7 @@ def _restart_memory_block_reason() -> str:
     from api.vps_manager import restart_block_reason as vps_manager_restart_block_reason
     from vast_guard_migration import restart_block_reason as vast_guard_restart_block_reason
     from api.loop_optimizer_v8 import restart_block_reason as loop8_restart_block_reason
+    from api.loop_optimizer_v9 import restart_block_reason as loop9_restart_block_reason
 
     local_reasons = [
         reason
@@ -437,6 +440,7 @@ def _restart_memory_block_reason() -> str:
             vps_manager_restart_block_reason(),
             vast_guard_restart_block_reason(),
             loop8_restart_block_reason(),
+            loop9_restart_block_reason(),
             pb9_restart_block_reason(app),
         )
         if reason
@@ -1089,6 +1093,7 @@ async def _lifespan(app: FastAPI):
         _log(SERVICE, "[startup-timing] ai-recovery", level="INFO",
              meta={"duration_seconds": round(monotonic() - ai_started, 3)})
         _startup_step("loop8_startup", loop8_startup)
+        _startup_step("loop9_startup", loop9_startup)
         pb9_startup(app, restart_pending=_api_restart_pending, install_signal_hooks=True)
 
         lifecycle_tasks = [
@@ -1119,6 +1124,7 @@ async def _lifespan(app: FastAPI):
             _log(SERVICE, f"[lifespan] pb8-loop shutdown failed: {type(exc).__name__}", level="ERROR", meta={"traceback": traceback.format_exc()})
 
         shutdown_steps = (
+            ("pb9-loops", loop9_shutdown),
             ("backtest-v9", bt9_shutdown),
             ("pb9", lambda: pb9_shutdown(app)),
             ("auth", auth_shutdown),
@@ -1287,6 +1293,7 @@ app.include_router(backtest_v9_router, prefix="/api/backtest-v9", tags=["backtes
 app.include_router(cluster_router, prefix="/api/cluster", tags=["cluster"])
 app.include_router(optimize_v7_router, prefix="/api/optimize-v7", tags=["optimize-v7"])
 app.include_router(loop_optimizer_v8_router, prefix="/api/optimize-v8/loops", tags=["pb8-loops"])
+app.include_router(loop_optimizer_v9_router, prefix="/api/optimize-v9/loops", tags=["pb9-loops"])
 app.include_router(optimize_v8_router, prefix="/api/optimize-v8", tags=["optimize-v8"])
 app.include_router(vast_v9_router, prefix="/api/vast-v9", tags=["vast-v9"])
 app.include_router(optimize_v9_router, prefix="/api/optimize-v9", tags=["optimize-v9"])

@@ -5,9 +5,13 @@
     if (text != null) n.textContent = text;
     return n;
   }
+  var version = /\/optimize-v9(?:\/|$)/.test(location.pathname) ? 'v9' : 'v8';
+  var label = 'PB8';
+  var storagePrefix = 'pbgui.ai.loop-template';
   var marketsUrl = new URL('../../api/v8/coins/status', document.currentScript.src).href;
   var optionsUrl = new URL('../../api/ai/loop-template-options', document.currentScript.src).href;
-  var optimizeUrl = new URL('../../api/optimize-v8/', document.currentScript.src).href;
+  var optimizeUrl = new URL('../../api/optimize-' + version + '/', document.currentScript.src).href;
+  var optionsBase = optionsUrl, optimizeBase = optimizeUrl;
   async function requestOptions() {
     var response = await fetch(optionsUrl, {credentials: 'same-origin', cache: 'no-store'});
     var data = await response.json();
@@ -16,6 +20,11 @@
   }
   var instance;
   function attach() {
+    version = window.optimizeEditorAdapter && optimizeEditorAdapter.isV9 ? 'v9' : 'v8';
+    label = version === 'v9' ? 'PB9' : 'PB8';
+    storagePrefix = version === 'v9' ? 'pbgui.ai.v9.loop-template' : 'pbgui.ai.loop-template';
+    optionsUrl = optionsBase + (version === 'v9' ? '?version=v9' : '');
+    optimizeUrl = optimizeBase.replace('/optimize-v8/', '/optimize-' + version + '/');
     var root = node('div'); root.className = 'pbg-modal-overlay pai-template-overlay';
     root.setAttribute('aria-hidden', 'true');
     var dialog = node('section'); dialog.className = 'pbg-modal-window pai-template-window';
@@ -29,7 +38,7 @@
     panel.className = 'pbg-modal-body pai-loop-template';
     dialog.append(head, panel); root.appendChild(dialog); document.body.appendChild(root);
     var trigger = null, sending = false, sendError = '';
-    var floating = window.PBGuiFloatingWindow.attach(dialog, head, {storage_key: 'pbgui.ai.loop-template.geometry'});
+    var floating = window.PBGuiFloatingWindow.attach(dialog, head, {storage_key: storagePrefix + '.geometry'});
     var fields = {}, labels = {}, verified = false, marketReady = false, marketGeneration = 0, configs = [], loaded = false, generation = 0;
     var marketAbort = null, marketRetryTimer = null, marketError = '';
     var grid = node('div'); grid.className = 'form-row pai-template-grid'; panel.appendChild(grid);
@@ -47,7 +56,7 @@
       if (value != null) input.value = value;
       wrap.append(caption, input); grid.appendChild(wrap); return input;
     }
-    field('source', 'Starting configuration', [['', 'PB8 defaults']]);
+    field('source', 'Starting configuration', [['', label + ' defaults']]);
     field('direction', 'Direction', [['long', 'Long'], ['short', 'Short'], ['both', 'Both']], 'long');
     field('strategy', 'Strategy', [['ema_anchor', 'EMA Anchor'], ['trailing', 'Trailing Martingale'], ['both', 'Both — AI chooses']], 'both');
     field('hsl', 'HSL', [['off', 'Off'], ['on', 'On'], ['source', 'From starting configuration']], 'off');
@@ -68,7 +77,7 @@
     fields.holdout.addEventListener('change', function () { fields.holdout.value = fields.holdout.checked ? 'on' : 'off'; });
     field('start', 'Available period start (inclusive UTC)', null, '', 'date');
     field('end', 'Available period end (inclusive UTC)', null, '', 'date');
-    field('objective', 'Optimization goal', [['ai', 'AI choice'], ['gain', 'Maximum gain'], ['balanced', 'Gain (25% DD)'], ['adg', 'Average daily growth (ADG)'], ['custom', 'Custom']], 'ai');
+    field('objective', 'Optimization goal', [['ai', 'AI choice'], ['gain', version === 'v9' ? 'Maximum growth' : 'Maximum gain'], ['balanced', version === 'v9' ? 'Growth (25% DD)' : 'Gain (25% DD)'], ['adg', version === 'v9' ? 'Annualized growth (CAGR)' : 'Average daily growth (ADG)'], ['custom', 'Custom']], 'ai');
     field('drawdown', 'Maximum drawdown (%)', null, 50, 'number', .01, 100);
     field('custom', 'Custom objective', null, '').required = false;
     fields.custom.maxLength = 2000;
@@ -388,7 +397,7 @@
     function persist() {
       var values = {};
       Object.keys(fields).forEach(function (key) { if (!['notes', 'custom'].includes(key)) values[key] = fields[key].value; });
-      try { sessionStorage.setItem('pbgui.ai.loop-template', JSON.stringify({schema_version: 4, values: values, exchanges: exchanges(), coins: coins(), window_plan:windowPlan, window_signature:windowSignature, window_context:windowContext, window_edited:windowEdited,date_basis:dateBasis,restored_edits:restoredEdits})); } catch (_) {}
+      try { sessionStorage.setItem(storagePrefix, JSON.stringify({schema_version: 4, values: values, exchanges: exchanges(), coins: coins(), window_plan:windowPlan, window_signature:windowSignature, window_context:windowContext, window_edited:windowEdited,date_basis:dateBasis,restored_edits:restoredEdits})); } catch (_) {}
     }
     function sync() {
       var defaults = !fields.source.value;
@@ -445,7 +454,7 @@
       if (marketAbort) marketAbort.abort();
       sourceGeneration++;if(!windowPlan)sourceSignature='';disposePreview();
       generation++; marketGeneration++; root.classList.remove('is-open'); root.setAttribute('aria-hidden', 'true');
-      try { sessionStorage.removeItem('pbgui.ai.loop-template.open'); } catch (_) {}
+      try { sessionStorage.removeItem(storagePrefix + '.open'); } catch (_) {}
       floating.cancel(); if (trigger && trigger.isConnected) trigger.focus();
     }
     window.addEventListener('pagehide', function () {
@@ -474,7 +483,7 @@
         if (current !== generation) return;
         configs = data.configs || [];
         var sourceValue = fields.source.value;
-        fields.source.replaceChildren(new Option('PB8 defaults', ''));
+        fields.source.replaceChildren(new Option(label + ' defaults', ''));
         configs.forEach(function (c) { fields.source.add(new Option(c.name, c.name)); });
         if (Array.from(fields.source.options).some(function (o) { return o.value === sourceValue; })) fields.source.value = sourceValue;
         else error.textContent = 'Starting configuration is unavailable; choose a new source.';
@@ -484,10 +493,10 @@
     }
     function open(button) {
       trigger = button || trigger; root.classList.add('is-open'); root.setAttribute('aria-hidden', 'false');
-      try { sessionStorage.setItem('pbgui.ai.loop-template.open', '1'); } catch (_) {}
+      try { sessionStorage.setItem(storagePrefix + '.open', '1'); } catch (_) {}
       if (!loaded) {
         try {
-          var saved = JSON.parse(sessionStorage.getItem('pbgui.ai.loop-template') || 'null');
+          var saved = JSON.parse(sessionStorage.getItem(storagePrefix) || 'null');
           if (saved) {
             Object.keys(saved.values || {}).forEach(function (key) {
               if (fields[key] && !['notes', 'custom', 'source'].includes(key)) fields[key].value = saved.values[key];
@@ -548,7 +557,7 @@
       text += 'Maximum TWE is an upper ceiling, not a fixed search value. Store goals.max_twe=' + fields.twe.value + ' and choose the positive exposure search interval freely below or at that ceiling. Explain the interval and justify fixing TWE for a controlled experiment. Choose how many distinct Pareto candidates deserve independent CPU training validation in each round within the total budget of ' + fields.validations.value + ' validation jobs, including the baseline. There is no per-round candidate cap. Explain coverage, duplicate avoidance and allocation to future rounds. Holdout and Full Time Range reports do not consume this training budget.\n';
       var objectiveText = fields.objective.value === 'custom' ? fields.custom.value.trim() :
         fields.objective.value === 'ai' ? 'Find configurations with convincing return within the requested risk limits. Choose and explain suitable measurable evaluation criteria from the training evidence and user instructions; no fixed evaluation metric is prescribed.' :
-        fields.objective.value === 'adg' ? 'Seek strong daily growth. Choose and explain suitable evaluation metrics; no GPU scoring formula is prescribed.' :
+        fields.objective.value === 'adg' ? (version === 'v9' ? 'Seek strong annualized growth using native CAGR. CAGR is not ADG.' : 'Seek strong daily growth. Choose and explain suitable evaluation metrics; no GPU scoring formula is prescribed.') :
         'Seek high total return within the requested risk limits. Choose and explain suitable evaluation metrics; no GPU scoring formula is prescribed.';
       text += '\n' + objectiveText + '\n';
       text += 'Every training report must be complete, liquidation-free and have drawdown ≤' + fields.drawdown.value + '%.\n';
@@ -563,6 +572,7 @@
         if (current !== generation || !root.classList.contains('is-open')) return;
         if (window.PBGuiAI.isBusy()) throw new Error('Wait for the current AI turn to finish.');
         persist(); hide();
+        if (version === 'v9') text = text.replace(/PB8/g, 'PB9').replace(/propose_ai_loop/g, 'propose_pb9_ai_loop').replace(/get_ai_loop/g, 'get_pb9_ai_loop').replace(/propose_pb8_optimizer_config/g, 'propose_pb9_optimizer_config') + '\nUse version v9 for optimizer read tools. PB9 uses native Global/Portfolio fields and native metrics; do not use PB8 aliases.';
         await window.PBGuiAI.sendLoopPrompt(text);
       } catch (e) {
         sendError = e.message; open(trigger); error.textContent = sendError;

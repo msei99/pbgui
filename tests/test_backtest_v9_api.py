@@ -62,6 +62,24 @@ def operation(action,body=None,**args):
     return bt._operation('bt9_'+action,PB9CancelSignal(),payload)
 
 
+def test_clear_finished_keeps_loop_jobs_and_idempotency_cannot_adopt_them(native):
+    """Ordinary queue cleanup and retries cannot destroy or relabel Loop validation evidence."""
+    source, _status, _root = native
+    identity = {'loop_id': 'a'*32, 'loop_owner': 'b'*32}
+    body = {'name': 'owned', 'config': source, 'operation_id': 'c'*32}
+    job = bt._enqueue(body, PB9CancelSignal(), loop_identity=identity)['filename']
+    item = bt._read(bt._job_path(job))
+    item['status_override'] = 'stopped'
+    bt._write(bt._job_path(job), item)
+    assert operation('clear_finished')['removed'] == 0
+    assert bt._job_path(job).exists()
+    assert bt._enqueue(body, PB9CancelSignal(), loop_identity=identity)['filename'] == job
+    with pytest.raises(ValueError, match='different AI Loop'):
+        bt._enqueue(body, PB9CancelSignal(), loop_identity={**identity, 'loop_owner': 'd'*32})
+    with pytest.raises(ValueError, match='different AI Loop'):
+        bt._enqueue(body, PB9CancelSignal())
+
+
 @pytest.mark.parametrize('sidecar', [None, 'config.original.json', 'pbgui.source.json'])
 @pytest.mark.parametrize('wrapped', [False, True])
 def test_result_handoffs_and_archive_read_native_envelopes(native, monkeypatch, sidecar, wrapped):

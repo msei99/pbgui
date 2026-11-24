@@ -40,6 +40,7 @@ PREVIOUS_REVISION = "69227b75e808f8ce1f4b8949350b3311916bd377"
 ORIGINAL_REVISION = "ee2b7d49fd53ef790a66a28e2c85f2a6c8faebe8"
 # Persisted rental intents keep their own immutable image/revision pair.
 SUPPORTED_RENTAL_IMAGE_REVISIONS = {
+    'ghcr.io/msei99/pbgui-pb9-worker@sha256:2570575aa0cc7c9745b5e86382a2dfdf162279bb42850a981e57eaffb342f258': '7e3f6d4ea37e6ff0713ffb37a73a52a886072706',
     'ghcr.io/msei99/pbgui-pb9-worker@sha256:7ee6a7bf0f6bb0c235e87ab2988efd1d2f0529f4348f1d9c20a13d8384395bcb': 'bf7329b039595e65acdf5c14475078912aeede96',
     IMAGE: REVISION,
     "ghcr.io/msei99/pbgui-pb8-worker@sha256:3aa5c16b22a62983ec5dc46862c21c2d959856bf2362d4d9b39e3ded61f000cf": LEGACY_B9_REVISION,
@@ -493,7 +494,7 @@ class JobStore:
                                error="Input preparation interrupted by process shutdown. Requeue to prepare again.")
 
     def create_preparation(self, name: str, iterations: int, workers: int, use_adg: bool,
-                           *, requeue_from: str | None = None, operation_id: str | None = None, runtime: str = "pb8") -> dict:
+                           *, requeue_from: str | None = None, operation_id: str | None = None, runtime: str = "pb8", loop_identity: dict | None = None) -> dict:
         """Persist a pending input snapshot before its slower file work starts."""
         from vast_worker_profiles import worker_profile
         worker_profile(runtime)
@@ -507,6 +508,10 @@ class JobStore:
                  "exact_completed": 0, "gpu_candidates": 0, "error": None,
                  "input_progress": {"stage": "selecting", "files_completed": 0, "files_total": 0,
                                     "bytes_completed": 0, "bytes_total": 0}}
+        if loop_identity is not None:
+            from loop_runtime import queue_identity
+            state.update(queue_identity(loop_identity, 'v9' if runtime == 'pb9' else 'v8'))
+            state['loop_operation'] = operation_id
         if requeue_from is not None:
             state['requeue_from'] = job_id(requeue_from)
         if operation_id is not None:
@@ -516,7 +521,7 @@ class JobStore:
                 if (self.root / 'jobs' / identifier).exists():
                     existing = self.read(identifier)
                     if any(existing.get(key) != state.get(key) for key in
-                           ('operation_id', 'config_name', 'iterations', 'workers', 'use_adg', 'requeue_from')):
+                           ('operation_id', 'config_name', 'iterations', 'workers', 'use_adg', 'requeue_from', 'runtime', 'loop_id', 'loop_owner', 'loop_runtime')):
                         raise VastError('Cloud preparation belongs to another operation', 409)
                     return existing
                 self.publish(state)
@@ -903,7 +908,8 @@ class JobStore:
             if intent.get('gpu_replacement'):
                 from pb8_loop_store import LoopStore
                 from pb8_loop_gpu_replacement import validate_rental_authorization
-                loop = LoopStore(PROJECT / 'data/loop_optimizer').read(state['loop_owner'], state['loop_id'])
+                from loop_runtime import store_for_job
+                loop = store_for_job(PROJECT, state).read(state['loop_owner'], state['loop_id'])
                 _, replacement_limits = validate_rental_authorization(CloudQueue(self), loop, intent['gpu_replacement'], offer=offer)
             limit = (MAX_RENTALS if state.get('kind') == 'worker' and state.get('awaiting_queue_start')
                      else pool_limit(queue_state) if queue_state.get('pool_enabled') and state.get('kind') == 'worker'

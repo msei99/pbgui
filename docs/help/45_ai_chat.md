@@ -1,5 +1,13 @@
 # AI Setup and Chat
 
+PB9 Optimize supports native config, result, Pareto, source and metric reads and
+reviewed optimizer suggestions. Open **PBv9 → Optimize** for the shared **AI Loop
+Template**, **AI Loops Config**, **AI Loops Queue** and **AI Loops Results**.
+PB9 uses its own definitions and history, the installed native metric catalog and
+Global/Portfolio/Long/Short policy. Approving an optimizer suggestion saves it;
+starting a Loop requires its separate explicit execution and budget authorization.
+See [PB9 Optimize](55_pbv9_optimize.md) for verification limits.
+
 With **Include page context** enabled, selected PB7/PB8 Backtest Results (including AI Loop comparisons) are sent as up to eight exact result references. Selection is collected again for each message, so the assistant can resolve “the selected result” even when names repeat. Host paths are not included in these references; existing read checks and change approvals still apply.
 
 For a selected **PB8** result, ask the assistant to backtest its configuration again with explicit dates and exchanges, or request the full locally available period. The assistant can read candle inventory and prepare one approval with one separate job per exchange. The executed strategy, risk settings, coins and coin override files are preserved. The preview shows the source, dates, exchanges, job count and whether approved jobs may autostart. Approval queues private snapshots through the normal Backtest queue; it does not modify the source result/config or any AI Loop. Existing Suite windows are removed from these independent continuous-period reruns. Repeating the same approval does not create duplicate jobs. No optimizer or Pareto candidate lookup is necessary.
@@ -492,3 +500,9 @@ Candle analysis uses selected local data passed to Python through JSON stdin. It
 `propose_ohlcv_python_analysis` takes base `coins`, `start_time`, exclusive `end_time` and `code`; date-only boundaries mean UTC midnight. Stdin has `columns`, `series[].candles` and per-market `coverage`. Missing minutes are reported without interpolation. Include EMA warmup explicitly. Above 250,000 coin-minutes or 32 MiB, split the request by coin/time with overlapping warmup; data is never silently sampled or truncated. The review shows markets, interval, coverage and a dataset digest instead of putting every candle into the model context. Existing workspace-file Python remains a separate Bubblewrap-dependent feature.
 
 Browser action receipts tolerate malformed Unicode from truncated page labels while preserving the context schema, redaction and size limits. Completed clicks are not repeated when only their acknowledgement fails; the drawer retries the acknowledgement with backoff. A new accepted user turn dismisses old unconfirmed page actions so they cannot replay against a later page state. Other typed selection handoffs remain available.
+
+On PB9 Optimize, config proposals and normal Vast runs stay on PB9. The cloud review shows the generation; its execution receipt supplies the actual cloud job ID for status and log access. Missing context never silently selects PB8. Read-only comparisons with older generations remain available.
+
+Native PB9 metadata is available as a compact template/metric summary, with section, dictionary path and pagination for detailed registries. The shared window-preview tool and typed scenario_template proposal input preserve Training/Holdout plans. A trusted config-save proposal does not prohibit the subsequent, separate cloud-run review. Research-only conversations keep their original restrictions.
+
+Normal PB9 optimizer proposals created without research restriction resume the requested workflow automatically after an approved save. PBGui tells the same chat which PB9 config was saved; a requested Vast start is prepared for its own explicit review. Saving a config never approves a job or rental. Research-derived changes described below still receive only a completion receipt and never restore action permissions.

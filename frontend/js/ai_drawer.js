@@ -1265,11 +1265,21 @@
   }
 
   function proposalDetail(preview) {
-    if (preview.action === 'run_vast_optimizer') return 'Vast.ai · 1 normal optimizer · ' + String(preview.iterations || '') + ' iterations · ' + String(preview.gpu_name || '') + ' · up to USD ' + String(preview.max_price_per_hour) + '/h · USD ' + String(preview.budget) + ' budget · ' + String(preview.hours) + ' hours maximum · ' + ((preview.convergence || {}).convergence_enabled ? 'stop when no improvement' : 'iteration limit') + ' · paid rental and automatic cleanup; no AI Loop';
+    if (preview.action === 'run_vast_optimizer') return (preview.version === 'v9' ? 'PB9' : 'PB8') + ' · Vast.ai · 1 normal optimizer · ' + String(preview.iterations || '') + ' iterations · ' + String(preview.gpu_name || '') + ' · up to USD ' + String(preview.max_price_per_hour) + '/h · USD ' + String(preview.budget) + ' budget · ' + String(preview.hours) + ' hours maximum · ' + ((preview.convergence || {}).convergence_enabled ? 'stop when no improvement' : 'iteration limit') + ' · paid rental and automatic cleanup; no AI Loop';
     if (preview.action === 'vast_host_block') return 'Machine ' + String(preview.machine_id) + ' · Job ' + String(preview.job_id) + ' · ' + String(preview.effect || '');
     if (preview.action === 'publish_github_issue') return String(preview.target || '') + ' · ' + String(preview.login || '') + (preview.encrypted_attachment ? ' · encrypted diagnostic attachment' : '') + (preview.reconcile_only ? ' · check previous publication only' : ' · public');
     if (['save_ai_loop_config', 'run_ai_loop', 'save_vast_preferences', 'replace_ai_loop_gpu'].includes(preview.action)) return String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
-    if (preview.action === 'reviewed_config_change') return String(preview.version || '') + ' · ' + String(preview.kind || '') + ' · ' + String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
+    if (preview.action === 'reviewed_config_change') {
+      var detail = String(preview.version || '') + ' · ' + String(preview.kind || '') + ' · ' + String(preview.effect || '') + ' · ' + String(preview.changed_count || 0) + ' changes';
+      if (preview.validation && preview.validation.valid === true && preview.version === 'v9') detail += ' · PB9 validation passed';
+      var plan = preview.generated_scenario_template;
+      if (plan) {
+        var windows = (plan.parameters || {}).windows;
+        var trainingCount = Array.isArray(windows) ? windows.filter(function (row) { return row.role === 'training'; }).length : Number((plan.parameters || {}).training_windows || 0);
+        detail += ' · ' + trainingCount + ' training windows · ' + (plan.holdout_scenarios || []).length + ' holdout windows (excluded from training)';
+      }
+      return detail;
+    }
     if (preview.action === 'jev_analysis') return String(preview.version || '') + ' ' + String(preview.run_name || '') + ' - ' + String(preview.candidate_count || 0) + ' candidates assessed - ' + (preview.max_candidates == null ? 'Jev decides how many to mark' : 'mark at most ' + String(preview.max_candidates)) + ' - USD ' + String(preview.max_cost_usd || '') + ' maximum';
     if (preview.action === 'python_analysis') return String(preview.code_bytes || 0) + ' bytes of code - ' + String((preview.input_summary || {}).bytes || 0) + ' bytes of sanitized JSON input';
     if (preview.action === 'queue_backtests') {
@@ -1506,7 +1516,7 @@
       var approvalDetail = ['save_ai_loop_config', 'run_ai_loop', 'run_vast_optimizer', 'save_vast_preferences', 'replace_ai_loop_gpu', 'vast_host_block'].includes(preview.action)
         ? String(preview.effect || '')
         : preview.action === 'reviewed_config_change'
-        ? String(preview.effect || '') + '. This approval applies only to the displayed changes; the chat remains analysis-only.'
+        ? String(preview.effect || '') + '. This approval applies only to the displayed changes; it does not authorize jobs or rentals.'
         : preview.action === 'python_analysis'
         ? 'The reviewed code and sanitized input will run without network or host-data access. Proposal integrity is verified before execution.'
         : preview.action === 'start_optimize_queue'

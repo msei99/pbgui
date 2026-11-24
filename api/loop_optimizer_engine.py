@@ -1,0 +1,1799 @@
+"""Authenticated owner-scoped PB8 autonomous loop optimizer routes."""
+
+
+from __future__ import annotations
+
+
+import asyncio
+
+
+import copy
+
+
+from collections import OrderedDict
+
+
+from concurrent.futures import Future
+
+
+import fcntl
+
+
+import math
+
+
+import os
+
+
+import re
+
+
+import sys
+
+
+import threading
+
+
+import time
+
+
+from pathlib import Path
+
+
+import traceback
+
+
+from typing import Literal
+
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+
+from fastapi.responses import JSONResponse, Response
+
+
+from pydantic import BaseModel, ConfigDict, Field, model_validator, ValidationError
+
+
+from api.auth import SessionToken, require_auth
+
+
+from ai_chat import AIChatError, get_ai_chat_service, owner_key
+
+
+from logging_helpers import human_log as _log
+
+
+from pbgui_purefunc import PBGDIR
+
+
+from pb8_loop_controller import LoopController, owned_thread
+
+
+from pb8_loop_report_worker import LoopReportWorker, LoopReportUnavailable, LoopSnapshotMissing
+
+
+from pb8_loop_backend import migrate_loop_bundle
+
+
+from vast_provider import VastError
+
+
+from pb8_loop_store import TERMINAL, LoopDeletionConflict, config_defaults, config_changes, digest, run_deletable, completed_round_observations
+
+
+from pb8_loop_evidence import LoopAIPause
+
+
+SERVICE = 'PB8Loop'
+
+
+RESUME_LOCK_WAIT_SECONDS = 15
+
+
+_LIST_CACHE_BYTES = 8 * 1024 * 1024
+
+
+_LIST_CACHE_TTL = 30
+
+
+_DETAIL_CACHE_TTL = 300
+
+
+_DISPLAY_FIELDS = frozenset({
+    'id', 'owner', 'status', 'phase', 'round', 'created_at', 'started_at', 'updated_at', 'reason',
+    'last_error', 'failure', 'holdout_retryable', 'stop_reason', 'continuation', 'interpretation',
+    'rubric', 'history', 'bootstrap', 'ai_calls', 'ai_tokens_reserved', 'ai_usd_reserved',
+    'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline', 'rental_handover',
+    'ai_pause', 'knowledge_summary', 'ai_evidence_status', 'bootstrap_evidence_preview',
+    'ai_preview', 'control_generation', 'gpu_replacements', 'gpu_replacement_id',
+    'initial_config', 'initial_overrides', 'interrupted_ai', 'pending_ai', 'settings', 'fingerprint',
+    'jobs', 'observations', 'observer_jobs', 'observer_enabled', 'observer_holdouts',
+    'training_exclusions', 'holdouts', 'final_holdout_policy', 'final_validation_status',
+    'comparison', 'baseline', 'final_validation', 'best', 'bootstrap_jev_answers', 'jev_answers',
+    'cleanup_done', 'optimizer_research_version', 'optimizer_assessment', 'validation_recovery', 'decision_repair',
+    'native_training_version', 'native_training_round', 'native_training_summary', 'native_training_retry', 'native_training_fallback',
+})
+
+
+_OVERVIEW_FIELDS = frozenset({
+    'id', 'owner', 'status', 'phase', 'round', 'created_at', 'started_at', 'updated_at',
+    'deadline', 'settings', 'control_generation', 'reason', 'last_error',
+})
+
+
+_RENTAL_FIELDS = frozenset({
+    'id', 'owner', 'status', 'deadline', 'gpu_replacements', 'gpu_replacement_id',
+    'rental_extension', 'rental_extension_error',
+})
+
+
+PRESETS = {'gain', 'drawdown', 'uptrend', 'consistency', 'trades', 'robustness'}
+
+
+class LoopGoals(BaseModel):
+    """Simple explicit goals plus optional user-written requirements."""
+    model_config = ConfigDict(extra='forbid')
+    coins: list[str] = Field(default_factory=list, max_length=200)
+    direction: Literal['config', 'long', 'short', 'both'] = 'config'
+    positions: int | None = Field(default=None, ge=1, le=1000)
+    max_twe: float | None = Field(default=None, gt=0, le=1000, allow_inf_nan=False)
+    positions_by_side: dict[str, int] = Field(default_factory=dict)
+    presets: list[str] = Field(default_factory=lambda: ['gain', 'drawdown', 'uptrend'], max_length=6)
+    targets: dict[str, float] = Field(default_factory=dict)
+    text: str = Field(default='', max_length=8000)
+
+    @model_validator(mode='after')
+    def validate_goals(self):
+        """Reject ambiguous side capacities and nonfinite goal targets."""
+        import re
+        if not set(self.presets) <= PRESETS or len(set(self.presets)) != len(self.presets):
+            raise ValueError('Choose known unique goal presets')
+        if not self.presets and not self.text.strip():
+            raise ValueError('Choose a goal preset or describe your own goal')
+        if any(not re.fullmatch(r'[A-Za-z0-9._-]{1,40}', coin) for coin in self.coins):
+            raise ValueError('Invalid coin identifier')
+        self.coins = sorted(set(self.coins))
+        if not set(self.targets) <= set(self.presets) or any(not math.isfinite(value) for value in self.targets.values()):
+            raise ValueError('Targets must be finite values for chosen goals')
+        if self.positions_by_side:
+            if set(self.positions_by_side) != {'long', 'short'} or any(type(value) is not int or value < 0 for value in self.positions_by_side.values()):
+                raise ValueError('Specify nonnegative Long and Short capacities')
+            if self.positions is None or sum(self.positions_by_side.values()) != self.positions:
+                raise ValueError('Long plus Short positions must equal the requested total')
+            if self.direction in {'long', 'short'} and self.positions_by_side.get('short' if self.direction == 'long' else 'long'):
+                raise ValueError('Disabled direction cannot have positions')
+        return self
+
+
+class LoopStart(BaseModel):
+    """One bounded authorization for automatic optimizer and validation jobs."""
+    model_config = ConfigDict(extra='forbid')
+    config_name: str = Field(min_length=1, max_length=120)
+    provider: Literal['chatgpt', 'opencode-go', 'opencode-zen', 'claude-code', 'deepseek']
+    model: str = Field(min_length=1, max_length=128)
+    profile: str = Field(default='default', max_length=32)
+    effort: str = Field(default='', max_length=64)
+    service_tier: str = Field(default='', max_length=64)
+    execution: Literal['cpu', 'gpu', 'vast'] = 'cpu'
+    scenario_enabled: bool = False
+    strategy_enabled: bool = False
+    hsl_mode: Literal['on', 'off', 'auto'] = 'auto'
+    goals: LoopGoals = Field(default_factory=LoopGoals)
+    run_limit_mode: Literal['config', 'iters', 'proxy', 'hours'] = 'config'
+    run_iters: int | None = Field(default=None, ge=1, le=10_000_000)
+    run_proxy: int | None = Field(default=None, ge=1, le=1_000_000_000)
+    run_hours: float | None = Field(default=None, ge=.001, le=168, allow_inf_nan=False)
+    max_runs: int = Field(default=10, ge=1, le=200)
+    max_rounds: int = Field(ge=1, le=200, strict=True, description='Required hard upper bound on completed rounds, separate from optimizer attempts')
+    hours: float = Field(default=24, ge=.1, le=168, allow_inf_nan=False)
+    parallel: int = Field(default=1, ge=1, le=16)
+    max_validations: int = Field(default=30, ge=1, le=1000)
+    candidates: int | None = Field(default=None, ge=1, le=1000, exclude=True, deprecated=True,
+        description='Legacy compatibility only; AI chooses candidates within max_validations, without a per-cycle cap')
+    patience: int = Field(default=3, ge=1, le=100)
+    jev_enabled: bool = True
+    historical_advice: bool = True
+    decision_timeout_seconds: float | None = Field(default=None, gt=0, le=604800, allow_inf_nan=False)
+    model_call_timeout_seconds: float | None = Field(default=None, gt=0, le=604800, allow_inf_nan=False)
+    ai_decision_token_limit: int | None = Field(default=None, gt=0, le=10**12)
+    ai_decision_usd_limit: float | None = Field(default=None, gt=0, le=10**6, allow_inf_nan=False)
+    ai_budget_confirmed: bool = False
+    authorization: bool = False
+
+    @model_validator(mode='after')
+    def validate_run_limit(self):
+        """Validate one explicit per-optimizer limit independently of the total loop budget."""
+        field = {'iters': self.run_iters, 'proxy': self.run_proxy, 'hours': self.run_hours}
+        if self.max_rounds > self.max_runs:
+            raise ValueError('Maximum completed rounds cannot exceed maximum optimizer attempts')
+        if self.run_limit_mode != 'config' and field[self.run_limit_mode] is None:
+            raise ValueError('Specify the chosen per-run limit')
+        if self.run_limit_mode == 'proxy' and self.execution == 'cpu':
+            raise ValueError('Proxy evaluation limits require Local GPU or Vast.ai')
+        if self.run_limit_mode == 'iters' and self.execution == 'vast' and self.run_iters < 256:
+            raise ValueError('Vast.ai requires at least 256 iterations per run')
+        if self.run_limit_mode == 'hours' and self.run_hours > self.hours:
+            raise ValueError('Per-run hours cannot exceed total loop hours')
+        return self
+
+
+class LoopAction(BaseModel):
+    """Explicit routine pause/resume/stop intent, without confirmation dialogs."""
+    model_config = ConfigDict(extra='forbid')
+    action: Literal['start', 'pause', 'resume', 'stop']
+    selection: dict | None = None
+    ai_settings: dict | None = None
+    acknowledge_interrupted: bool = False
+
+
+class LoopHandover(BaseModel):
+    """Replace one owned Loop using its existing paid GPU only."""
+    model_config = ConfigDict(extra='forbid')
+    target_loop_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    worker_id: str | None = Field(default=None, pattern=r'^[0-9a-f]{32}$')
+    source_generation: int | None = Field(default=None, ge=0)
+    selection: dict | None = None
+    authorization: bool = False
+
+
+class LoopSource(BaseModel):
+    """Reference an accessible PB8 configuration, native job or result snapshot."""
+    model_config = ConfigDict(extra='forbid')
+    kind: Literal['config', 'queue', 'result', 'cloud', 'run', 'definition']
+    id: str = Field(min_length=1, max_length=1024)
+
+
+class LoopDefinitionSave(BaseModel):
+    """Save settings using a server-resolved snapshot, never an arbitrary path."""
+    model_config = ConfigDict(extra='forbid')
+    settings: dict
+    source: LoopSource
+    revision: int | None = Field(default=None, ge=1)
+    queue_id: str | None = Field(default=None, pattern=r'^[a-f0-9]{32}$')
+    source_digest: str | None = Field(default=None, pattern=r'^[a-f0-9]{64}$')
+
+
+class LoopInstructionSave(BaseModel):
+    """Save a new named version without replacing an existing prompt."""
+    model_config = ConfigDict(extra='forbid')
+    name: str = Field(min_length=1, max_length=80)
+    text: str = Field(min_length=1, max_length=64000)
+    revision: int = Field(ge=0, strict=True)
+
+
+class LoopInstructionActivate(BaseModel):
+    """Select an owned instruction version for future runs."""
+    model_config = ConfigDict(extra='forbid')
+    version_id: str = Field(pattern=r'^(default|[0-9a-f]{32})$')
+    revision: int = Field(ge=0, strict=True)
+
+
+class LoopInstructionDelete(BaseModel):
+    """Delete an owned version only against the displayed catalog revision."""
+    model_config = ConfigDict(extra='forbid')
+    revision: int = Field(ge=0, strict=True)
+
+
+class LoopRentalExtension(BaseModel):
+    """Bind explicit extension intent to the reviewed rental and Loop deadlines."""
+    model_config = ConfigDict(extra='forbid')
+    worker_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    expected_deadline: float = Field(allow_inf_nan=False)
+    expected_loop_deadline: float = Field(allow_inf_nan=False)
+    minutes: int = Field(strict=True, ge=1, le=1440)
+
+
+class LoopGPUReview(BaseModel):
+    """Select exactly one owned rental for review."""
+    model_config = ConfigDict(extra='forbid')
+    worker_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+
+
+class LoopGPUReplacement(LoopGPUReview):
+    """Execute the exact reviewed replacement, with a durable replay identity."""
+    expected_generation: int = Field(strict=True, ge=0)
+    snapshot_digest: str = Field(pattern=r'^[0-9a-f]{64}$')
+    operation_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    authorization: bool = Field(default=False, strict=True)
+
+
+class LoopRentalBudget(BaseModel):
+    """Require the reviewed rental identity, deadline and budget for a budget edit."""
+    model_config = ConfigDict(extra='forbid')
+    worker_id: str = Field(pattern=r'^[0-9a-f]{32}$')
+    expected_deadline: float = Field(allow_inf_nan=False)
+    expected_budget_usd: float = Field(allow_inf_nan=False, ge=.1, le=100)
+    budget_usd: float = Field(allow_inf_nan=False, ge=.1, le=100)
+
+
+class LoopDeepSearch(BaseModel):
+    """Identify exactly one user-selected evaluation without accepting a config override."""
+    model_config = ConfigDict(extra='forbid')
+    operation: str = Field(pattern=r'^[a-f0-9]{32}$')
+
+
+class LoopContinue(BaseModel):
+    """Continue an exact checkpoint with a new bounded authorization and provenance."""
+    model_config = ConfigDict(extra='forbid')
+    rounds: int = Field(default=5, ge=1, le=200)
+    hours: float | None = Field(default=None, ge=.1, le=168, allow_inf_nan=False)
+    round: int | None = Field(default=None, ge=0)
+    selection: dict = Field(default_factory=dict)
+    authorization: bool = False
+
+
+class LoopOptimizerEngine:
+    """Share loop routes with independent runtime, lifecycle and owner-scoped state."""
+
+    def __init__(self, root=PBGDIR, runtime="v8"):
+        """Bind one runtime before publishing any routes or starting controllers."""
+        from loop_runtime import LoopRuntime
+        self.profile = LoopRuntime(runtime)
+        self.PBGDIR = Path(root)
+        self.AIChatError = AIChatError
+        self.APIRouter = APIRouter
+        self.BaseModel = BaseModel
+        self.ConfigDict = ConfigDict
+        self.Depends = Depends
+        self.Field = Field
+        self.Future = Future
+        self.HTTPException = HTTPException
+        self.JSONResponse = JSONResponse
+        self.Literal = Literal
+        self.LoopAIPause = LoopAIPause
+        self.LoopAction = LoopAction
+        self.LoopContinue = LoopContinue
+        self.LoopController = LoopController
+        self.LoopDeepSearch = LoopDeepSearch
+        self.LoopDefinitionSave = LoopDefinitionSave
+        self.LoopDeletionConflict = LoopDeletionConflict
+        self.LoopGPUReplacement = LoopGPUReplacement
+        self.LoopGPUReview = LoopGPUReview
+        self.LoopGoals = LoopGoals
+        self.LoopHandover = LoopHandover
+        self.LoopInstructionActivate = LoopInstructionActivate
+        self.LoopInstructionDelete = LoopInstructionDelete
+        self.LoopInstructionSave = LoopInstructionSave
+        self.LoopRentalBudget = LoopRentalBudget
+        self.LoopRentalExtension = LoopRentalExtension
+        self.LoopReportUnavailable = LoopReportUnavailable
+        self.LoopReportWorker = LoopReportWorker
+        self.LoopSnapshotMissing = LoopSnapshotMissing
+        self.LoopSource = LoopSource
+        self.LoopStart = LoopStart
+        self.OrderedDict = OrderedDict
+        self.PRESETS = PRESETS
+        self.Path = Path
+        self.Query = Query
+        self.RESUME_LOCK_WAIT_SECONDS = RESUME_LOCK_WAIT_SECONDS
+        self.Response = Response
+        self.SERVICE = SERVICE
+        self.SessionToken = SessionToken
+        self.TERMINAL = TERMINAL
+        self.ValidationError = ValidationError
+        self.VastError = VastError
+        self._DETAIL_CACHE_TTL = _DETAIL_CACHE_TTL
+        self._DISPLAY_FIELDS = _DISPLAY_FIELDS
+        self._LIST_CACHE_BYTES = _LIST_CACHE_BYTES
+        self._LIST_CACHE_TTL = _LIST_CACHE_TTL
+        self._OVERVIEW_FIELDS = _OVERVIEW_FIELDS
+        self._RENTAL_FIELDS = _RENTAL_FIELDS
+        self._log = _log
+        self.annotations = annotations
+        self.asyncio = asyncio
+        self.completed_round_observations = completed_round_observations
+        self.config_changes = config_changes
+        self.config_defaults = config_defaults
+        self.copy = copy
+        self.digest = digest
+        self.fcntl = fcntl
+        self.get_ai_chat_service = get_ai_chat_service
+        self.math = math
+        self.migrate_loop_bundle = migrate_loop_bundle
+        self.model_validator = model_validator
+        self.os = os
+        self.owned_thread = owned_thread
+        self.owner_key = owner_key
+        self.re = re
+        self.require_auth = require_auth
+        self.run_deletable = run_deletable
+        self.sys = sys
+        self.threading = threading
+        self.time = time
+        self.traceback = traceback
+        self._list_cache = OrderedDict()
+        self._list_cache_lock = threading.RLock()
+        self._detail_flights = {}
+        self._report_worker = None
+        self.router = APIRouter()
+        self._controller = LoopController(Path(root), runtime=runtime)
+        self.router.get('/options')(self.options)
+        self.router.get('/models')(self.models)
+        self.router.get('/knowledge')(self.knowledge)
+        self.router.get('')(self.list_loops)
+        self.router.post('', status_code=201)(self.start_loop)
+        self.router.post('/sources')(self.loop_source)
+        self.router.get('/configs')(self.loop_configs)
+        self.router.put('/configs/{name}')(self.save_loop_config)
+        self.router.delete('/configs/{name}')(self.delete_loop_config)
+        self.router.post('/configs/{name}/queue', status_code=201)(self.queue_loop_config)
+        self.router.get('/instructions')(self.loop_instructions)
+        self.router.post('/instructions', status_code=201)(self.save_loop_instructions)
+        self.router.post('/instructions/active')(self.activate_loop_instructions)
+        self.router.delete('/instructions/{version_id}')(self.delete_loop_instructions)
+        self.router.get('/instructions/{version_id}')(self.loop_instruction_version)
+        self.router.post('/{loop_id}/rental/replace-preview')(self.loop_gpu_review)
+        self.router.post('/{loop_id}/rental/replace', status_code=202)(self.replace_loop_gpu)
+        self.router.get('/{loop_id}/rental')(self.loop_rental)
+        self.router.post('/{loop_id}/rental/extend', status_code=202)(self.extend_loop_rental)
+        self.router.post('/{loop_id}/rental/budget', status_code=202)(self.loop_rental_budget)
+        self.router.get('/{loop_id}/rental/charges')(self.loop_rental_charges)
+        self.router.get('/{loop_id}/instructions')(self.loop_run_instructions)
+        self.router.get('/{loop_id}')(self.get_loop)
+        self.router.get('/{loop_id}/archive/{collection}')(self.loop_archive_page)
+        self.router.delete('/{loop_id}')(self.delete_loop)
+        self.router.get('/{loop_id}/diff')(self.config_diff)
+        self.router.get('/{loop_id}/log-target')(self.log_target)
+        self.router.get('/{loop_id}/optimizer-configs')(self.optimizer_configs)
+        self.router.get('/{loop_id}/best-config')(self.best_config)
+        self.router.post('/{loop_id}/deep-search-config')(self.deep_search_config)
+        self.router.post('/{loop_id}/action')(self.loop_action)
+        self.router.post('/{loop_id}/handover')(self.handover_loop)
+        self.router.post('/{loop_id}/ai-preview')(self.ai_execution_preview)
+        self.router.post('/{loop_id}/continue')(self.continue_loop)
+        self.router.post('/{loop_id}/retry-holdout')(self.retry_holdout)
+
+    def _clear_list_cache(self):
+        """Release owner-scoped serialized rows when the API shuts down."""
+        with self._list_cache_lock:
+            self._list_cache.clear()
+
+    def _overview_response(self, owner):
+        """Return navigation/status independently of report/history projection or its cache."""
+        store = self._controller.store
+        rows = []
+        with self._list_cache_lock:
+            now = self.time.monotonic()
+            for key, entry in list(self._list_cache.items()):
+                if entry[3] <= now:
+                    self._list_cache.pop(key)
+        for path in store.owner_dir(owner).glob('*.json'):
+            if not self.re.fullmatch(r'[a-f0-9]{32}', path.stem):
+                continue
+            try:
+                stamp = store._read_stamp(path)
+                key = (path.absolute(), self._overview_response)
+                with self._list_cache_lock:
+                    cached = self._list_cache.get(key)
+                    if cached is not None and cached[0] == stamp:
+                        self._list_cache.move_to_end(key)
+                        self._list_cache[key] = (*cached[:3], self.time.monotonic() + self._LIST_CACHE_TTL)
+                        rows.append((cached[1], cached[2]))
+                        continue
+                row = store.read(owner, path.stem, fields=self._OVERVIEW_FIELDS,
+                                 settings_fields={'config_name', 'loop_name', 'execution'})
+                value = {name: value for name, value in row.items() if name not in {'owner', '_view_revision'}} | {
+                    'view_revision': row['_view_revision'], 'summary_only': True,
+                    'name': row['settings'].get('loop_name') or row['settings']['config_name'],
+                    'ended': row['status'] in self.TERMINAL, 'deletable': False,
+                    'jobs': [], 'observer_jobs': [], 'history': [], 'cycles': [], 'best': None,
+                }
+                content = self.JSONResponse(value).body
+                rows.append((row['created_at'], content))
+                with self._list_cache_lock:
+                    if len(content) <= self._LIST_CACHE_BYTES // 2 and store._read_stamp(path) == stamp:
+                        self._list_cache.pop(key, None)
+                        while self._list_cache and (len(self._list_cache) >= 128 or sum(len(item[2]) for item in self._list_cache.values()) + len(content) > self._LIST_CACHE_BYTES):
+                            self._list_cache.popitem(last=False)
+                        self._list_cache[key] = (stamp, row['created_at'], content, self.time.monotonic() + self._LIST_CACHE_TTL)
+            except (OSError, ValueError) as exc:
+                self._log(self.SERVICE, f'Cannot read loop overview {path.name}: {type(exc).__name__}', level='WARNING')
+        rows.sort(key=lambda row: row[0], reverse=True)
+        return self.Response(content=b'{"loops":[' + b','.join(row[1] for row in rows) + b']}',
+                        media_type='application/json', headers={'Cache-Control': 'no-store'})
+
+    def _list_response(self, owner):
+        """Reuse unchanged projections; serialize all misses in one worker, never the API loop."""
+        store = self._controller.store
+        directory = store.owner_dir(owner)
+        rows = []
+        with self._list_cache_lock:
+            now = self.time.monotonic()
+            for key, entry in list(self._list_cache.items()):
+                if entry[3] <= now:
+                    self._list_cache.pop(key)
+        for path in directory.glob('*.json'):
+            if not self.re.fullmatch(r'[a-f0-9]{32}', path.stem):
+                continue
+            try:
+                stamp = store._read_stamp(path)
+                key = (path.absolute(), self.projection)
+                with self._list_cache_lock:
+                    cached = self._list_cache.get(key)
+                    if cached is not None and cached[0] == stamp:
+                        self._list_cache.move_to_end(key)
+                        self._list_cache[key] = (*cached[:3], self.time.monotonic() + self._LIST_CACHE_TTL)
+                        rows.append((cached[1], cached[2]))
+                        continue
+                # The serialized response already has its own bounded cache.
+                # Avoid copying/measuring every large raw history just to poll it.
+                row = store.read(owner, path.stem, fields=self._DISPLAY_FIELDS)
+                content = self.JSONResponse(self.projection(row)).body
+                rows.append((row['created_at'], content))
+                with self._list_cache_lock:
+                    self._list_cache.pop(key, None)
+                    if len(content) <= self._LIST_CACHE_BYTES // 2 and store._read_stamp(path) == stamp:
+                        while self._list_cache and (len(self._list_cache) >= 128 or sum(len(item[2]) for item in self._list_cache.values()) + len(content) > self._LIST_CACHE_BYTES):
+                            self._list_cache.popitem(last=False)
+                        self._list_cache[key] = (stamp, row['created_at'], content, self.time.monotonic() + self._LIST_CACHE_TTL)
+            except (OSError, ValueError) as exc:
+                self._log(self.SERVICE, f'Cannot read loop state {path.name}: {type(exc).__name__}', level='WARNING')
+        rows.sort(key=lambda item: item[0], reverse=True)
+        return self.Response(content=b'{"loops":[' + b','.join(item[1] for item in rows) + b']}',
+                        media_type='application/json', headers={'Cache-Control': 'no-store'})
+
+    def configure_restart_gate(self, gate):
+        """Prevent new decisions after the API coordinator reserves its restart."""
+        self._controller.restart_pending = gate
+
+    def restart_block_reason(self):
+        """Expose in-flight Loop AI requests to the shared API restart guard."""
+        return self._controller.restart_block_reason()
+
+    def startup(self):
+        """Own replaceable report workers and the Loop controller; native jobs remain independent."""
+        if self._report_worker is None:
+            self._report_worker = self.LoopReportWorker(runtime=self.profile.version)
+        try:
+            self._controller.start()
+        except BaseException:
+            self._report_worker.close()
+            self._report_worker = None
+            raise
+
+    async def shutdown(self):
+        """Join controller tasks without killing detached PB8 jobs."""
+        worker = self._report_worker
+        try:
+            await self._controller.close()
+        finally:
+            try:
+                if worker is not None:
+                    await self.owned_thread(worker.close)
+            finally:
+                if self._report_worker is worker:
+                    self._report_worker = None
+                self._controller.store.clear_read_cache()
+                self._clear_list_cache()
+
+    def _owner(self, session):
+        return self.owner_key(session.user_id)
+
+    def _error(self, exc):
+        """Preserve native HTTP statuses and log bounded nonsecret failure details."""
+        if isinstance(exc, self.HTTPException):
+            return exc
+        if isinstance(exc, self.ValidationError):
+            self._log(self.SERVICE, 'Loop request failed: invalid configuration fields', level='WARNING')
+            return self.HTTPException(422, '; '.join(item['msg'] for item in exc.errors(include_input=False, include_context=False))[:1000])
+        self._log(self.SERVICE, f'Loop request failed: {type(exc).__name__}', level='WARNING', meta={'traceback': self.traceback.format_exc()})
+        if isinstance(exc, FileNotFoundError):
+            return self.HTTPException(404, 'Loop not found')
+        if isinstance(exc, self.LoopAIPause):
+            return self.HTTPException(409, {'reason': exc.reason, 'message': str(exc), 'details': exc.details})
+        if isinstance(exc, self.LoopDeletionConflict):
+            return self.HTTPException(409, str(exc))
+        if isinstance(exc, (ValueError, self.AIChatError)):
+            return self.HTTPException(422, str(exc)[:1000])
+        return self.HTTPException(500, 'Loop operation failed; see PBGui log')
+
+    def _job_changes(self, before, after, before_overrides, after_overrides, limit=80):
+        """Expose bounded leaf changes, including individual scoring/limit list entries."""
+        def flattened(value):
+            result = {}
+            def visit(item, prefix=''):
+                if isinstance(item, dict) and item:
+                    for key, child in item.items():
+                        visit(child, prefix + ('.' if prefix else '') + key)
+                elif isinstance(item, list) and item:
+                    for index, child in enumerate(item):
+                        visit(child, prefix + '.' + str(index))
+                elif prefix:
+                    result[prefix] = item
+            visit(value)
+            return result
+        changes = self.config_changes(flattened(before), flattened(after), limit=limit)
+        if len(changes) < limit:
+            changes.extend({**item, 'path': 'overrides.' + item['path']} for item in
+                           self.config_changes(flattened(before_overrides), flattened(after_overrides), limit=limit-len(changes)))
+        return changes
+
+    def _cycle_reports(self, row):
+        """Project real per-cycle exact evidence and timing; unknown legacy data stays unknown."""
+        reports = []
+        rounds = sorted({job['round'] for job in row['jobs'] if job['round'] >= 0} | {item['round'] for item in row['history']})
+        previous_score = None
+        previous_goals = {}
+        for number in rounds:
+            jobs = [job for job in row['jobs'] if job['round'] == number]
+            history = next((item for item in row['history'] if item['round'] == number), {})
+            assessment = history.get('assessment')
+            evidence = history.get('observations') or []
+            if not assessment and number == row['round'] and row['phase'] == 'evaluate':
+                completed = {job['operation'] for job in jobs if job['kind'] == 'validation' and job['status'] in {'complete', 'completed'}}
+                observations = [item for item in row.get('observations', []) if item.get('operation') in completed
+                                and item.get('exact') and item['assessment'].get('comparable', True)]
+                if not observations:
+                    observations = [item for item in row.get('observations', []) if item.get('operation') in completed and item.get('exact')]
+                if observations:
+                    assessment = observations[0]['assessment'] if len(observations) == 1 else None
+                    goal_metrics = {metric for rule in row['rubric'] for metric in rule['metrics']}
+                    evidence = [{'operation':item['operation'], 'candidate_id':item['candidate']['id'],
+                                 'optimizer_job':item['candidate']['optimizer_job'], 'assessment':item['assessment'],
+                                 'metrics':{key:value for key,value in item['metrics'].items() if key in goal_metrics}}
+                                for item in observations]
+            if assessment and 'hard_targets_met' not in assessment:
+                assessment = {**assessment, 'hard_targets_met': all(goal.get('confirmed', False) for goal in assessment.get('goals', []) if goal.get('target') is not None)}
+            score = assessment.get('score') if assessment else None
+            goals = []
+            for index, rule in enumerate(row['rubric']):
+                result = (assessment.get('goals') or [])[index] if assessment and index < len(assessment.get('goals') or []) else {}
+                key = (rule['goal'], tuple(rule['metrics']))
+                value = result.get('value')
+                previous = previous_goals.get(key)
+                delta = value - previous if value is not None and previous is not None else None
+                goals.append({'goal':rule['goal'], 'metrics':rule['metrics'], 'direction':rule['direction'],
+                              'target':rule.get('target'), 'value':value, 'previous':previous, 'delta':delta,
+                              'improved': None if delta is None else delta > 0 if rule['direction']=='max' else delta < 0,
+                              'confirmed':bool(result.get('confirmed'))})
+                if value is not None:
+                    previous_goals[key] = value
+            starts = [job.get('created_at') or job.get('run_started_at') for job in jobs]
+            starts = [value for value in starts if isinstance(value, (int, float))]
+            active = any(job['status'] not in {'completed','complete','cancelled','failed','error','stopped'} for job in jobs) or (number==row['round'] and row['status'] not in self.TERMINAL and not history.get('evaluated_at'))
+            end = None if active else history.get('evaluated_at') or max([job.get('ended_at') or job.get('last_observed_at') or 0 for job in jobs], default=0) or None
+            start = min(starts) if starts else None
+            duration = max(0, (self.time.time() if active else end) - start) if start and (active or end) else None
+            checks = [job for job in jobs if job['kind']=='validation']
+            passed = sum(job['status'] in {'completed','complete'} for job in checks)
+            status = ('incomplete' if assessment.get('simulation_complete') is False else 'target violated' if assessment.get('hard_targets_met') is False else 'validated') if assessment else row['phase'] if number==row['round'] and not row['status'] in self.TERMINAL else 'not validated'
+            if not assessment and any(job['status'] in {'failed','error'} for job in jobs):
+                status = 'failed'
+            reports.append({'round':number, 'status':status, 'started_at':start, 'ended_at':end,
+                            'duration_seconds':duration, 'duration_estimated':any(not job.get('created_at') for job in jobs),
+                            'active':active, 'backtests':len(checks), 'completed_backtests':passed,
+                            'score':score, 'score_delta':score-previous_score if score is not None and previous_score is not None else None,
+                            'goals':goals, 'reason':history.get('reason',''), 'knowledge':history.get('knowledge',''),
+                            'ai_evaluated': 'winner_operation' in history,
+                            'winner_operation': history.get('winner_operation'),
+                            'winner_candidate_id': history.get('winner_candidate_id'),
+                            'observations':evidence})
+            if score is not None:
+                previous_score = score
+        return reports
+
+    def _observer_reports(self, row):
+        """Expose user-only metrics/deltas without mixing them into decision history."""
+        from pb8_loop_observer import comparison_deltas, complete_observer_report, observer_display_selections
+        jobs = list(row.get('observer_jobs', []))
+        selections = {item['round']: item for item in observer_display_selections(row)}
+        for number, selection in selections.items():
+            source_round = selection.get('source_round', number)
+            if selection.get('status') != 'selected' or source_round == number:
+                continue
+            # Display aliases retain the native operation/log/results, without
+            # persisting duplicate jobs or exposing user-only evidence to the AI.
+            for job in row.get('observer_jobs', []):
+                if (job['round'] == source_round
+                        and job.get('candidate_id') == selection['candidate_id']
+                        and job['kind'] in {'observer_holdout', 'observer_full_range'}
+                        and not any(item['round'] == number and item['kind'] == job['kind']
+                                    and item.get('operation') == job.get('operation') for item in jobs)):
+                    jobs.append(dict(job, round=number, source_round=source_round))
+        def is_selected(job, selection):
+            """Match both the candidate and immutable origin, including baseline aliases."""
+            return (selection.get('status') == 'selected'
+                    and job.get('candidate_id') == selection.get('candidate_id')
+                    and job.get('source_round', job['round']) == selection.get('source_round', job['round']))
+
+        def reference(number, kind):
+            """Compare against the displayed round winner, never the first candidate."""
+            selection = selections.get(number) or {}
+            candidates = [item for item in jobs if item['kind'] == kind and item['round'] == number]
+            if selection.get('status') == 'selected':
+                return next((item for item in candidates if is_selected(item, selection)
+                             and complete_observer_report(item)), None)
+            if not row.get('observer_enabled') and not selection.get('modern'):
+                return next((item for item in candidates if complete_observer_report(item)), None)
+            return None
+        reports = []
+        for job in jobs:
+            backtest = job.get('config', {}).get('backtest', {})
+            windows = backtest.get('scenarios') if backtest.get('suite_enabled') else None
+            baseline = reference(-1, job['kind'])
+            previous = reference(job['round'] - 1, job['kind'])
+            selection = selections.get(job['round']) or {}
+            checks = [item for item in row.get('jobs', []) if item['kind'] == 'validation' and item['round'] == job['round']]
+            index = next((number + 1 for number, item in enumerate(checks)
+                          if (item.get('candidate') or {}).get('id') == job.get('candidate_id')), None)
+            score = (job.get('assessment') or {}).get('score')
+            reports.append({key:job.get(key) for key in ('operation','name','kind','round','status','started','candidate_id',
+                           'created_at','ended_at','run_started_at','error','metrics','reports','simulation_complete','report_done','source_round')} | {
+                           'observer_only':True, 'execution':'cpu', 'log_available':bool((job.get('backend') or {}).get('id')),
+                           'comparison_label': 'Comparison backtest ' + str(index) if index else job.get('candidate_id'),
+                           'evaluation_score':score if type(score) in (int,float) and self.math.isfinite(score) else None,
+                           'evaluation_targets_met':(job.get('assessment') or {}).get('hard_targets_met') is True,
+                           'ai_selected': bool(selection.get('modern') and is_selected(job, selection)),
+                           'holdout_score':score if job['kind']=='observer_holdout' and type(score) in (int,float) and self.math.isfinite(score) else None,
+                           'selected_for_full_range': is_selected(job, selection),
+                           'previous_selection': job['kind']=='observer_full_range' and job.get('selection_policy') != 'all_candidates_both_reports' and selection.get('status') == 'selected' and not is_selected(job, selection),
+                           'windows':[{key:window.get(key, backtest.get(key)) for key in ('label','start_date','end_date','exchanges')}
+                                      for window in windows or [backtest]],
+                           'delta_start':comparison_deltas(job, baseline) if job['round'] >= 0 and complete_observer_report(job) else {},
+                           'delta_previous':comparison_deltas(job, previous) if job['round'] >= 0 and complete_observer_report(job) else {},
+                           'display_status':('incomplete' if job.get('simulation_complete') is False else 'report error')
+                           if job.get('report_done') and job['status'] in {'complete','completed'} and not job.get('simulation_complete') else job['status']})
+        return reports
+
+    def projection(self, row):
+        """Keep polling lightweight and avoid exposing internal paths or config copies."""
+        best = row.get('best')
+        from pb8_loop_observer import observer_selections, observer_summaries
+        return {key: row.get(key) for key in ('id', 'status', 'phase', 'round', 'created_at', 'started_at', 'updated_at', 'reason',
+                'last_error', 'failure', 'holdout_retryable', 'stop_reason', 'continuation', 'interpretation', 'rubric', 'history', 'bootstrap', 'ai_calls', 'ai_tokens_reserved',
+                'ai_usd_reserved', 'jev_usd_reserved', 'validation_count', 'holdout_used', 'deadline', 'rental_handover',
+                'ai_pause', 'knowledge_summary', 'ai_evidence_status', 'bootstrap_evidence_preview', 'ai_preview', 'control_generation',
+                'optimizer_research_version', 'optimizer_assessment', 'validation_recovery', 'decision_repair',
+                'native_training_version', 'native_training_round', 'native_training_summary', 'native_training_retry', 'native_training_fallback')} | {
+            'gpu_replacement': self._replacement_projection(row),
+            'initial_snapshot_digest': self.digest({'config': row['initial_config'], 'overrides': row['initial_overrides']}),
+            'name': row['settings'].get('loop_name') or row['settings']['config_name'],
+            'has_interrupted_ai': bool(row.get('interrupted_ai') or (row['status'] == 'paused' and row.get('pending_ai'))),
+            'definition_name': row['settings'].get('definition_name'),
+            'settings': row['settings'], 'fingerprint': row['fingerprint'], 'cycles': self._cycle_reports(row),
+            'observer_enabled':bool(row.get('observer_enabled')), 'observer_jobs':self._observer_reports(row),
+            'final_holdout_policy':row.get('final_holdout_policy'),
+            'final_validation_status':row.get('final_validation_status'),
+            'observer_selections':observer_selections(row),
+            'observer_summaries':observer_summaries(row),
+            'comparison': {key: row['comparison'].get(key) for key in ('start_date','end_date','exchanges','suite_enabled')},
+            'baseline': {key: row['baseline'][key] for key in ('assessment', 'metrics') if key in row['baseline']} if row.get('baseline') else None,
+            'final_validation': [{key:item[key] for key in ('assessment', 'metrics', 'reports') if key in item} for item in row.get('final_validation', [])],
+            'holdout_available': bool(row['holdouts']),
+            'best': {'assessment': best['assessment'], 'metrics': best['metrics'],
+                     'candidate_id': best['candidate']['id'], 'round': next((job['round'] for job in row['jobs'] if job['operation'] == best.get('operation')), None)} if best else None,
+            'jobs': [{key: job.get(key) for key in ('operation', 'name', 'kind', 'round', 'status', 'started', 'reason', 'error', 'runner', 'executed_digest', 'run_started_at', 'limit_reached', 'results_consumed', 'result_count', 'result_error', 'created_at', 'ended_at', 'optimizer_archive', 'research', 'research_verification')} | {
+                        'snapshot_digest': self.digest({'config': job['config'], 'overrides': job['overrides']}) if job['kind'] == 'optimizer' else None,
+                        'changes': self._job_changes(row['initial_config'], job['config'], row['initial_overrides'], job['overrides']) if job['kind'] == 'optimizer' else [],
+                        'native_iters': job['config'].get('optimize', {}).get('iters') if job['kind'] == 'optimizer' else None,
+                        'candidate_optimizer': (job.get('candidate') or {}).get('optimizer_job'),
+                        'log_available': bool((job.get('backend') or {}).get('id')),
+                        'execution': 'vast_cpu' if job.get('native_reused') else (job.get('backend') or {}).get('execution') or (row['settings']['execution'] if job['kind'] == 'optimizer' else 'cpu'),
+                        'display_status': 'Proxy limit reached' if job.get('limit_reached') == 'proxy' else 'Time limit reached' if job.get('limit_reached') else job['status'],
+                        'proxy_limit': ((job.get('research', {}).get('budget', {}).get('value') if job.get('research', {}).get('budget', {}).get('mode') == 'proxy' else None)
+                                        or row['settings'].get('run_proxy')) if job['kind'] == 'optimizer' and row['settings'].get('run_limit_mode') == 'proxy' else None,
+                        'proxy_evaluations': job.get('proxy_evaluations') if job['kind'] == 'optimizer' else None,
+                     } for job in row['jobs']],
+            'jev_answers': (row.get('bootstrap_jev_answers') or []) + (row.get('jev_answers') or []),
+            'jev_status': 'disabled' if not row['settings'].get('jev_enabled') else 'consulted' if row.get('jev_usd_reserved', 0) else 'failed' if any('failed' in str(answer).lower() for answer in (row.get('bootstrap_jev_answers') or []) + (row.get('jev_answers') or [])) else 'not requested',
+            'usd_status': ('reserved_estimate' if row['settings']['provider'] == 'opencode-zen'
+                           else 'provider_billed' if row['settings']['provider'] == 'deepseek' else 'subscription'),
+            'ended': row['status'] in self.TERMINAL,
+            'deletable': self.run_deletable(row),
+        }
+
+    async def options(self, config_name: str = Query(default='', max_length=120), session: SessionToken = Depends(require_auth), source_kind: str = '', source_id: str = '', list_only: bool = False):
+        """Offer only compatible local GPU execution and the saved Vast limits."""
+        try:
+            opt = self.profile.api()
+            from api.vast import RentalPreferences
+            from vast_queue import CloudQueue
+            from vast_credentials import VastCredentialStore
+            configs = await self.asyncio.to_thread(lambda: [row['name'] for row in opt.list_configs(
+                session, include_result_summary=False, include_backtest_counts=False)['configs']])
+            if config_name:
+                opt._validate_name(config_name)
+            selected_name = config_name if config_name in configs else (configs[0] if configs else '')
+            defaults, bundle = None, None
+            missing = config_name if config_name and config_name not in configs and not source_kind else ''
+            if source_kind and not list_only:
+                bundle, selected_name, _source, _settings = await self.asyncio.to_thread(self._source_bundle, self.LoopSource(kind=source_kind, id=source_id), session)
+                defaults = self.config_defaults(bundle['config'])
+            elif selected_name and not list_only:
+                bundle = await self.asyncio.to_thread(opt.get_config, selected_name, session)
+                defaults = self.config_defaults(bundle['config'])
+            gpu_available, gpu_reason = False, 'Choose a configuration to check GPU compatibility'
+            if selected_name and not list_only:
+                settings = self.LoopStart(config_name=selected_name, provider='chatgpt', model='probe', execution='gpu', max_rounds=1).model_dump()
+
+                try:
+                    args = (selected_name, settings, bundle) if source_kind else (selected_name, settings)
+                    await self.asyncio.to_thread(self._controller.backend.initial, *args)
+                    gpu_available, gpu_reason = True, ''
+                except Exception as exc:
+                    gpu_reason = str(exc)[:500]
+            queue = CloudQueue()
+            vast = RentalPreferences.model_validate(queue.read().get('gpu_preferences') or {}).model_dump()
+            return self.JSONResponse({'configs': configs, 'config_name': selected_name, 'config_defaults': defaults, 'missing_config': missing,
+                                 'bundle_digest': self.digest({'config': bundle['config'], 'override_configs': bundle.get('override_configs') or {}}) if bundle else None,
+                                 'gpu_available': gpu_available, 'gpu_reason': gpu_reason,
+                                 'vast': vast, 'vast_connected': VastCredentialStore(queue.root).metadata().get('configured', False),
+                                 'presets': sorted(self.PRESETS)}, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def models(self, provider: str, profile: str = 'default', session: SessionToken = Depends(require_auth)):
+        """List explicitly selected provider models for the owning account."""
+        try:
+            if provider not in {'chatgpt', 'opencode-go', 'opencode-zen', 'claude-code', 'deepseek'}:
+                raise ValueError('Unsupported loop provider')
+            value = await self.get_ai_chat_service().models(self._owner(session), provider, profile=profile)
+            return self.JSONResponse({'models': [row for row in value if not row.get('decision')]}, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def knowledge(self, session: SessionToken = Depends(require_auth), limit: int = Query(20, ge=1, le=200)):
+        """Read recent owner-scoped knowledge and its evidence provenance."""
+        try:
+            value = await self.asyncio.to_thread(self._controller.store.knowledge, self._owner(session))
+            return self.JSONResponse({'entries': value['entries'][-limit:], 'used_holdouts': value['used_holdouts']}, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def list_loops(self, session: SessionToken = Depends(require_auth), summary: bool = False):
+        try:
+            return await self.asyncio.to_thread(self._overview_response if summary else self._list_response, self._owner(session))
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def _start_loop(self, body: LoopStart, session: SessionToken = Depends(require_auth), definition=None, *, owner=None, queue_proposal=None):
+        """Authorize one full bounded loop at start, without subsequent approval prompts."""
+        owner = owner if owner is not None else self._owner(session)
+        try:
+            if not body.authorization:
+                raise self.HTTPException(422, 'Authorize automatic configuration changes, job starts and AI usage when starting the loop')
+            settings = body.model_dump(exclude={'authorization'})
+            if queue_proposal is not None:
+                settings['ai_queue_proposal'] = queue_proposal
+            ai_preferences = self.get_ai_chat_service().get_preferences(owner)
+            settings['jev_max_cost_usd'] = ai_preferences['jev_max_cost_usd']
+            settings['jev_budget_usd'] = settings['jev_max_cost_usd'] * body.max_runs
+            if body.execution == 'vast':
+                from api.vast import RentalPreferences
+                from vast_queue import CloudQueue
+                from vast_credentials import VastCredentialStore
+                if not VastCredentialStore(CloudQueue().root).metadata()['configured']:
+                    raise ValueError('Connect Vast.ai before starting a cloud loop')
+                settings['vast'] = RentalPreferences.model_validate(CloudQueue().read().get('gpu_preferences') or {}).model_dump()
+                rental_hours = settings['vast']['hours']
+                if 'hours' not in body.model_fields_set:
+                    settings['hours'] = rental_hours
+                if settings['hours'] > rental_hours:
+                    raise ValueError(f'Loop duration cannot exceed Rental & Automation duration ({rental_hours:g} hours) for Vast.ai')
+                settings['parallel'] = min(settings['parallel'], settings['vast']['max_rentals'])
+            if settings['run_limit_mode'] == 'hours' and settings['run_hours'] > settings['hours']:
+                raise ValueError('Per-run hours cannot exceed total loop hours')
+            if definition is not None:
+                settings.update(loop_name=definition['name'], definition_name=definition['name'], source=definition['source'])
+                row = await self._controller.create(owner, settings, definition['bundle'], queued=True)
+            else:
+                row = await self._controller.create(owner, settings)
+            return self.JSONResponse(self.projection(row), status_code=201, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def start_loop(self, body: LoopStart, session: SessionToken = Depends(require_auth)):
+        return await self._start_loop(body, session)
+
+    def _source_bundle(self, source, session):
+        """Resolve source provenance and overrides under the existing PB8 boundaries."""
+        opt = self.profile.api()
+        owner = self._owner(session)
+        settings = None
+        provenance = {'kind': source.kind, 'id': source.id}
+        if source.kind == 'config':
+            with opt._config_lock():
+                bundle = opt.get_config(source.id, session)
+            name = source.id
+        elif source.kind == 'queue':
+            with opt._queue_lock():
+                data = opt._read_json(opt._queue_file(source.id))
+                if data.get('loop_id') and data.get('loop_owner') != owner:
+                    raise FileNotFoundError('Queue entry not found')
+                bundle = opt.get_queue_config(source.id, session)
+            name = bundle['name']
+        elif source.kind == 'result':
+            with opt._result_lock():
+                bundle = opt.get_result_config(source.id, session)
+                directory = opt._resolve_result_path(source.id)
+                name, _ = self._controller.backend._result_origin(next((row for row in opt._list_results() if row['path'] == source.id), {'path': source.id, 'name': directory.name, 'result': directory.name}))
+            name = name or directory.name
+            provenance['result_path'] = source.id
+        elif source.kind == 'cloud':
+            from vast_jobs import JobStore
+            from pb8_config import load_pb8_config
+            store = JobStore()
+            data = store.read(source.id)
+            if data.get('kind') in {'worker', 'calibration'} or data.get('loop_id') and data.get('loop_owner') != owner:
+                raise ValueError('Select an optimizer job')
+            path = store.directory(source.id) / 'input/optimize.json'
+            if not path.is_file() or path.is_symlink():
+                raise ValueError('The cloud optimizer snapshot is not prepared yet')
+            if self.profile.native:
+                if data.get('runtime') != 'pb9':
+                    raise ValueError('Select a PB9 cloud job')
+                config = opt.native.load(path)
+            else:
+                config = load_pb8_config(path)
+            bundle = {'config': config, 'override_configs': opt._load_override_payloads(config, path.parent)}
+            name = data['config_name']
+        elif source.kind == 'run':
+            row = self._controller.store.read(owner, source.id)
+            bundle = {'config': row['initial_config'], 'override_configs': row['initial_overrides']}
+            settings = row['settings']
+            name = settings['config_name']
+            provenance = settings.get('source') or provenance
+        else:
+            row = self._controller.store.definition(owner, source.id)
+            bundle, settings = row['bundle'], row['settings']
+            name = settings['config_name']
+            provenance = row['source']
+        if bundle.get('migration_unresolved'):
+            raise ValueError('Starting config requires an explicit HSL choice: '
+                             + ', '.join(bundle['migration_unresolved'])
+                             + '. Open the PB8 starting config, select its HSL policy and Save.')
+        return {'config': self.copy.deepcopy(bundle['config']), 'override_configs': self.copy.deepcopy(bundle.get('override_configs') or {})}, name, provenance, settings
+
+    def _definition_projection(self, row):
+        """Return editor settings, source identity and defaults without raw configs."""
+        return {key: row[key] for key in ('name', 'revision', 'created_at', 'updated_at', 'settings', 'source')} | {
+            'config_defaults': self.config_defaults(row['bundle']['config']), 'bundle_digest': self.digest(row['bundle'])}
+
+    async def loop_source(self, body: LoopSource, session: SessionToken = Depends(require_auth)):
+        """Open an unsaved loop draft from the selected native snapshot."""
+        try:
+            bundle, name, source, settings = await self.asyncio.to_thread(self._source_bundle, body, session)
+            return self.JSONResponse({'config_name': name, 'source': source, 'settings': settings,
+                                 'config_defaults': self.config_defaults(bundle['config']),
+                                 'bundle_digest': self.digest(bundle),
+                                 'execution': 'vast' if bundle['config'].get('pbgui', {}).get('execution') == 'vast' else 'gpu' if bundle['config'].get('optimize', {}).get('backend') == 'gpu' else 'cpu'}, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def loop_configs(self, session: SessionToken = Depends(require_auth)):
+        """List named loop definitions belonging to the signed-in owner."""
+        try:
+            rows = await self.asyncio.to_thread(self._controller.store.definitions, self._owner(session))
+            return self.JSONResponse({'configs': [self._definition_projection(row) for row in rows]}, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def save_loop_config(self, name: str, body: LoopDefinitionSave, session: SessionToken = Depends(require_auth)):
+        """Save a normal named config; refresh only its explicitly edited waiting run."""
+        try:
+            bundle, config_name, source, _ = await self.asyncio.to_thread(self._source_bundle, body.source, session)
+            if body.source_digest and body.source_digest != self.digest(bundle):
+                raise self.HTTPException(409, 'The starting snapshot changed. Open Edit or Create AI Loop again before saving.')
+            bundle = await self.asyncio.to_thread(self.migrate_loop_bundle, bundle)
+            raw = dict(body.settings, config_name=config_name, provider='chatgpt', model='shared-selection')
+            validated = self.LoopStart.model_validate(raw).model_dump(exclude={'authorization','provider','model','profile','effort','service_tier'})
+            # Rental settings constrain the editor as well as Queue/Start.
+            if validated['execution'] == 'vast':
+                from api.vast import RentalPreferences
+                from vast_queue import CloudQueue
+                rental = RentalPreferences.model_validate(CloudQueue().read().get('gpu_preferences') or {})
+                if validated['hours'] > rental.hours or validated['parallel'] > rental.max_rentals:
+                    raise ValueError('Loop duration and concurrency must fit Rental & Automation')
+            owner = self._owner(session)
+            prepared = None
+            if body.queue_id:
+                waiting = await self.asyncio.to_thread(self._controller.store.read, owner, body.queue_id)
+                if waiting['status'] != 'queued' or waiting['jobs']:
+                    raise ValueError('Only a waiting loop can be edited; this run has already started')
+                prepared = await self.asyncio.to_thread(self._controller.backend.initial, config_name, validated, bundle)
+            row = await self.asyncio.to_thread(self._controller.store.save_definition, owner, name, validated, bundle, source, body.revision)
+            if body.queue_id:
+                def refresh(current):
+                    if current['status'] != 'queued' or current['jobs'] or current['control_generation'] != waiting['control_generation']:
+                        raise ValueError('Only a waiting loop can be edited; this run has already started')
+                    current['settings'] = dict(current['settings'], **validated, loop_name=name, definition_name=name, source=source)
+                    config, overrides, fingerprint, holdouts, comparison = prepared
+                    current.update(initial_config=config, initial_overrides=overrides, fingerprint=fingerprint, holdouts=holdouts, comparison=comparison)
+                    current.pop('worker_runtime', None)
+                    current['control_generation'] += 1
+                await self.asyncio.to_thread(self._controller.store.update, owner, body.queue_id, refresh)
+            return self.JSONResponse(self._definition_projection(row), headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def delete_loop_config(self, name: str, session: SessionToken = Depends(require_auth)):
+        """Delete a saved definition without deleting history."""
+        try:
+            await self.asyncio.to_thread(self._controller.store.delete_definition, self._owner(session), name)
+            return {'deleted': True}
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def queue_loop_config(self, name: str, body: dict, session: SessionToken = Depends(require_auth)):
+        """Queue an immutable run snapshot with the current shared AI selection."""
+        try:
+            if not set(body) <= {'provider','model','profile','effort','service_tier','authorization'}:
+                raise ValueError('Queue uses the saved loop settings and shared AI selection')
+            definition = await self.asyncio.to_thread(self._controller.store.definition, self._owner(session), name)
+            start = self.LoopStart.model_validate(dict(definition['settings'], **body))
+            # Reuse the same resource and authorization validation as direct starts.
+            response = await self._start_loop(start, session, definition)
+            return response
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def loop_instructions(self, session: SessionToken = Depends(require_auth)):
+        """List instruction metadata without returning every prompt on each poll."""
+        try:
+            catalog = await self.asyncio.to_thread(self._controller.store.instructions, self._owner(session))
+            return self.JSONResponse({'revision': catalog['revision'], 'active': catalog['active'],
+                'versions': [{key: item[key] for key in ('id', 'name', 'digest', 'created_at')}
+                             for item in catalog['versions']]}, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def save_loop_instructions(self, body: LoopInstructionSave, session: SessionToken = Depends(require_auth)):
+        """Append and activate a private immutable instruction version."""
+        from pb8_loop_store import LoopInstructionConflict
+        try:
+            version = await self.asyncio.to_thread(self._controller.store.save_instructions, self._owner(session), body.name, body.text, body.revision)
+            return self.JSONResponse(version, status_code=201, headers={'Cache-Control': 'no-store'})
+        except LoopInstructionConflict as exc:
+            self._log(self.SERVICE, 'Instruction save rejected: stale revision', level='WARNING')
+            raise self.HTTPException(409, str(exc)) from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def activate_loop_instructions(self, body: LoopInstructionActivate, session: SessionToken = Depends(require_auth)):
+        """Change the future-run default without mutating queued or running snapshots."""
+        from pb8_loop_store import LoopInstructionConflict
+        try:
+            version = await self.asyncio.to_thread(self._controller.store.activate_instructions, self._owner(session), body.version_id, body.revision)
+            return self.JSONResponse(version, headers={'Cache-Control': 'no-store'})
+        except LoopInstructionConflict as exc:
+            self._log(self.SERVICE, 'Instruction selection rejected: stale revision', level='WARNING')
+            raise self.HTTPException(409, str(exc)) from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def delete_loop_instructions(self, version_id: str, body: LoopInstructionDelete, session: SessionToken = Depends(require_auth)):
+        """Remove a personal version without changing historical run snapshots."""
+        from pb8_loop_store import LoopInstructionConflict
+        try:
+            result = await self.asyncio.to_thread(self._controller.store.delete_instructions, self._owner(session), version_id, body.revision)
+            return self.JSONResponse(result, headers={'Cache-Control': 'no-store'})
+        except LoopInstructionConflict as exc:
+            self._log(self.SERVICE, 'Instruction deletion rejected: stale revision', level='WARNING')
+            raise self.HTTPException(409, str(exc)) from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def loop_instruction_version(self, version_id: str, session: SessionToken = Depends(require_auth)):
+        """Read only versions belonging to the authenticated owner."""
+        try:
+            version = await self.asyncio.to_thread(self._controller.store.instruction_version, self._owner(session), version_id)
+            return self.JSONResponse(version, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    def _replacement_projection(self, row):
+        """Expose the current operation without its configs or internal reservations."""
+        from pb8_loop_gpu_replacement import open_replacement
+        operation = open_replacement(row)
+        return {key: operation.get(key) for key in ('id', 'step', 'old_worker_id', 'worker_id', 'predecessor',
+            'successor', 'reason', 'error', 'artifacts_incomplete', 'excluded_machine_ids')} if operation else None
+
+    async def loop_gpu_review(self, loop_id: str, body: LoopGPUReview, session: SessionToken = Depends(require_auth)):
+        """Prepare an authenticated, read-only review of one Loop infrastructure change."""
+        from pb8_loop_gpu_replacement import review
+        from vast_queue import CloudQueue
+        import uuid
+        try:
+            row = await self.asyncio.to_thread(self._controller.store.read, self._owner(session), loop_id)
+            result = await self.asyncio.to_thread(review, CloudQueue(), row, body.worker_id)
+            result['operation_id'] = uuid.uuid4().hex
+            return self.JSONResponse(result, headers={'Cache-Control': 'no-store'})
+        except self.VastError as exc:
+            self._log(self.SERVICE, 'GPU replacement review rejected', level='WARNING')
+            raise self.HTTPException(exc.status, str(exc)) from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def replace_loop_gpu(self, loop_id: str, body: LoopGPUReplacement, session: SessionToken = Depends(require_auth)):
+        """Publish approved intent; owned controller ticks perform reconciliation."""
+        try:
+            return await self._replace_loop_gpu_owned(self._owner(session), loop_id, body)
+        except self.VastError as exc:
+            self._log(self.SERVICE, 'GPU replacement request rejected', level='WARNING')
+            raise self.HTTPException(exc.status, str(exc)) from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def _replace_loop_gpu_owned(self, owner, loop_id, body):
+        """Share native authorization with the durable AI proposal executor."""
+        from pb8_loop_gpu_replacement import GPUReplacement
+        from vast_queue import CloudQueue
+        if not body.authorization:
+            raise self.HTTPException(422, 'Explicit GPU replacement authorization is required')
+        service = GPUReplacement(self._controller.store, CloudQueue(), self._controller.backend)
+        row = await self.asyncio.to_thread(service.begin, owner, loop_id, body.worker_id,
+            body.expected_generation, body.snapshot_digest, body.operation_id)
+        return self.JSONResponse(self.projection(row), status_code=202, headers={'Cache-Control': 'no-store'})
+
+    async def loop_rental(self, loop_id: str, session: SessionToken = Depends(require_auth)):
+        """Read public rental controls only for the authenticated owner's run."""
+        from pb8_loop_rental_controls import rental_snapshot
+        from vast_queue import CloudQueue
+        try:
+            row = await self.asyncio.to_thread(self._controller.store.read, self._owner(session), loop_id, fields=self._RENTAL_FIELDS)
+            rental = await self.asyncio.to_thread(rental_snapshot, CloudQueue(), row)
+            return self.JSONResponse({'rental': rental}, headers={'Cache-Control': 'no-store'})
+        except self.VastError as exc:
+            self._log(self.SERVICE, 'Loop rental read rejected', level='WARNING')
+            raise self.HTTPException(exc.status, str(exc)) from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def extend_loop_rental(self, loop_id: str, body: LoopRentalExtension, session: SessionToken = Depends(require_auth)):
+        """Extend this run on its current rental without increasing its budget."""
+        from pb8_loop_rental_controls import extend_rental
+        from vast_queue import CloudQueue
+        try:
+            await self.asyncio.to_thread(extend_rental, self._controller.store, CloudQueue(), self._owner(session), loop_id,
+                                   body.worker_id, body.expected_deadline, body.expected_loop_deadline, body.minutes)
+            return self.JSONResponse({'pending': True}, status_code=202, headers={'Cache-Control': 'no-store'})
+        except self.VastError as exc:
+            self._log(self.SERVICE, 'Loop rental extension rejected', level='WARNING')
+            raise self.HTTPException(exc.status, str(exc)) from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def loop_rental_budget(self, loop_id: str, body: LoopRentalBudget, session: SessionToken = Depends(require_auth)):
+        """Submit an explicit budget change to this owner's current rental guard."""
+        from pb8_loop_rental_controls import change_budget
+        from vast_queue import CloudQueue
+        try:
+            result = await self.asyncio.to_thread(change_budget, self._controller.store, CloudQueue(), self._owner(session), loop_id,
+                                            body.worker_id, body.expected_deadline, body.expected_budget_usd, body.budget_usd)
+            return self.JSONResponse(result, status_code=202, headers={'Cache-Control': 'no-store'})
+        except self.VastError as exc:
+            self._log(self.SERVICE, 'Loop rental budget change rejected', level='WARNING')
+            raise self.HTTPException(exc.status, str(exc)) from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def loop_rental_charges(self, loop_id: str, session: SessionToken = Depends(require_auth)):
+        """Read cached provider costs independently of the Loop progress poll."""
+        from pb8_loop_rental_controls import public_billing, rental_snapshot
+        from vast_billing import instance_charges
+        from vast_queue import CloudQueue
+        try:
+            queue = CloudQueue()
+            row = await self.asyncio.to_thread(self._controller.store.read, self._owner(session), loop_id, fields=self._RENTAL_FIELDS)
+            rental = await self.asyncio.to_thread(rental_snapshot, queue, row)
+            if not rental:
+                return self.JSONResponse({'worker_id': None, 'billing': None}, headers={'Cache-Control': 'no-store'})
+            billing = await self.asyncio.to_thread(instance_charges, queue.store, rental['worker_id'])
+            return self.JSONResponse({'worker_id': rental['worker_id'], 'billing': public_billing(billing)},
+                                headers={'Cache-Control': 'no-store'})
+        except self.VastError as exc:
+            self._log(self.SERVICE, 'Loop rental billing read rejected', level='WARNING')
+            raise self.HTTPException(exc.status, str(exc)) from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def loop_run_instructions(self, loop_id: str, session: SessionToken = Depends(require_auth)):
+        """Show the exact instruction snapshot used by a run, or label legacy fallback."""
+        from pb8_loop_ai import instructions_for_run
+        try:
+            row = await self.asyncio.to_thread(self._controller.store.read, self._owner(session), loop_id)
+            return self.JSONResponse(instructions_for_run(row), headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def get_loop(self, loop_id: str, session: SessionToken = Depends(require_auth)):
+        started = self.time.monotonic()
+        queued_at = started
+        worker_started = None
+        worker_finished = None
+
+        def read_detail():
+            """Distinguish executor queue delay from verified report construction."""
+            nonlocal worker_started, worker_finished
+            worker_started = self.time.monotonic()
+            try:
+                return self._detail_response(self._owner(session), loop_id)
+            finally:
+                worker_finished = self.time.monotonic()
+
+        try:
+            return await self.asyncio.to_thread(read_detail)
+        except Exception as exc:
+            raise self._error(exc) from exc
+        finally:
+            elapsed = self.time.monotonic() - started
+            if elapsed >= 3:
+                self._log(self.SERVICE, 'Slow Loop report read', level='DEBUG', meta={
+                    'duration_seconds': round(elapsed, 3),
+                    'queue_seconds': round((worker_started or self.time.monotonic()) - queued_at, 3),
+                    'worker_seconds': round((worker_finished or self.time.monotonic()) - worker_started, 3) if worker_started else None,
+                    'delivery_seconds': round(self.time.monotonic() - worker_finished, 3) if worker_finished else None})
+
+    def _detail_response(self, owner, loop_id):
+        """Collapse overlapping owned report reads instead of rebuilding aborted requests."""
+        store = self._controller.store
+        path = store.path(owner, loop_id)
+        stamp = store._read_stamp(path)
+        key = (path.absolute(), self._detail_response)
+        with self._list_cache_lock:
+            cached = self._list_cache.get(key)
+            if cached and cached[0] == stamp and cached[3] > self.time.monotonic():
+                self._list_cache.move_to_end(key)
+                self._list_cache[key] = (*cached[:3], self.time.monotonic() + self._DETAIL_CACHE_TTL)
+                return self.Response(content=cached[2], media_type='application/json', headers={'Cache-Control': 'no-store'})
+            flight = self._detail_flights.get(key)
+            leader = flight is None
+            if leader:
+                if len(self._detail_flights) >= 128:
+                    raise self.HTTPException(503, 'Loop reports are busy. Retrying automatically.')
+                flight = self._detail_flights[key] = self.Future()
+        if not leader:
+            return self.Response(content=flight.result(), media_type='application/json', headers={'Cache-Control': 'no-store'})
+        try:
+            response = self._build_detail_response(owner, loop_id, stamp)
+            flight.set_result(response.body)
+            return response
+        except BaseException as exc:
+            flight.set_exception(exc)
+            raise
+        finally:
+            with self._list_cache_lock:
+                if self._detail_flights.get(key) is flight:
+                    self._detail_flights.pop(key)
+
+    def _build_detail_response(self, owner, loop_id, stamp):
+        """Publish one verified snapshot; a newer update cannot make its bytes a current cache hit."""
+        store = self._controller.store
+        path = store.path(owner, loop_id)
+        key = (path.absolute(), self._detail_response)
+        worker = self._report_worker
+        if worker is None:
+            row = store.read(owner, loop_id, fields=self._DISPLAY_FIELDS, prefer_cached_fields=True)
+            created_at = row['created_at']
+            response = self.JSONResponse({**self.projection(row), 'view_revision': row['_view_revision']}, headers={'Cache-Control': 'no-store'})
+        else:
+            try:
+                created_at, content = worker.build(store.root, owner, loop_id)
+            except self.LoopReportUnavailable as exc:
+                self._log(self.SERVICE, 'Loop report worker unavailable', level='WARNING')
+                raise self.HTTPException(503, 'Loop reports are restarting. Retrying automatically.') from exc
+            response = self.Response(content=content, media_type='application/json', headers={'Cache-Control': 'no-store'})
+        if len(response.body) <= self._LIST_CACHE_BYTES // 2 and store._read_stamp(path) == stamp:
+            with self._list_cache_lock:
+                self._list_cache.pop(key, None)
+                while self._list_cache and (len(self._list_cache) >= 128 or sum(len(item[2]) for item in self._list_cache.values()) + len(response.body) > self._LIST_CACHE_BYTES):
+                    self._list_cache.popitem(last=False)
+                self._list_cache[key] = (stamp, created_at, response.body, self.time.monotonic() + self._DETAIL_CACHE_TTL)
+        return response
+
+    async def loop_archive_page(self, loop_id: str, collection: str, offset: int = Query(0, ge=0),
+                                limit: int = Query(50, ge=1, le=200),
+                                session: SessionToken = Depends(require_auth)):
+        """Page owned historical collections without expanding the complete Loop state."""
+        try:
+            result = await self.asyncio.to_thread(self._controller.store.archive_page, self._owner(session), loop_id,
+                                             collection, offset, limit)
+            return self.JSONResponse(result, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def delete_loop(self, loop_id: str, session: SessionToken = Depends(require_auth)):
+        """Delete an inactive owned run and its round history without deleting its config."""
+        try:
+            await self.asyncio.to_thread(self._controller.delete, self._owner(session), loop_id)
+            return {'deleted': True}
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def config_diff(self, loop_id: str, operation: str = Query(pattern=r'^[0-9a-f]{32}$'),
+                          baseline: str = Query(default='initial', pattern=r'^(initial|[0-9a-f]{32})$'),
+                          session: SessionToken = Depends(require_auth)):
+        """Compare two snapshots within this owner's loop without exposing full configs."""
+        try:
+            worker = self._report_worker
+            if worker is None:
+                row = await self.asyncio.to_thread(self._controller.store.read, self._owner(session), loop_id,
+                                              fields={'jobs', 'initial_config', 'initial_overrides'})
+                value = self._snapshot_diff(row, operation, baseline)
+            else:
+                value = await self.asyncio.to_thread(worker.diff, self._controller.store.root, self._owner(session), loop_id, operation, baseline)
+            return self.JSONResponse(value, headers={'Cache-Control':'no-store'})
+        except self.LoopSnapshotMissing as exc:
+            raise self.HTTPException(404, str(exc)) from exc
+        except self.LoopReportUnavailable as exc:
+            self._log(self.SERVICE, 'Loop comparison worker unavailable', level='WARNING')
+            raise self.HTTPException(503, 'Loop reports are busy. Retrying automatically.') from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    def _snapshot_diff(self, row, operation, baseline):
+        """Apply the same bounded comparison to verified local or isolated worker inputs."""
+        job = next((item for item in row['jobs'] if item['operation']==operation and item['kind']=='optimizer'), None)
+        reference = next((item for item in row['jobs'] if item['operation']==baseline and item['kind']=='optimizer'), None)
+        if job is None or (baseline!='initial' and reference is None):
+            raise self.LoopSnapshotMissing('Optimizer comparison snapshot not found in this loop')
+        before = reference['config'] if reference else row['initial_config']
+        overrides = reference['overrides'] if reference else row['initial_overrides']
+        fields = self._job_changes(before, job['config'], overrides, job['overrides'], limit=4096)
+        return {'fields':fields, 'truncated':len(fields)>=4096}
+
+    async def log_target(self, loop_id: str, operation: str = Query(pattern=r'^[0-9a-f]{32}$'),
+                         session: SessionToken = Depends(require_auth)):
+        """Resolve an owned optimizer operation to its verified native queue log window."""
+        try:
+            row, job = await self.asyncio.to_thread(self._controller.store.native_job, self._owner(session), loop_id, operation)
+            if job is None or not (job.get('backend') or {}).get('id'):
+                raise self.HTTPException(404, 'The native optimizer job has not been created or is no longer available.')
+            # The native queue/job record must still belong to this loop and owner.
+            target = await self.asyncio.to_thread(self._controller.backend.native_target, row, job)
+            return self.JSONResponse(target, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def optimizer_configs(self, loop_id: str, session: SessionToken = Depends(require_auth)):
+        """Export measured optimizer recommendations from the authenticated owner's run."""
+        try:
+            row = await self.asyncio.to_thread(self._controller.store.read, self._owner(session), loop_id)
+            from pb8_loop_research import recommendation_configs
+            return self.JSONResponse(recommendation_configs(row), headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def best_config(self, loop_id: str, session: SessionToken = Depends(require_auth)):
+        """Return the best complete candidate bundle with no automatic bot deployment."""
+        try:
+            row = await self.asyncio.to_thread(self._controller.store.read, self._owner(session), loop_id)
+            if not row.get('best'):
+                raise self.HTTPException(409, 'No exact comparison candidate is available yet')
+            candidate = row['best']['candidate']
+            return self.JSONResponse({'config': candidate['config'], 'override_configs': candidate['overrides'],
+                                 'assessment': row['best']['assessment'], 'final_validation': row.get('final_validation'),
+                                 'status': row['status'], 'provisional': row['status'] != 'completed', 'baseline': row.get('baseline')},
+                                headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    def _deep_search_bundle(self, row, operation):
+        """Export a selected bot with its original search domain and training-only windows."""
+        from optimize_convergence import DEFAULTS
+        report = next((job for job in row.get('observer_jobs', []) if job['operation'] == operation), None)
+        if (not report or report.get('kind') not in {'observer_holdout', 'observer_full_range'}
+                or report.get('status') not in {'complete', 'completed'}
+                or not report.get('simulation_complete') or report.get('report_done') is False):
+            raise self.HTTPException(409, 'Select one complete user evaluation')
+        candidate_id = report.get('candidate_id')
+        validation = next((job for job in row.get('jobs', []) if job.get('kind') == 'validation'
+                           and job.get('round') == report.get('round')
+                           and (job.get('candidate') or {}).get('id') == candidate_id), None)
+        candidate = (validation or {}).get('candidate') or {}
+        optimizer_id = candidate.get('optimizer_job')
+        optimizer = next((job for job in row.get('jobs', [])
+                          if job.get('kind') == 'optimizer' and job.get('operation') == optimizer_id), None)
+        if optimizer is None and candidate_id not in {'baseline', 'starting_config'}:
+            raise self.HTTPException(409, 'The selected candidate search settings are no longer available')
+        config = self.copy.deepcopy((optimizer or {}).get('config') or row['initial_config'])
+        for section in ('bot', 'live'):
+            config[section] = self.copy.deepcopy(report['config'][section])
+        # A human may choose a Holdout/Full Range row; it never becomes a training window.
+        config['backtest'] = self.copy.deepcopy(row['comparison'])
+        convergence = {**DEFAULTS, 'convergence_enabled': True}
+        config['pbgui'] = {'execution': row['settings']['execution'], 'optimize_seed_mode': 'self',
+                          'starting_config': True,
+                          'optimize_runtime': {'mode': 'pareto_seed', 'source': '__self__',
+                                               'convergence_config': convergence}}
+        config.setdefault('optimize', {})['seed'] = None
+        return {'config': config, 'override_configs': self.copy.deepcopy(report.get('overrides') or {}),
+                'name': (row['settings'].get('config_name') or 'loop')[:80] + '_deep_search',
+                'source_operation': operation}
+
+    async def deep_search_config(self, loop_id: str, body: LoopDeepSearch, session: SessionToken = Depends(require_auth)):
+        """Prepare an owner-scoped deep-search editor handoff; never queue or rent here."""
+        try:
+            row = await self.asyncio.to_thread(self._controller.store.read_runtime, self._owner(session), loop_id)
+            return self.JSONResponse(self._deep_search_bundle(row, body.operation), headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def loop_action(self, loop_id: str, body: LoopAction, session: SessionToken = Depends(require_auth)):
+        return await self._loop_action_owned(self._owner(session), loop_id, body)
+
+    async def handover_loop(self, loop_id: str, body: LoopHandover, session: SessionToken = Depends(require_auth)):
+        """Stop/collect the source and bind a replacement to its unchanged rental."""
+        return await self._handover_owned(self._owner(session), loop_id, body)
+
+    async def _handover_owned(self, owner, loop_id, body):
+        """Share native handover validation with the reviewed AI Loop operation."""
+        try:
+            if not body.authorization:
+                raise ValueError('Authorize replacing this Loop on its existing GPU')
+            from pb8_loop_handover import begin
+            from vast_queue import CloudQueue
+            # Verify provider/model readiness before any stop or GPU reservation.
+            target = await self.asyncio.to_thread(self._controller.store.read, owner, body.target_loop_id)
+            if body.selection is not None and not set(body.selection) <= {'provider', 'model', 'profile', 'effort', 'service_tier'}:
+                raise ValueError('Invalid shared AI selection')
+            settings = dict(target['settings'], **(body.selection or {}))
+            await self._controller.ai.preflight(owner, settings)
+            await self.asyncio.to_thread(begin, self._controller.store, CloudQueue(), owner, loop_id, body.target_loop_id,
+                                    expected_worker=body.worker_id, expected_generation=body.source_generation)
+            target = await self.asyncio.to_thread(self._controller.store.read, owner, body.target_loop_id)
+            if target['status'] == 'queued':
+                await self._loop_action_owned(owner, target['id'], self.LoopAction(action='start', selection=body.selection))
+            target = await self.asyncio.to_thread(self._controller.store.read, owner, body.target_loop_id)
+            return self.JSONResponse(self.projection(target), status_code=202, headers={'Cache-Control': 'no-store'})
+        except self.VastError as exc:
+            self._log(self.SERVICE, f'GPU handover rejected: {str(exc)[:1000]}', level='WARNING')
+            raise self.HTTPException(exc.status, str(exc)[:1000]) from exc
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def ai_execution_preview(self, loop_id: str, body: LoopAction, session: SessionToken = Depends(require_auth)):
+        """Inspect a saved run without renting, sending model prompts or changing its source config."""
+        started = self.time.monotonic()
+        stage = 'reading_loop'
+
+        async def report_slow_preview():
+            """Expose the slow local phase without recording settings or evidence."""
+            await self.asyncio.sleep(10)
+            stacks = {}
+            for frame in self.sys._current_frames().values():
+                names = []
+                while frame is not None and len(names) < 6:
+                    names.append(frame.f_code.co_name)
+                    frame = frame.f_back
+                key = '/'.join(names)
+                stacks[key] = stacks.get(key, 0) + 1
+            self._log(self.SERVICE, 'AI recovery preview still preparing', level='DEBUG',
+                 meta={'stage': stage, 'duration_seconds': round(self.time.monotonic() - started, 3),
+                       'thread_functions': stacks})
+
+        monitor = self.asyncio.create_task(report_slow_preview(), name='loop-recovery-preview-timing')
+        try:
+            owner = self._owner(session)
+            def read_preview():
+                """Read only preview inputs; exclude growing decisions, jobs and evidence."""
+                nonlocal stage
+                stage = 'reading_loop_running'
+                return self._controller.store.read(owner, loop_id, fields={
+                    'settings', 'phase', 'rubric', 'initial_config', 'initial_overrides', 'ai_preview'})
+
+            row = await self.asyncio.to_thread(read_preview)
+            if body.selection and not set(body.selection) <= {'provider','model','profile','effort','service_tier'}:
+                raise ValueError('Invalid AI selection')
+            settings = dict(row['settings'])
+            settings.update(body.selection or {})
+            if body.ai_settings:
+                allowed = {'historical_advice','decision_timeout_seconds','model_call_timeout_seconds',
+                           'ai_decision_token_limit','ai_decision_usd_limit','ai_budget_confirmed'}
+                if not set(body.ai_settings) <= allowed:
+                    raise ValueError('Invalid AI budget settings')
+                settings.update(body.ai_settings)
+            checked = self.LoopStart.model_validate({key: value for key, value in settings.items() if key in self.LoopStart.model_fields})
+            settings.update(checked.model_dump(exclude={'authorization'}))
+            stage = 'provider_metadata'
+            metadata = await self._controller.ai.preflight(owner, settings, check_budget=False)
+            profile = metadata['loop_profile']
+            from pb8_loop_archive import archive_budget
+            staged = {**row, 'settings': settings, 'ai_model_profile': profile}
+            provisional = not bool(row['rubric'])
+            if provisional:
+                staged['rubric'] = [{'metrics': ['reserved_goal_metric_' + str(i) for i in range(24)]}]
+            stage = 'archive_budget'
+            native = await self.asyncio.to_thread(archive_budget, staged, row['initial_config'])
+            from pb8_loop_archive import select_sources
+            if settings.get('historical_advice', True) and row['phase'] in {'interpret', 'bootstrap'}:
+                stage = 'historical_discovery'
+                # Initial source compatibility still needs the complete verified run.
+                row = await self.asyncio.to_thread(self._controller.store.read, owner, loop_id)
+                staged = {**row, 'settings': settings, 'ai_model_profile': profile, 'rubric': staged['rubric']}
+                candidates = await self.asyncio.to_thread(self._controller.backend.existing_candidates, staged)
+                stage = 'historical_selection'
+                _selected, historical = await self.asyncio.to_thread(select_sources, staged, {
+                    'stage':'bootstrap', 'initial_config':row['initial_config'], 'rubric':staged['rubric'],
+                    'goals':settings['goals'], 'evidence':{'existing_results':candidates}}, profile,
+                    min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768)), metadata=metadata)
+            else:
+                historical = {'mode':'not_applicable' if settings.get('historical_advice', True) else 'off',
+                              'sources':[], 'in_a':0, 'in_b':0}
+            paid = settings['provider'] == 'opencode-zen' and metadata.get('free') is not True
+            cost = metadata.get('cost') or {}
+            reserve = min(metadata.get('output_limit') or 32768, profile.get('output_tokens', 32768))
+            # Uncached per-call upper envelope; real complete payloads are reserved before each send.
+            from pb8_loop_ai_policy import paid_cost
+            one_call = paid_cost(metadata, profile['context'], reserve) if paid else None
+            maximum_decisions = 2 + 2 * settings['max_runs']
+            preview = {'provisional': provisional or profile.get('context_pending', False),
+                       'context': profile['context'], 'context_pending': profile.get('context_pending', False),
+                       'context_source': profile.get('context_source'),
+                       'native_archive': native,
+                       'historical_sources': historical,
+                       'paid': paid, 'cost': cost, 'uncached_call_upper_estimate_usd': one_call,
+                       'decision_token_limit': settings.get('ai_decision_token_limit'),
+                       'decision_usd_limit': settings.get('ai_decision_usd_limit'),
+                       'maximum_attempts': settings['max_runs'], 'streaming': profile.get('streaming', False),
+                       'maximum_decisions': maximum_decisions,
+                       'uncached_dialog_upper_estimate_usd': one_call * 134 if paid else None,
+                       'run_ai_spending_ceiling_usd': settings.get('ai_decision_usd_limit') * maximum_decisions
+                           if paid and settings.get('ai_decision_usd_limit') else None,
+                       'call_timeout_seconds': settings.get('model_call_timeout_seconds') or profile.get('call_timeout'),
+                       'decision_timeout_seconds': settings.get('decision_timeout_seconds')}
+            stage = 'saving_preview'
+            if row.get('ai_preview') != preview:
+                await self.asyncio.to_thread(self._controller.store.update, owner, loop_id, lambda current: current.update(ai_preview=preview))
+            stage = 'complete'
+            return self.JSONResponse(preview, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+        finally:
+            monitor.cancel()
+            await self.asyncio.gather(monitor, return_exceptions=True)
+            self._log(self.SERVICE, 'AI recovery preview finished', level='DEBUG',
+                 meta={'stage': stage, 'duration_seconds': round(self.time.monotonic() - started, 3)})
+
+    async def _loop_action_owned(self, owner, loop_id, body):
+        """Run native owner-scoped actions for authenticated routes and reviewed AI tools."""
+        try:
+            if body.action == 'start':
+                waiting = await self.asyncio.to_thread(self._controller.store.read, owner, loop_id)
+                if waiting['status'] != 'queued':
+                    raise ValueError('Only a queued loop can be started')
+                allowed = set(self.LoopStart.model_fields) - {'authorization'}
+                raw = {key: value for key, value in waiting['settings'].items() if key in allowed}
+                if body.selection:
+                    if not set(body.selection) <= {'provider','model','profile','effort','service_tier'}:
+                        raise ValueError('Invalid shared AI selection')
+                    raw.update(body.selection)
+                if body.ai_settings:
+                    fields = {'historical_advice','decision_timeout_seconds','model_call_timeout_seconds',
+                              'ai_decision_token_limit','ai_decision_usd_limit','ai_budget_confirmed'}
+                    if not set(body.ai_settings) <= fields:
+                        raise ValueError('Invalid AI budget settings')
+                    raw.update(body.ai_settings)
+                settings = self.LoopStart.model_validate(raw).model_dump(exclude={'authorization'})
+                if body.ai_settings and body.ai_settings.get('ai_budget_confirmed'):
+                    from pb8_loop_ai_policy import budget_identity
+                    quote = await self._controller.ai.preflight(owner, settings, check_budget=False)
+                    settings['ai_budget_model'] = budget_identity(settings, quote)
+                else:
+                    settings['ai_budget_model'] = waiting['settings'].get('ai_budget_model')
+                if settings['execution'] == 'vast':
+                    from api.vast import RentalPreferences
+                    from vast_queue import CloudQueue
+                    from vast_credentials import VastCredentialStore
+                    queue = CloudQueue()
+                    if not VastCredentialStore(queue.root).metadata()['configured']:
+                        raise ValueError('Connect Vast.ai before starting a cloud loop')
+                    preferences = RentalPreferences.model_validate(queue.read().get('gpu_preferences') or {}).model_dump()
+                    if waiting.get('rental_handover') and waiting['settings'].get('vast') != preferences:
+                        raise ValueError('Vast preferences changed during handover; preserve the reviewed rental limits')
+                    settings['vast'] = preferences
+                    if settings['hours'] > settings['vast']['hours'] or settings['parallel'] > settings['vast']['max_rentals']:
+                        raise ValueError('Edit this waiting loop to fit the current Rental & Automation settings')
+                preferences = self.get_ai_chat_service().get_preferences(owner)
+                settings.update(jev_max_cost_usd=preferences['jev_max_cost_usd'], jev_budget_usd=preferences['jev_max_cost_usd'] * settings['max_runs'])
+                await self._controller.ai.preflight(owner, settings)
+                bundle = {'config': waiting['initial_config'], 'override_configs': waiting['initial_overrides']}
+                config, overrides, fingerprint, holdouts, comparison = await self.asyncio.to_thread(self._controller.backend.initial, settings['config_name'], settings, bundle)
+                exclusions = self.copy.deepcopy(holdouts)
+                used = self._controller.store.knowledge(owner)['used_holdouts']
+                holdouts = [window for window in holdouts if not any(item.get('start_date', '') <= window['end_date'] and window['start_date'] <= item.get('end_date', '') for item in used)]
+                def refresh(current):
+                    if current['status'] != 'queued' or current['control_generation'] != waiting['control_generation']:
+                        raise ValueError('This queue entry changed while starting')
+                    current['settings'].update(settings)
+                    current.pop('worker_runtime', None)
+                    current.update(initial_config=config, initial_overrides=overrides, fingerprint=fingerprint, holdouts=holdouts, comparison=comparison,
+                                   training_exclusions=current.get('training_exclusions', []) + exclusions, status='running', started_at=self.time.time(), deadline=self.time.time() + settings['hours'] * 3600, control_generation=current['control_generation'] + 1)
+                row = await self.asyncio.to_thread(self._controller.store.update, owner, loop_id, refresh)
+            elif body.action == 'resume':
+                waiting = await self.asyncio.to_thread(self._controller.store.read, owner, loop_id)
+                if waiting['status'] != 'paused':
+                    raise ValueError('Only a paused loop can be resumed')
+                from pb8_loop_gpu_replacement import open_replacement
+                if open_replacement(waiting):
+                    if body.ai_settings or body.selection:
+                        raise ValueError('Resume GPU replacement with its unchanged Loop settings')
+                    row = await self.asyncio.to_thread(self._controller.action, owner, loop_id, 'resume')
+                    return self.JSONResponse(self.projection(row), headers={'Cache-Control': 'no-store'})
+                if (waiting.get('interrupted_ai') or waiting.get('pending_ai')) and not body.acknowledge_interrupted:
+                    raise self.LoopAIPause('evidence_recovery', 'Review the interrupted model request before authorizing another attempt')
+                selection = body.selection or {}
+                if not set(selection) <= {'provider','model','profile','effort','service_tier'}:
+                    raise ValueError('Invalid shared AI selection')
+                adjustments = body.ai_settings or {}
+                fields = {'historical_advice', 'decision_timeout_seconds', 'model_call_timeout_seconds',
+                          'ai_decision_token_limit', 'ai_decision_usd_limit', 'ai_budget_confirmed'}
+                if not set(adjustments) <= fields:
+                    raise ValueError('Only AI recovery budgets and advice policy may change during resume')
+                raw = {key: value for key, value in waiting['settings'].items() if key in self.LoopStart.model_fields}
+                raw.update(selection)
+                raw.update(adjustments)
+                validated = self.LoopStart.model_validate(raw).model_dump(exclude={'authorization'})
+                validated['ai_budget_model'] = waiting['settings'].get('ai_budget_model')
+                if adjustments.get('ai_budget_confirmed'):
+                    from pb8_loop_ai_policy import budget_identity
+                    quote = await self._controller.ai.preflight(owner, validated, check_budget=False)
+                    validated['ai_budget_model'] = budget_identity(validated, quote)
+                metadata = await self._controller.ai.preflight(owner, validated)
+                if waiting.get('ai_snapshot_id'):
+                    from pb8_loop_evidence import EvidenceStore
+                    snap = await self.asyncio.to_thread(EvidenceStore(self._controller.store).load, owner, waiting['ai_snapshot_id'])
+                    from pb8_loop_ai_v2 import validate_snapshot_budget
+                    validate_snapshot_budget({**waiting, 'settings': validated}, snap, metadata)
+                    for evidence_id, binding in snap['history'].items():
+                        if binding.get('required'):
+                            EvidenceStore(self._controller.store).resolve(snap, '/history/' + evidence_id.replace('~','~0').replace('/','~1'))
+                def resume(current):
+                    if current['status'] != 'paused' or current['control_generation'] != waiting['control_generation']:
+                        raise ValueError('Loop changed while resuming')
+                    current['settings'].update(validated)
+                    if (current.get('ai_pause') or {}).get('reason') == 'ai_timeout':
+                        for ledger in current.get('ai_decisions', {}).values():
+                            if ledger['round'] == current['round'] and ledger['stage'] == current['phase']:
+                                limit = current['settings'].get('decision_timeout_seconds')
+                                ledger['deadline'] = min(current['deadline'] - 60, self.time.time() + limit) if limit else current['deadline'] - 60
+                    audit = current.setdefault('interrupted_ai_audit', [])
+                    for key in ('interrupted_ai', 'pending_ai'):
+                        interrupted = current.pop(key, None)
+                        if interrupted and not any(item.get('id') == interrupted.get('id') for item in audit):
+                            audit.append(interrupted)
+                    current['pending_ai'] = None
+                    current.pop('ai_pause', None)
+                    current.update(status='finishing' if current['phase'] == 'holdout' else 'running',
+                                   control_generation=current['control_generation'] + 1, last_error=None)
+                def apply_resume():
+                    """Wait for the old controller step to leave before retiring its reservation."""
+                    path = self._controller.store.path(owner, loop_id).with_suffix('.controller')
+                    fd = self.os.open(path, self.os.O_CREAT | self.os.O_RDWR | self.os.O_NOFOLLOW, 0o600)
+                    try:
+                        self.fcntl.flock(fd, self.fcntl.LOCK_EX | self.fcntl.LOCK_NB)
+                        return self._controller.store.update(owner, loop_id, resume)
+                    finally:
+                        self.os.close(fd)
+                # A paused reconciliation/observer tick may briefly own this lock.
+                # Wait without blocking a worker on flock or leaving an unowned
+                # resume mutation behind when the request is cancelled. The atomic
+                # resume callback still rejects changed status/control generations.
+                lock_deadline = self.time.monotonic() + self.RESUME_LOCK_WAIT_SECONDS
+                while True:
+                    try:
+                        row = await self.owned_thread(apply_resume)
+                        break
+                    except BlockingIOError as exc:
+                        remaining = lock_deadline - self.time.monotonic()
+                        if remaining <= 0:
+                            raise self.LoopAIPause('evidence_recovery', 'The previous Loop step is still stopping. Wait for it to finish before resuming.') from exc
+                        await self.asyncio.sleep(min(.1, remaining))
+            else:
+                row = await self.asyncio.to_thread(self._controller.action, owner, loop_id, body.action)
+            return self.JSONResponse(self.projection(row), headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def continue_loop(self, loop_id: str, body: LoopContinue, session: SessionToken = Depends(require_auth)):
+        """Create a new queue entry from the retained best or selected exact round winner."""
+        try:
+            if not body.authorization:
+                raise ValueError('Authorize the additional autonomous rounds')
+            if not set(body.selection) <= {'provider', 'model', 'profile', 'effort', 'service_tier'}:
+                raise ValueError('Invalid shared AI selection')
+            row = await self.asyncio.to_thread(self._controller.store.read, self._owner(session), loop_id)
+            checkpoint = row.get('best')
+            if body.round is not None:
+                history = next((entry for entry in row['history'] if entry['round'] == body.round), {})
+                operation = history.get('winner_operation')
+                if not operation:
+                    raise ValueError('This round has no qualified AI-selected checkpoint')
+                job = next((job for job in row['jobs'] if job['operation'] == operation
+                            and job['kind'] in {'validation', 'baseline'}), None)
+                if not job or job['status'] not in {'completed', 'complete'}:
+                    raise ValueError('The AI-selected checkpoint has no successful exact backtest')
+                exact = await self.asyncio.to_thread(self._controller.backend.observations, row, job)
+                candidate = job.get('candidate')
+                if job['kind'] == 'baseline':
+                    candidate = {'id': 'baseline', 'optimizer_job': None, 'config': row['initial_config'],
+                                 'overrides': row['initial_overrides']}
+                checkpoint = {**exact, 'operation': operation, 'candidate': candidate}
+            if not checkpoint or not checkpoint['candidate']:
+                raise ValueError('No complete exact checkpoint is available')
+            if body.round is None:
+                job = next((item for item in row['jobs'] if item['operation'] == checkpoint.get('operation')), None)
+                if not job or job['status'] not in {'completed', 'complete'}:
+                    raise ValueError('The best checkpoint has no successful exact backtest')
+                exact = await self.asyncio.to_thread(self._controller.backend.observations, row, job)
+                if not exact['assessment'].get('comparable') or exact['assessment'].get('simulation_complete') is False:
+                    raise ValueError('The best checkpoint simulation is incomplete')
+                checkpoint = {**checkpoint, 'assessment': exact['assessment'], 'metrics': exact['metrics']}
+            if checkpoint.get('assessment', {}).get('comparable') is False or checkpoint.get('assessment', {}).get('simulation_complete') is False:
+                raise ValueError('The checkpoint simulation is incomplete')
+            if checkpoint.get('assessment', {}).get('hard_targets_met') is False:
+                raise ValueError('The checkpoint violates a hard goal target')
+            candidate = self.copy.deepcopy(checkpoint['candidate'])
+            candidate['metrics'] = checkpoint.get('metrics') or candidate.get('metrics', {})
+            candidate['source'] = {'run': row['id'], 'round': body.round, 'kind': 'exact_comparison'}
+            optimizer = next((job for job in row['jobs'] if job['operation'] == candidate.get('optimizer_job')), None)
+            config = self.copy.deepcopy(optimizer['config'] if optimizer else row['initial_config'])
+            from pb8_loop_config_contract import copy_worker_settings, worker_reference
+            config = copy_worker_settings(worker_reference(row), config)
+            config['bot'] = self.copy.deepcopy(candidate['config']['bot'])
+            config['live'] = self.copy.deepcopy(candidate['config']['live'])
+            config['backtest'] = self.copy.deepcopy(row['comparison'])
+            raw = {key: value for key, value in row['settings'].items() if key in self.LoopStart.model_fields and key != 'authorization'}
+            raw.update(body.selection)
+            raw.update(max_runs=body.rounds, max_rounds=body.rounds, patience=min(100, max(row['settings']['patience'], body.rounds)),
+                       authorization=True)
+            if body.hours is not None:
+                raw['hours'] = body.hours
+            if raw['execution'] == 'vast':
+                from api.vast import RentalPreferences
+                from vast_queue import CloudQueue
+                rental = RentalPreferences.model_validate(CloudQueue().read().get('gpu_preferences') or {})
+                if body.hours is not None and body.hours > rental.hours:
+                    raise ValueError(f'Continuation hours cannot exceed current Maximum rental hours ({rental.hours:g}). '
+                                     'Choose a shorter duration or adjust Vast.ai Rental & Automation first.')
+                raw.update(hours=min(raw['hours'], rental.hours), parallel=min(raw['parallel'], rental.max_rentals))
+                if raw['run_limit_mode'] == 'hours' and body.hours is None:
+                    raw['run_hours'] = min(raw['run_hours'], raw['hours'])
+            name = (row['settings'].get('loop_name') or row['settings']['config_name'])[:85] + '_continue'
+            definition = {'name': name, 'source': {'kind': 'run', 'id': row['id']},
+                          'bundle': {'config': config, 'override_configs': candidate['overrides']}}
+            response = await self._start_loop(self.LoopStart.model_validate(raw), session, definition)
+            import json
+            result = json.loads(response.body)
+            await self.asyncio.to_thread(self._controller.store.update, self._owner(session), result['id'],
+                lambda current: current.update(training_exclusions=current.get('training_exclusions', []) + row.get('training_exclusions', []) + row['holdouts'], continuation={'parent': row['id'], 'round': body.round, 'candidate_id': candidate['id'], 'additional_runs': body.rounds}))
+            def inherited(current):
+                current.update(required_rounds=body.rounds, rubric=self.copy.deepcopy(row['rubric']), phase='bootstrap', interpretation=row.get('interpretation', ''),
+                               bootstrap_candidates=[self.copy.deepcopy(candidate)],
+                               bootstrap={'status': 'evaluating', 'sources': [row['id']], 'candidate_count': 1,
+                                          'candidates': [{'id': candidate['id'], 'metrics': checkpoint.get('metrics') or candidate.get('metrics', {})}]})
+            await self.asyncio.to_thread(self._controller.store.update, self._owner(session), result['id'], inherited)
+            await self.loop_action(result['id'], self.LoopAction(action='start', selection=body.selection), session)
+            current = await self.asyncio.to_thread(self._controller.store.read, self._owner(session), result['id'])
+            return self.JSONResponse(self.projection(current), status_code=201, headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc
+
+    async def retry_holdout(self, loop_id: str, session: SessionToken = Depends(require_auth)):
+        """Retry only an unchanged winner after a proven pre-data configuration failure."""
+        try:
+            row = await self.asyncio.to_thread(self._controller.store.read, self._owner(session), loop_id)
+            if row['status'] != 'unconfirmed' or not row.get('holdout_retryable') or row.get('holdout_retry_count', 0) >= 1:
+                raise ValueError('This holdout is not eligible for an unchanged technical retry')
+            if row['validation_count'] >= row['settings']['max_validations'] or self.time.time() >= row['deadline'] - 60:
+                raise ValueError('The original validation/time allowance is exhausted')
+            candidate = row['best']['candidate']
+            config = self._controller.backend.validation_config(row, candidate, True)
+            job = self._controller.job(row, 'holdout', config, candidate['overrides'], 'Unchanged technical holdout retry', candidate=candidate)
+            def retry(current):
+                if current['status'] != row['status'] or current['control_generation'] != row['control_generation'] or not current.get('holdout_retryable'):
+                    raise ValueError('This loop changed while retrying')
+                if not self._controller.store.claim_holdouts(current):
+                    raise ValueError('The holdout is reserved or already evaluated')
+                current.update(status='finishing', phase='holdout', holdout_used=True, holdout_retryable=False, holdout_retry_count=1,
+                               jobs=current['jobs'] + [job], validation_count=current['validation_count'] + 1,
+                               control_generation=current['control_generation'] + 1,
+                               cleanup_done=False, errors=0, last_error=None)
+                if current.get('final_holdout_policy') == 'final_only':
+                    current['final_validation_status'] = 'running'
+            row = await self.asyncio.to_thread(self._controller.store.update, row['owner'], row['id'], retry)
+            return self.JSONResponse(self.projection(row), headers={'Cache-Control': 'no-store'})
+        except Exception as exc:
+            raise self._error(exc) from exc

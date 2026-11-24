@@ -98,7 +98,7 @@ TIER_3_SERVICES = {
     "SupportDebug",
     "PB7Bridge",
     "TaskQueue",
-    "AIChat", "AIOpenRouterChat", "AIResearch", "PB8Loop", "PB8Config", "PB9Config", "V9Instances", "OptimizerWorkload",
+    "AIChat", "AIOpenRouterChat", "AIResearch", "PB8Loop", "PB9Loop", "AILoop", "PB8Config", "PB9Config", "V9Instances", "OptimizerWorkload",
     "ApiKeyState", "ApiKeys", "ApiLogging", "Auth", "BacktestQueueAPI", "BacktestV9", "OptimizeV9",
     "BalanceCalc", "BitgetUTA", "Cluster", "CoinDataUI", "Config", "Dashboard", "DbTools",
     "HyperliquidAWS", "LiveSession", "MarketDataAPI", "PB7OhlcvAPI", "PBV7UI",

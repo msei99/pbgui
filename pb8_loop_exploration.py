@@ -17,6 +17,10 @@ def _template_search_coverage(record):
     if record.get('settings', {}).get('execution') not in {'gpu', 'vast'} or bound_plan(record['settings']) is None:
         return None
     from vast_config_validation import METRICS, REDUCERS
+    from loop_runtime import native
+    if native(record.get('initial_config')):
+        from pb9_loop_policy import metric_catalog
+        METRICS, REDUCERS = metric_catalog()
     protected = {metric for rule in record.get('rubric', []) if rule.get('target') is not None
                  for metric in rule.get('metrics', [])}
     def optional(config):
@@ -61,6 +65,17 @@ def _ranges(value, prefix=''):
 
 def _tunable_ranges(config):
     """Exclude inactive sides and bounds shadowed by fixed runtime overrides."""
+    from loop_runtime import native
+    if native(config):
+        direction = configured_direction(config)
+        active = {'long', 'short'} if direction == 'both' else {direction}
+        optimize = config.get('optimize') or {}
+        fixed = [str(key).removeprefix('bot.') for key in (optimize.get('fixed_runtime_overrides') or {})]
+        fixed += [str(key).removeprefix('bot.') for key in optimize.get('fixed_params') or []]
+        return {path: limits for path, limits in _ranges(optimize.get('bounds') or {}).items()
+                if path.split('.')[0] in active | {'global', 'portfolio'}
+                and not any(path == key or path.startswith(key + '.') for key in fixed)
+                and not path.endswith(('.max_positions', '.hsl.enabled'))}
     direction = configured_direction(config)
     active = {'long', 'short'} if direction == 'both' else {direction}
     optimize = config.get('optimize', {})

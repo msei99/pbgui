@@ -781,6 +781,51 @@ def test_queue_operation_id_is_persistently_idempotent(optimize_v8_roots) -> Non
     assert json.loads(records[0].read_text(encoding="utf-8"))["operation_id"] == operation_id
 
 
+@pytest.mark.parametrize('schema,runtime', [('v8.6.0', 'v8'), ('v9.0.0', 'v9')])
+def test_loop_ownership_exists_in_first_published_queue_record(optimize_v8_roots, monkeypatch, schema, runtime):
+    """A crash after the first public write must never leave an autostartable unowned job."""
+    config = _full_pb8_config()
+    config['config_version'] = schema
+    written = []
+    original = optimize_v8._write_json
+    def observe(path, value):
+        """Inspect the exact first publication while retaining actual atomic fixture writes."""
+        if path.parent == optimize_v8._queue_dir() and value.get('filename'):
+            written.append(copy.deepcopy(value))
+        return original(path, value)
+    monkeypatch.setattr(optimize_v8, '_write_json', observe)
+    identity = {'loop_id': 'a'*32, 'loop_owner': 'b'*32}
+    result = optimize_v8._create_queue_record('owned', config, {'mode': 'fresh', 'source': ''}, {},
+        operation_id='c'*32, loop_identity=identity)
+    assert len(written) == 1
+    assert all(written[0][key] == value for key, value in {**identity, 'loop_runtime': runtime}.items())
+    replay = optimize_v8._create_queue_record('owned', config, {'mode': 'fresh', 'source': ''}, {},
+        operation_id='c'*32, loop_identity=identity)
+    assert replay['filename'] == result['filename'] and replay['idempotent']
+    with pytest.raises(ValueError, match='different AI Loop'):
+        optimize_v8._create_queue_record('owned', config, {'mode': 'fresh', 'source': ''}, {}, operation_id='c'*32)
+    with pytest.raises(ValueError, match='different AI Loop'):
+        optimize_v8._create_queue_record('owned', config, {'mode': 'fresh', 'source': ''}, {},
+            operation_id='c'*32, loop_identity={**identity, 'loop_owner': 'd'*32})
+    assert optimize_v8._read_json(optimize_v8._queue_file(result['filename']))['loop_owner'] == 'b'*32
+
+
+def test_reviewed_creation_checks_final_preparation_before_publication(optimize_v8_roots, monkeypatch):
+    """A second normalization cannot write values omitted from the user's reviewed diff."""
+    config = _full_pb8_config()
+    expected = optimize_v8.prepare_pb8_config(optimize_v8._normalize_config(config, 'reviewed'))
+    original = optimize_v8.prepare_pb8_config
+    def changed(value, **kwargs):
+        """Simulate runtime normalization changing between review and persistence."""
+        result = original(value, **kwargs)
+        result['optimize']['iters'] = result['optimize'].get('iters', 256) + 1
+        return result
+    monkeypatch.setattr(optimize_v8, 'prepare_pb8_config', changed)
+    with pytest.raises(HTTPException, match='preparation changed after review'):
+        optimize_v8._save_config_bundle('reviewed', config, create_only=True, override_payloads={}, expected_config=expected)
+    assert not optimize_v8._config_dir('reviewed').exists()
+
+
 def test_config_lock_recovers_interrupted_bundle_swap(optimize_v8_roots) -> None:
     """A bundle backup left between atomic renames must become the authoritative config again."""
     configs, _queue, _logs, _results = optimize_v8_roots
@@ -4087,10 +4132,10 @@ def test_loop_prepare_keeps_ordinary_launch_defaults_separate_from_round_patienc
     monkeypatch.setattr(ai_loop_search_limits, 'exposure_ceiling', lambda *_args: 1)
     monkeypatch.setattr(ai_loop_search_limits, 'validate_exposure_ceiling', lambda *_args: None)
     config = fresh_optimizer_config(_full_pb8_config())
-    result = backend.prepare({'id': 'loop', 'owner': 'owner', 'settings': {'execution': 'cpu'}},
+    result = backend.prepare({'id': 'a' * 32, 'owner': 'b' * 32, 'settings': {'execution': 'cpu'}},
         {'kind': 'optimizer', 'config': config, 'overrides': {}, 'name': 'loop-prepare', 'operation': 'f' * 32})
     row = optimize_v8._read_json(optimize_v8._queue_file(result['id']))
-    assert row['loop_id'] == 'loop' and row['loop_owner'] == 'owner'
+    assert row['loop_id'] == 'a' * 32 and row['loop_owner'] == 'b' * 32
     assert not row['launch_options']['convergence_config']['convergence_enabled']
     assert config['pbgui']['optimize_runtime'] == {'mode': 'fresh'}
 

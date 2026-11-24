@@ -31,6 +31,10 @@ def validate_exposure_ceiling(config, ceiling):
     if ceiling is None:
         return
     validate_twe_ceiling(ceiling)
+    from loop_runtime import native
+    if native(config):
+        from pb9_loop_policy import validate_exposure
+        return validate_exposure(config, ceiling)
     try:
         _validate_effective_exposure(config, ceiling)
     except (KeyError, TypeError, AttributeError) as exc:

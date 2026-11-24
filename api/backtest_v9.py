@@ -266,15 +266,18 @@ def _queue():
     return sorted(items, key=lambda item: (item['created_at'], item['filename']))
 
 
-def _enqueue(body, cancel, *, archive_retest=None):
+def _enqueue(body, cancel, *, archive_retest=None, loop_identity=None):
     """Publish the immutable source and provenance before making a job visible."""
     name = _name(body.get('name'))
+    from loop_runtime import queue_identity
+    ownership = queue_identity(loop_identity, 'v9')
     with _LOCK, _storage_lock():
         operation = body.get('operation_id')
         if operation:
             operation = _name(operation)
             for item in _queue():
                 if item.get('operation_id') == operation:
+                    queue_identity(loop_identity, 'v9', item)
                     return {'ok': True, 'filename': item['filename'], 'idempotent': True}
         config = body.get('config')
         if config is None:
@@ -287,6 +290,7 @@ def _enqueue(body, cancel, *, archive_retest=None):
                    'exchange': source['backtest'].get('exchanges', []), 'config_snapshot': source,
                    'operation_id': operation, 'runtime': 'pb9', 'schema': source['config_version'],
                    'commit': status['commit'], 'package_version': status.get('package_version')}
+        payload.update(ownership)
         from pb9_gui_preferences import backtest_preferences
         try:
             preferences = backtest_preferences(config)
@@ -353,10 +357,13 @@ def _stop(job):
         return {'ok': True}
 
 
-def _start(job, cancel, automatic=False):
+def _start(job, cancel, automatic=False, *, loop_id=None):
     """Start one detached native job, or adopt it if it is already running."""
     with _job_lock(job, blocking=not automatic):
         item = _read(_job_path(job))
+        if item.get('loop_id'):
+            from pb8_loop_store import authorize_native_job
+            authorize_native_job(PBGDIR, item, loop_id)
         status, existing = _job_status(job)
         if status == 'running':
             raise HTTPException(409, "PB9 backtest is already running")
@@ -794,12 +801,14 @@ def _operation(operation, cancel, payload=None):
         if operation == 'bt9_enqueue':
             return _enqueue(body, cancel)
         if operation == 'bt9_queue':
-            items = _queue()
+            items = [item for item in _queue() if not item.get('loop_id')]
             return {'queue': items, 'items': items, 'settings': _queue_settings()}
         if operation == 'bt9_start':
             return _start(args['id'], cancel)
         if operation in {'bt9_stop', 'bt9_restart', 'bt9_delete_job'}:
             with _job_lock(args['id']):
+                if _read(_job_path(args['id'])).get('loop_id'):
+                    raise HTTPException(409, 'Manage this job through its owning AI Loop')
                 if operation != 'bt9_delete_job' or _job_status(args['id'])[0] == 'running':
                     _stop(args['id'])
                 if operation == 'bt9_restart':
@@ -899,6 +908,8 @@ def _operation(operation, cancel, payload=None):
             count = 0
             with _LOCK, _storage_lock():
                 for item in _queue():
+                    if item.get('loop_id'):
+                        continue
                     with _job_lock(item['filename']):
                         if _job_status(item['filename'])[0] not in {'complete', 'error', 'stopped'}:
                             continue
@@ -1026,6 +1037,8 @@ class BacktestV9Worker(BacktestQueueWorker):
         self._deferred = {key: value for key, value in self._deferred.items() if key in live}
         running = sum(item['status'] == 'running' for item in items)
         for item in items:
+            if item.get('loop_id'):
+                continue
             if not self._running or self._cancel.is_set():
                 return
             policy = await self.run_sync(_queue_settings)

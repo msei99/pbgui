@@ -79,11 +79,11 @@ def test_unknown_worker_profile_never_uses_pb8(value):
 def test_native_published_profile_is_bound_to_reviewed_digest_and_source():
     """Native rentals use the exact verified native image, independently of PB8."""
     profile = worker_profile('pb9').require_published()
-    assert profile.image == 'ghcr.io/msei99/pbgui-pb9-worker@sha256:2570575aa0cc7c9745b5e86382a2dfdf162279bb42850a981e57eaffb342f258'
-    assert profile.revision == '7e3f6d4ea37e6ff0713ffb37a73a52a886072706'
+    assert profile.image == 'ghcr.io/msei99/pbgui-pb9-worker@sha256:e3459cbbf12b23bfc66854f5f1a03640cf301a2b25272a296bbc39cb0efc54ec'
+    assert profile.revision == '9004fcd799586a217c65d6d71500b2672694687f'
     assert profile.image != worker_profile('pb8').image
     from vast_image_layers import IMAGE_LAYERS
-    assert len(IMAGE_LAYERS[profile.image]) == 71
+    assert len(IMAGE_LAYERS[profile.image]) == 80
     assert all(size > 0 for size in IMAGE_LAYERS[profile.image].values())
 
 
@@ -299,3 +299,9 @@ def test_native_performance_remains_readable_after_job_removal(client,monkeypatc
     assert response.status_code==200,response.text
     assert not (store.root/'jobs'/('b'*32)).exists()
     assert client.post('/api/vast-v9/performance/compare',json={'ids':['a'*32]}).status_code==404
+
+
+def test_previous_7e3f6d4_pb9_rental_identity_survives_worker_update():
+    """Existing rentals keep their reviewed source when the current pin advances."""
+    from vast_jobs import SUPPORTED_RENTAL_IMAGE_REVISIONS
+    assert SUPPORTED_RENTAL_IMAGE_REVISIONS['ghcr.io/msei99/pbgui-pb9-worker@sha256:2570575aa0cc7c9745b5e86382a2dfdf162279bb42850a981e57eaffb342f258'] == '7e3f6d4ea37e6ff0713ffb37a73a52a886072706'

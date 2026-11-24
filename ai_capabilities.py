@@ -193,6 +193,7 @@ class AICapabilityService:
         self.reviewed_changes = ReviewedConfigChanges(self)
         from ai_loop_tools import AILoopTools
         self.loop_tools = AILoopTools(self)
+        self.pb9_loop_tools = AILoopTools(self, runtime='v9')
         from ai_support_tools import ChatSupportTools
         self.support_tools = ChatSupportTools(self)
 
@@ -365,6 +366,35 @@ class AICapabilityService:
             for item in self._tool_specs()
         ]
 
+    @staticmethod
+    def page_arguments(tool, arguments, context):
+        """Keep optimizer mutations and navigation on the browser-selected generation."""
+        match = re.fullmatch(r'v([89])_optimize', str((context or {}).get('page_key') or ''))
+        if not match:
+            return arguments
+        version = 'v' + match[1]
+        args = copy.deepcopy(arguments) if isinstance(arguments, dict) else {}
+        if tool in {'propose_vast_optimizer_run', 'list_optimizer_queue', 'get_vast_optimizer_job'}:
+            args.setdefault('version', version)
+        mutation = tool.startswith('propose_') or tool in {'create_config_draft', 'update_config_draft'}
+        declared = args.get('version')
+        native_loop = 'pb9_ai_loop' in tool or tool.startswith('propose_pb9_')
+        legacy_loop = any(tool.startswith(prefix) for prefix in ('get_ai_loop', 'read_ai_loop', 'propose_ai_loop'))
+        legacy_pb8 = 'pb8' in tool and (mutation or tool == 'list_pb8_optimizer_queue')
+        bound_mutation = mutation and (version == 'v9' or args.get('kind') == 'optimizer' or tool == 'propose_vast_optimizer_run')
+        mismatch = ((bound_mutation and declared and declared != version)
+                    or (version == 'v9' and (legacy_loop or legacy_pb8))
+                    or (version != 'v9' and (native_loop or mutation and 'pb9' in tool)))
+        if tool == 'perform_page_action':
+            for value in (args.get('page_key'), args.get('entity_name')):
+                target = re.fullmatch(r'v([789])_optimize', str(value or ''))
+                mismatch = mismatch or bool(target and 'v' + target[1] != version)
+        if tool in {'select_pareto_candidates', 'list_optimizer_queue', 'get_vast_optimizer_job'}:
+            mismatch = mismatch or declared != version
+        if mismatch:
+            raise AICapabilityError('Current page is PB' + version[1:] + ' Optimize. Use its native optimizer tools; switching generation requires the user to change pages explicitly.')
+        return args
+
     async def dispatch(
         self,
         owner: str,
@@ -377,15 +407,16 @@ class AICapabilityService:
             "get_capability_registry", "list_optimizer_configs", "get_optimizer_config",
             "read_pbgui_support_evidence", "get_github_support_status",
             "list_run_configs", "get_run_config", "list_backtest_configs", "get_backtest_config",
-            "get_backtest_result_config", "get_optimizer_metadata", "preview_pb8_scenario_template",
-            "list_optimizer_runs", "list_pb8_optimizer_queue", "list_backtests",
+            "get_backtest_result_config", "get_optimizer_metadata", "preview_pb8_scenario_template", "preview_optimizer_scenario_template",
+            "list_optimizer_runs", "list_pb8_optimizer_queue", "list_optimizer_queue", "get_vast_optimizer_job", "list_backtests",
             "get_optimizer_run_analysis", "rank_optimizer_run_candidates", "get_pareto_candidate",
             "list_dashboard_templates", "get_dashboard_layout", "get_backtest_projection",
             "list_config_drafts", "get_config_draft", "get_python_analysis_result",
             "get_passivbot_installations", "read_pbgui_help_topic", "search_pbgui_help",
             "search_passivbot_docs", "search_passivbot_source", "read_passivbot_source",
             "list_research_results", "read_research_result", "propose_research_jev_analysis",
-            "propose_web_research", "propose_reviewed_config_change",
+            "propose_web_research", "propose_reviewed_config_change", "propose_pb9_optimizer_config",
+            "get_pb9_ai_loop_configs", "get_pb9_ai_loop_runs", "read_pb9_ai_loop_log",
             "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_vast_preferences", "get_vast_host_action_status", "get_candle_inventory", "list_bot_logs", "read_bot_log",
         }:
             self.require_action_context(owner, conversation_id)
@@ -394,7 +425,7 @@ class AICapabilityService:
         if len(encoded) > _MAX_CONFIG_BYTES:
             raise AICapabilityError("Tool arguments are too large")
         from ai_bot_log_tools import query as bot_log_query
-        from ai_vast_optimizer import propose as propose_vast_optimizer
+        from ai_vast_optimizer import propose as propose_vast_optimizer, read_job as read_vast_optimizer_job
         handlers = {
             "read_pbgui_support_evidence": self.support_tools.evidence,
             "get_github_support_status": self.support_tools.status,
@@ -403,14 +434,20 @@ class AICapabilityService:
             "read_bot_log": lambda owner, cid, args: bot_log_query(args, read=True),
             "get_capability_registry": lambda unused: self.capability_registry(owner),
             "get_ai_loop_configs": self.loop_tools.read_loop,
+            "get_pb9_ai_loop_configs": self.pb9_loop_tools.read_loop,
             "get_ai_loop_runs": self.loop_tools.read_runs,
+            "get_pb9_ai_loop_runs": self.pb9_loop_tools.read_runs,
             "read_ai_loop_log": self.loop_tools.read_log,
+            "read_pb9_ai_loop_log": self.pb9_loop_tools.read_log,
             "propose_ai_loop_run": self.loop_tools.propose_run,
+            "propose_pb9_ai_loop_run": self.pb9_loop_tools.propose_run,
             "propose_ai_loop_gpu_replacement": self.loop_tools.propose_gpu_replacement,
+            "propose_pb9_ai_loop_gpu_replacement": self.pb9_loop_tools.propose_gpu_replacement,
             "get_vast_preferences": self.loop_tools.read_vast,
             "get_vast_host_action_status": self.read_host_action_status,
             "propose_vast_host_block": self.loop_tools.propose_host_block,
             "propose_ai_loop_config": self.loop_tools.propose_loop,
+            "propose_pb9_ai_loop_config": self.pb9_loop_tools.propose_loop,
             "propose_vast_preferences": self.loop_tools.propose_vast,
             "list_optimizer_configs": self._list_optimizer_configs,
             "get_optimizer_config": self._get_optimizer_config,
@@ -422,8 +459,11 @@ class AICapabilityService:
             "get_backtest_result_config": self._get_backtest_result_config,
             "get_optimizer_metadata": self._get_optimizer_metadata,
             "preview_pb8_scenario_template": self._preview_pb8_scenario_template,
+            "preview_optimizer_scenario_template": self._preview_pb8_scenario_template,
             "list_optimizer_runs": self._list_optimizer_runs,
             "list_pb8_optimizer_queue": self._list_pb8_optimizer_queue,
+            "list_optimizer_queue": self._list_optimizer_queue,
+            "get_vast_optimizer_job": lambda args: read_vast_optimizer_job(self, args),
             "list_backtests": self._list_backtests,
             "get_optimizer_run_analysis": self._get_optimizer_run_analysis,
             "rank_optimizer_run_candidates": self._rank_optimizer_run_candidates,
@@ -451,6 +491,7 @@ class AICapabilityService:
             "propose_jev_optimizer_analysis": self._propose_jev_optimizer_analysis,
             "propose_web_research": self._propose_web_research,
             "propose_reviewed_config_change": self.reviewed_changes.propose,
+            "propose_pb9_optimizer_config": self.reviewed_changes.propose_optimizer,
             "list_research_results": self._research_results,
             "read_research_result": self._read_research_result,
             "propose_research_jev_analysis": self._propose_research_jev_analysis,
@@ -475,7 +516,7 @@ class AICapabilityService:
             raise AICapabilityError("PBGui capability capacity is busy") from exc
         try:
             try:
-                if tool.startswith("propose_") or tool in {"read_pbgui_support_evidence", "get_github_support_status", "get_python_analysis_result", "list_research_results", "read_research_result", "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_vast_preferences", "get_vast_host_action_status", "list_bot_logs", "read_bot_log"}:
+                if tool.startswith("propose_") or tool in {"read_pbgui_support_evidence", "get_github_support_status", "get_python_analysis_result", "list_research_results", "read_research_result", "get_ai_loop_configs", "get_ai_loop_runs", "read_ai_loop_log", "get_pb9_ai_loop_configs", "get_pb9_ai_loop_runs", "read_pb9_ai_loop_log", "get_vast_preferences", "get_vast_host_action_status", "list_bot_logs", "read_bot_log"}:
                     result = await handler(owner, conversation_id, args)
                 elif tool in {"list_config_drafts", "get_config_draft", "create_config_draft", "update_config_draft"}:
                     result = await self._to_thread_uncancellable(handler, owner, args)
@@ -660,9 +701,9 @@ class AICapabilityService:
                 elif proposal.action == "jev_analysis":
                     result = await self._execute_jev_analysis(proposal)
                 elif proposal.action == "run_ai_loop":
-                    result = await self.loop_tools.execute_run(proposal)
+                    result = await self._loop_tools_for(proposal).execute_run(proposal)
                 elif proposal.action == 'replace_ai_loop_gpu':
-                    result = await self.loop_tools.execute_gpu_replacement(proposal)
+                    result = await self._loop_tools_for(proposal).execute_gpu_replacement(proposal)
                 else:
                     result = await asyncio.to_thread(self._execute_proposal, proposal)
         except asyncio.CancelledError:
@@ -746,10 +787,10 @@ class AICapabilityService:
 
     def _list_optimizer_configs(self, args: dict[str, Any]) -> dict[str, Any]:
         """List bounded PB7/PB8 optimizer config summaries without paths."""
-        version = self._version(args)
+        version = self._optimizer_version(args)
         limit = self._limit(args, maximum=100)
-        if version == "v8":
-            from api import optimize_v8
+        if version in {"v8", "v9"}:
+            optimize_v8 = self._optimizer_api(version)
 
             payload = optimize_v8.list_configs(session=object(), include_result_summary=False)
         else:
@@ -765,6 +806,7 @@ class AICapabilityService:
                     projected["resource"] = f"pbgui://optimizer-config/{version}/{quote(name, safe='')}"
             configs.append(projected)
         return {"version": version, "configs": configs, "returned": len(configs)}
+
 
     def _get_candle_inventory(self, args: dict[str, Any]) -> dict[str, Any]:
         """Read bounded local candle coverage through the native Market Data inventory."""
@@ -840,10 +882,10 @@ class AICapabilityService:
 
     def _get_optimizer_config(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return one managed optimizer config with secrets and host paths removed."""
-        version = self._version(args)
+        version = self._optimizer_version(args)
         name = self._name(args.get("name"))
-        if version == "v8":
-            from api import optimize_v8
+        if version in {"v8", "v9"}:
+            optimize_v8 = self._optimizer_api(version)
 
             payload = optimize_v8.get_config(name, session=object())
         else:
@@ -859,6 +901,7 @@ class AICapabilityService:
             "resource": f"pbgui://optimizer-config/{version}/{quote(name, safe='')}",
             "config": self._sanitize_config(config),
         }
+
 
     def _managed_config_location(self, kind: str, version: str, name: str) -> Path:
         """Resolve only named Run/Backtest configs below the PBGui data root."""
@@ -966,11 +1009,11 @@ class AICapabilityService:
 
     def _get_optimizer_metadata(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return dynamic runtime template and optimizer metadata."""
-        version = self._version(args)
-        if version == "v8":
+        version = self._optimizer_version(args)
+        if version in {"v8", "v9"}:
             from pb8_config import get_pb8_optimize_metadata
 
-            metadata = get_pb8_optimize_metadata()
+            metadata = self._optimizer_api(version).native.metadata() if version == 'v9' else get_pb8_optimize_metadata()
             selected = {
                 key: metadata.get(key)
                 for key in (
@@ -999,7 +1042,70 @@ class AICapabilityService:
                 "limits": get_optimize_limits_meta_payload(),
                 "metric_sets": get_optimize_metric_sets(),
             }
+        if version == 'v9':
+            # Native strategy specifications duplicate large per-path registries.
+            # Keep the complete template and metric catalog readable by default;
+            # expose the remaining installed metadata through bounded sections.
+            available = list(selected)
+            section = args.get('section')
+            if section:
+                if section not in selected:
+                    raise AICapabilityError('Unknown optimizer metadata section')
+                value = selected[section]
+                for key in args.get('path') or []:
+                    if not isinstance(value, dict) or key not in value:
+                        raise AICapabilityError('Optimizer metadata path does not exist')
+                    value = value[key]
+                offset = self._bounded_int(args.get('offset'), default=0, maximum=10000)
+                limit = self._bounded_int(args.get('limit'), default=40, maximum=100)
+                if limit < 1:
+                    raise AICapabilityError('Metadata limit must be positive')
+                total = len(value) if isinstance(value, (dict, list)) else 1
+                if isinstance(value, dict):
+                    value = dict(list(value.items())[offset:offset + limit])
+                elif isinstance(value, list):
+                    value = value[offset:offset + limit]
+                selected = {section: value}
+                result = {'version': version, 'metadata': self._sanitize_config(selected),
+                          'available_sections': available,
+                          'pagination': {'offset': offset, 'returned': min(limit, max(0, total - offset)),
+                                         'total': total, 'next_offset': offset + limit if offset + limit < total else None}}
+                self._require_bounded_result(result)
+                return result
+            selected = {key: value for key, value in selected.items()
+                        if key in {'template', 'strategies', 'backends', 'scoring', 'limits'}}
+            return {'version': version, 'metadata': self._sanitize_config(selected),
+                    'available_sections': available,
+                    'detail_hint': 'Read section with offset/limit and optional dictionary path for strategy_specs or active_bounds.'}
         return {"version": version, "metadata": self._sanitize_config(selected)}
+
+
+    def _apply_optimizer_scenario_template(self, config, parameters):
+        """Use the existing editor's training-only windows and protected holdout provenance."""
+        if not isinstance(parameters, dict):
+            raise AICapabilityError('scenario_template must contain template parameters')
+        self._require_safe_draft(parameters)
+        scenario = self._preview_pb8_scenario_template(parameters)
+        for training in scenario['training_scenarios']:
+            for holdout in scenario['holdout_scenarios']:
+                training_exchanges = set(training.get('exchanges') or parameters.get('exchanges') or [])
+                holdout_exchanges = set(holdout.get('exchanges') or parameters.get('exchanges') or [])
+                if training_exchanges and holdout_exchanges and not training_exchanges & holdout_exchanges:
+                    continue
+                if training['start_date'] <= holdout['end_date'] and holdout['start_date'] <= training['end_date']:
+                    raise AICapabilityError('Training/Holdout dates overlap; use non-overlapping windows')
+        config = copy.deepcopy(config)
+        backtest = config.setdefault('backtest', {})
+        backtest['suite_enabled'] = True
+        backtest['scenarios'] = copy.deepcopy(scenario['training_scenarios'])
+        backtest['reducer'] = copy.deepcopy(scenario['reducer'])
+        backtest.pop('aggregate', None)
+        if parameters.get('template') == 'ai_loop_windows' or 'windows' in parameters:
+            backtest['start_date'] = parameters['start_date']
+            backtest['end_date'] = parameters['end_date']
+            config.setdefault('optimize', {})['write_all_results'] = True
+        config.setdefault('pbgui', {})['scenario_template'] = copy.deepcopy(scenario['provenance'])
+        return config, scenario
 
     def _preview_pb8_scenario_template(self, args: dict[str, Any]) -> dict[str, Any]:
         """Return the same deterministic PB8 scenario preview used by the editor."""
@@ -1012,10 +1118,10 @@ class AICapabilityService:
 
     def _list_optimizer_runs(self, args: dict[str, Any]) -> dict[str, Any]:
         """List compact optimizer result summaries without filesystem paths."""
-        version = self._version(args)
+        version = self._optimizer_version(args)
         limit = self._limit(args, maximum=50)
-        if version == "v8":
-            from api import optimize_v8
+        if version in {"v8", "v9"}:
+            optimize_v8 = self._optimizer_api(version)
 
             payload = optimize_v8.list_results(session=object())
         else:
@@ -1029,6 +1135,7 @@ class AICapabilityService:
                 projected["result_id"] = str(item.get("result") or "")[:200]
             results.append(projected)
         return {"version": version, "runs": results, "returned": len(results)}
+
 
     def _list_backtests(self, args: dict[str, Any]) -> dict[str, Any]:
         """List compact completed backtest summaries without filesystem paths."""
@@ -1063,7 +1170,7 @@ class AICapabilityService:
 
     def _get_optimizer_run_analysis(self, args: dict[str, Any]) -> dict[str, Any]:
         """Project one optimizer Pareto set through an opaque virtual resource."""
-        version = self._version(args)
+        version = self._optimizer_version(args)
         resource = self._resource_uri(args.get("resource"), "optimizer-run", version)
         raw = self._resolve_listed_resource("optimizer-run", version, resource)
         result_path = str(raw.get("path") or "")
@@ -1074,8 +1181,8 @@ class AICapabilityService:
         all_metrics = args.get("all_metrics") is True
         limit = self._limit(args, maximum=24 if all_metrics else 200)
         offset = self._bounded_int(args.get("offset"), default=0, maximum=5000)
-        if version == "v8":
-            from api import optimize_v8
+        if version in {"v8", "v9"}:
+            optimize_v8 = self._optimizer_api(version)
 
             payload = optimize_v8.list_paretos(
                 result_path,
@@ -1129,9 +1236,10 @@ class AICapabilityService:
             "truncated": len(payload.get("paretos", [])) > offset + limit,
         }
 
+
     def _rank_optimizer_run_candidates(self, args: dict[str, Any]) -> dict[str, Any]:
         """Rank every Pareto candidate with validated weighted normalized criteria."""
-        version = self._version(args)
+        version = self._optimizer_version(args)
         resource = self._resource_uri(args.get("resource"), "optimizer-run", version)
         raw = self._resolve_listed_resource("optimizer-run", version, resource)
         result_path = str(raw.get("path") or "")
@@ -1165,8 +1273,8 @@ class AICapabilityService:
             criteria.append({"metric": metric, "direction": direction, "weight": weight, "minimum": minimum, "maximum": maximum})
         if len({item["metric"].casefold() for item in criteria}) != len(criteria):
             raise AICapabilityError("Candidate ranking criteria contain duplicate metrics")
-        if version == "v8":
-            from api import optimize_v8 as module
+        if version in {"v8", "v9"}:
+            module = self._optimizer_api(version)
 
             payload = module.list_paretos(
                 result_path, scenario=scenario, statistic=statistic, session=object(), metrics=""
@@ -1291,15 +1399,16 @@ class AICapabilityService:
             "returned": len(ranked_result),
         }
 
+
     def _get_pareto_candidate(self, args: dict[str, Any]) -> dict[str, Any]:
         """Read one exact Pareto config through run-bound opaque resources."""
-        version = self._version(args)
+        version = self._optimizer_version(args)
         run_resource = self._resource_uri(args.get("run_resource"), "optimizer-run", version)
         candidate_resource = self._resource_uri(args.get("candidate_resource"), "pareto", version)
         raw = self._resolve_listed_resource("optimizer-run", version, run_resource)
         result_path = str(raw.get("path") or "")
-        if version == "v8":
-            from api import optimize_v8 as module
+        if version in {"v8", "v9"}:
+            module = self._optimizer_api(version)
 
             listed = module.list_paretos(
                 result_path,
@@ -1331,9 +1440,10 @@ class AICapabilityService:
             }
         raise AICapabilityError("Pareto candidate is no longer available")
 
+
     def _select_pareto_candidates(self, args: dict[str, Any]) -> dict[str, Any]:
         """Create one reversible browser action for exact run-bound Pareto candidates."""
-        version = self._version(args)
+        version = self._optimizer_version(args)
         run_resource = self._resource_uri(args.get("run_resource"), "optimizer-run", version)
         raw = self._resolve_listed_resource("optimizer-run", version, run_resource)
         requested = args.get("candidate_resources")
@@ -1343,8 +1453,8 @@ class AICapabilityService:
         if len(set(resources)) != len(resources):
             raise AICapabilityError("Pareto candidate selection contains duplicates")
         result_path = str(raw.get("path") or "")
-        if version == "v8":
-            from api import optimize_v8 as module
+        if version in {"v8", "v9"}:
+            module = self._optimizer_api(version)
 
             listed = module.list_paretos(
                 result_path, scenario="Aggregated", statistic="mean", session=object(), metrics=""
@@ -1377,6 +1487,7 @@ class AICapabilityService:
                 "payload": {"candidate_names": names, "mode": mode},
             },
         }
+
 
     def _select_backtest_results(self, args: dict[str, Any]) -> dict[str, Any]:
         """Select exact managed backtests and open the existing browser compare view."""
@@ -1682,7 +1793,7 @@ class AICapabilityService:
         docs_only: bool,
     ) -> dict[str, Any]:
         """Return bounded literal search matches with commit-pinned source links."""
-        version = self._version(args)
+        version = self._optimizer_version(args)
         query = str(args.get("query") or "").strip()
         if not 2 <= len(query) <= 128 or "\x00" in query:
             raise AICapabilityError("Search query must contain 2 to 128 characters")
@@ -1774,7 +1885,7 @@ class AICapabilityService:
 
     def _read_passivbot_source(self, args: dict[str, Any]) -> dict[str, Any]:
         """Read one validated relative source range from an installed checkout."""
-        version = self._version(args)
+        version = self._optimizer_version(args)
         relative = self._relative_source_path(args.get("path"))
         try:
             start_line = max(1, int(args.get("start_line") or 1))
@@ -1940,13 +2051,13 @@ class AICapabilityService:
     def _resolve_listed_resource(self, kind: str, version: str, resource: str) -> dict[str, Any]:
         """Resolve a virtual resource only by re-enumerating currently managed results."""
         if kind == "optimizer-run":
-            if version == "v8":
-                from api import optimize_v8 as module
+            if version in {"v8", "v9"}:
+                module = self._optimizer_api(version)
             else:
                 from api import optimize_v7 as module
             items = module.list_results(session=object()).get("results", [])
         elif kind == "backtest":
-            if version == "v8":
+            if version in {"v8", "v9"}:
                 from api import backtest_v8 as module
 
                 items = module.get_results(limit=0, session=object()).get("results", [])
@@ -1960,6 +2071,7 @@ class AICapabilityService:
             if isinstance(item, dict) and self._virtual_uri(kind, version, str(item.get("path") or self._digest(item))) == resource:
                 return item
         raise AICapabilityError("Virtual resource is no longer available")
+
 
     @classmethod
     def _virtual_uri(cls, kind: str, version: str, identity: str) -> str:
@@ -2128,22 +2240,7 @@ class AICapabilityService:
             config.setdefault('pbgui', {})['scenario_template'] = copy.deepcopy(provenance)
             scenario = {'provenance': provenance}
         if "scenario_template" in args:
-            parameters = args["scenario_template"]
-            if not isinstance(parameters, dict):
-                raise AICapabilityError("scenario_template must contain template parameters")
-            self._require_safe_draft(parameters)
-            scenario = self._preview_pb8_scenario_template(parameters)
-            config = copy.deepcopy(config)
-            backtest = config.setdefault("backtest", {})
-            backtest["suite_enabled"] = True
-            backtest["scenarios"] = scenario["training_scenarios"]
-            backtest["reducer"] = scenario["reducer"]
-            backtest.pop("aggregate", None)
-            if parameters.get('template') == 'ai_loop_windows':
-                backtest['start_date'] = parameters['start_date']
-                backtest['end_date'] = parameters['end_date']
-                config.setdefault('optimize', {})['write_all_results'] = True
-            config.setdefault("pbgui", {})["scenario_template"] = scenario["provenance"]
+            config, scenario = self._apply_optimizer_scenario_template(config, args['scenario_template'])
         prepared = await self._to_thread_uncancellable(self._validate_pb8_config, name, config)
         current, _overrides, _digest = await self._to_thread_uncancellable(
             self._current_pb8_bundle, name
@@ -2317,7 +2414,12 @@ class AICapabilityService:
 
     def _list_pb8_optimizer_queue(self, args: dict[str, Any]) -> dict[str, Any]:
         """List bounded path-free PB8 optimizer queue records for exact follow-up actions."""
-        from api import optimize_v8
+        return self._list_optimizer_queue({**args, 'version': 'v8'})
+
+    def _list_optimizer_queue(self, args):
+        """Read the selected generation's actual local queue without cloud fallback."""
+        version = self._optimizer_version(args)
+        optimize_v8 = self._optimizer_api(version)
 
         limit = self._limit(args, maximum=100)
         items = optimize_v8.get_queue(session=object()).get("items", [])[:limit]
@@ -4040,7 +4142,7 @@ class AICapabilityService:
                                   'proposal_id': proposal.id, 'action': proposal.action, 'execution_status': 'not_executed',
                                   'error': {'code': 'terminal_proposal', 'message': 'Host proposal is not approved for execution'}}
                     else:
-                        result = self.loop_tools.execute(proposal)
+                        result = self._loop_tools_for(proposal).execute(proposal)
             except Exception as exc:
                 _log(SERVICE, f'Host action could not be confirmed: {type(exc).__name__}', level='WARNING')
                 # write_json can commit and then fail before returning. Never call execute again.
@@ -4099,7 +4201,7 @@ class AICapabilityService:
         from ai_loop_tools import ACTIONS as LOOP_ACTIONS
         if proposal.action in LOOP_ACTIONS:
             journal = self._load_journal(proposal.id) or self._journal_payload(proposal, phase="prepared")
-            result = self.loop_tools.checked(self.loop_tools.execute, proposal)
+            result = self._loop_tools_for(proposal).checked(self._loop_tools_for(proposal).execute, proposal)
             self._complete_journal(journal, result)
             return result
         if proposal.action in {"queue_backtests", "create_dashboard", "save_dashboard_layout", "start_optimize_queue", "run_vast_optimizer"}:
@@ -4409,6 +4511,20 @@ class AICapabilityService:
             "name": proposal.name,
         }
 
+    def _validate_optimizer_config(self, version, name, config):
+        """Validate native PB9 through its gateway and retain the existing PB8 policy."""
+        if version == 'v8':
+            return self._validate_pb8_config(name, config)
+        if version != 'v9':
+            raise AICapabilityError('Unsupported optimizer proposal version')
+        self._require_bounded_config(config)
+        api = self._optimizer_api(version)
+        try:
+            return api.prepare_pb8_config(api._normalize_config(copy.deepcopy(config), name))
+        except Exception as exc:
+            _log(SERVICE, 'Native optimizer AI proposal rejected', level='WARNING', meta={'error_type': type(exc).__name__})
+            raise AICapabilityError('PB9 rejected the proposed configuration; check the native parameter help') from exc
+
     def _validate_pb8_config(self, name: str, config: dict[str, Any]) -> dict[str, Any]:
         """Run the full no-override PB8 optimize validation pipeline in private staging."""
         from api import optimize_v8
@@ -4435,6 +4551,22 @@ class AICapabilityService:
             optimize_v8._write_json(stage / optimize_v8._CONFIG_FILENAME, prepared)
             optimize_v8.validate_pb8_override_bundle(stage / optimize_v8._CONFIG_FILENAME)
             return prepared
+
+    def _current_optimizer_bundle(self, version, name):
+        """Bind a source bundle to the requested generation before native validation."""
+        if version == 'v8':
+            return self._current_pb8_bundle(name)
+        if version != 'v9':
+            raise AICapabilityError('Select PB8 or PB9 optimizer')
+        api = self._optimizer_api(version)
+        with api._config_lock():
+            path = api._config_file(self._name(name))
+            if not path.exists():
+                return None, {}, None
+            if not path.is_file() or path.is_symlink():
+                raise AICapabilityError('PB9 config target is unsafe')
+            config = api.native.load(path)
+            return config, {}, self._digest({'config': config, 'overrides': {}})
 
     def _current_pb8_bundle(
         self, name: str
@@ -4548,7 +4680,7 @@ class AICapabilityService:
                         else "approved_recovery"
                     )
                 if status == 'interrupted' and payload.get('action') == 'replace_ai_loop_gpu':
-                    retained = self.loop_tools.retained_gpu_replacement(payload)
+                    retained = self._loop_tools_for_payload(payload).retained_gpu_replacement(payload)
                     if retained:
                         status = 'executed'
                         payload.update(status=status, result=retained)
@@ -4754,7 +4886,7 @@ class AICapabilityService:
                         }:
                             continue
                         if payload.get('action') == 'replace_ai_loop_gpu':
-                            result = self.loop_tools.retained_gpu_replacement(payload)
+                            result = self._loop_tools_for_payload(payload).retained_gpu_replacement(payload)
                             if result:
                                 payload.update(status='executed', result=result, updated_at=time.time())
                                 self._write_private_json(path, payload)
@@ -4944,7 +5076,7 @@ class AICapabilityService:
         for item in self._tool_specs():
             versions = set(item.get("versions") or ())
             if not versions and "version" in (item.get("schema", {}).get("properties") or {}):
-                versions = {"v7", "v8"}
+                versions = set(item["schema"]["properties"]["version"].get("enum") or ("v7", "v8"))
             if versions and not any(fingerprints.get(version, {}).get("installed") for version in versions):
                 continue
             descriptors.append(
@@ -4958,6 +5090,30 @@ class AICapabilityService:
             )
         return descriptors
 
+    @staticmethod
+    def _native_optimizer_specs(specs):
+        """Advertise v9 only for tools with an explicit native optimizer/source boundary."""
+        allowed = {'list_optimizer_configs', 'get_optimizer_config', 'get_optimizer_metadata',
+                   'list_optimizer_runs', 'get_optimizer_run_analysis', 'rank_optimizer_run_candidates',
+                   'get_pareto_candidate', 'select_pareto_candidates', 'propose_reviewed_config_change',
+                   'search_passivbot_docs', 'search_passivbot_source', 'read_passivbot_source'}
+        for spec in specs:
+            if spec['name'] in allowed and 'version' in spec.get('schema', {}).get('properties', {}):
+                spec['schema']['properties']['version'] = {'type': 'string', 'enum': ['v7', 'v8', 'v9']}
+        native_proposal = next(item for item in specs if item['name'] == 'propose_pb9_optimizer_config')
+        native_proposal['schema']['properties']['scenario_template'] = {'type': 'object'}
+        native_proposal['description'] += ' Use scenario_template from preview_optimizer_scenario_template for Training/Holdout windows; PBGui preserves excluded Holdout provenance for later validation. A normal Vast run is a separate approval, not an AI Loop.'
+        preview = next(item for item in specs if item['name'] == 'preview_pb8_scenario_template')
+        native_preview = copy.deepcopy(preview)
+        native_preview['name'] = 'preview_optimizer_scenario_template'
+        native_preview['schema']['properties']['template']['enum'].append('custom_windows')
+        native_preview['schema']['properties']['template']['enum'].append('custom_windows')
+        native_preview['description'] = 'Preview shared PB8/PB9 Training/Holdout windows without saving. Explicit windows use custom_windows; pass the same typed scenario_template to the config proposal. Holdouts never enter training.'
+        native_preview['schema']['properties']['template']['enum'].append('custom_windows')
+        native_preview['schema']['required'] = ['template', 'start_date', 'end_date']
+        specs.append(native_preview)
+        return specs
+
     def _tool_specs(self) -> list[dict[str, Any]]:
         """Return the dynamic model-visible capability catalog."""
         from ai_jev import research_jev_question_schema
@@ -4966,8 +5122,12 @@ class AICapabilityService:
         from ai_support_tools import tool_specs as support_tool_specs
         from ai_vast_optimizer import tool_specs as vast_optimizer_specs
         version_schema = {"type": "string", "enum": ["v7", "v8"]}
-        return [
+        return self._native_optimizer_specs([
+            {'name': 'get_vast_optimizer_job', 'description': 'Read one real cloud optimizer job by the job_id returned on approval, matching the current version. Set open_log=true to open its existing shared GUI log on the same PB8/PB9 page. A rental receipt does not prove optimization has started.', 'schema': self._object_schema({'version': {'type': 'string', 'enum': ['v8', 'v9']}, 'job_id': {'type': 'string', 'pattern': '^[0-9a-f]{32}$'}, 'open_log': {'type': 'boolean'}}, ['version', 'job_id'])},
+            {'name': 'list_optimizer_queue', 'description': 'Read the actual local PB8/PB9 optimizer queue for the current version. Cloud jobs use get_vast_optimizer_job; never substitute a local queue ID for a cloud job.', 'schema': self._object_schema({'version': {'type': 'string', 'enum': ['v8', 'v9']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 100}}, ['version'])},
+            {'name': 'propose_pb9_optimizer_config', 'description': 'Propose a complete native PB9 optimizer config. Read PB9 template/metadata and current config first. Explicit user review saves only; never starts, queues, rents or changes live bots. Preserve paths and account identity. Use native Global/Portfolio and metric names.', 'schema': self._object_schema({'name': {'type': 'string'}, 'config': {'type': 'object'}}, ['name', 'config']), 'effect': 'draft'},
             *loop_tool_specs(),
+            *[dict(spec, versions=["v9"], name=spec["name"].replace("ai_loop", "pb9_ai_loop"), description=spec["description"].replace("PB8", "PB9")) for spec in loop_tool_specs() if "ai_loop" in spec["name"]],
             *bot_log_tool_specs(),
             *support_tool_specs(),
             *vast_optimizer_specs(),
@@ -5056,7 +5216,11 @@ class AICapabilityService:
             {
                 "name": "get_optimizer_metadata",
                 "description": "Load current runtime optimizer template, bounds, metrics, and strategies.",
-                "schema": AICapabilityService._object_schema({"version": version_schema}, ["version"]),
+                "schema": AICapabilityService._object_schema({"version": version_schema,
+                    "section": {"type": "string", "enum": ["template", "strategies", "strategy_specs", "active_bounds", "optimize_parameters", "backends", "scoring", "limits"]},
+                    "path": {"type": "array", "maxItems": 8, "items": {"type": "string", "maxLength": 160}},
+                    "offset": {"type": "integer", "minimum": 0, "maximum": 10000},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100}}, ["version"]),
             },
             {
                 "name": "preview_pb8_scenario_template",
@@ -5692,7 +5856,7 @@ class AICapabilityService:
                     ["version", "path"],
                 ),
             },
-        ]
+        ])
 
     @staticmethod
     def _codex_tool(item: dict[str, Any]) -> dict[str, Any]:
@@ -5714,6 +5878,39 @@ class AICapabilityService:
             "required": required,
             "additionalProperties": False,
         }
+
+    def _loop_tools_for(self, proposal):
+        """Keep replay, approval and recovery bound to the original generation."""
+        return self._loop_tools_for_payload({'config': proposal.config})
+
+    def _loop_tools_for_payload(self, payload):
+        """Use the original generation when recovering a persisted proposal."""
+        from loop_runtime import LoopRuntime
+        version = (payload.get('config') or {}).get('loop_runtime', 'v8')
+        LoopRuntime(version)
+        return self.pb9_loop_tools if version == 'v9' else self.loop_tools
+
+    @staticmethod
+    def _optimizer_version(args):
+        """Allow native PB9 only through explicitly generation-aware optimizer tools."""
+        value = str(args.get('version') or 'v7').strip().lower()
+        if value not in {'v7', 'v8', 'v9'}:
+            raise AICapabilityError('Optimizer version must be v7, v8 or v9')
+        return value
+
+    @staticmethod
+    def _optimizer_api(version):
+        """Resolve a managed runtime without a PB9-to-PB7/PB8 fallback."""
+        if version == 'v9':
+            from api.optimize_v9 import engine
+            return engine
+        if version == 'v8':
+            from api import optimize_v8
+            return optimize_v8
+        if version == 'v7':
+            from api import optimize_v7
+            return optimize_v7
+        raise AICapabilityError('Unsupported optimizer runtime')
 
     @staticmethod
     def _version(args: dict[str, Any]) -> str:
@@ -5750,7 +5947,10 @@ class AICapabilityService:
     @staticmethod
     def _passivbot_root(version: str) -> Path:
         """Resolve only the configured installed PB7/PB8 source root."""
-        if version == "v7":
+        if version == "v9":
+            from api.backtest_v9 import _paths
+            raw = str(_paths().get("pb9dir") or "")
+        elif version == "v7":
             from pbgui_purefunc import pb7dir
 
             raw = str(pb7dir() or "")
@@ -5862,7 +6062,7 @@ class AICapabilityService:
 
     def _runtime_fingerprints(self) -> dict[str, dict[str, Any]]:
         """Return current path-free PB7/PB8 source identities for capability consumers."""
-        return {version: self._runtime_fingerprint(version) for version in ("v7", "v8")}
+        return {version: self._runtime_fingerprint(version) for version in ("v7", "v8", "v9")}
 
     def _runtime_fingerprint(self, version: str) -> dict[str, Any]:
         """Build a dirty-aware runtime fingerprint without revealing checkout paths."""

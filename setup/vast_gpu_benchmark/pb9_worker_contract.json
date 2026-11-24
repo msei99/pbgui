@@ -1,7 +1,7 @@
 {
     "runtime": "pb9",
     "schema": "v9.0.0",
-    "commit": "7e3f6d4ea37e6ff0713ffb37a73a52a886072706",
+    "commit": "9004fcd799586a217c65d6d71500b2672694687f",
     "metrics": [
         "backtest_completion_fraction",
         "cagr_fraction_strategy_equity",

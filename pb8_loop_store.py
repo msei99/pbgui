@@ -136,6 +136,9 @@ def bounded_json(value):
 def scenario_state(config):
     """Include inherited values so disabled editor protection cannot be bypassed."""
     bt = config.get('backtest') or {}
+    from loop_runtime import native
+    if native(config):
+        return {'backtest': copy.deepcopy(bt), 'template': copy.deepcopy((config.get('pbgui') or {}).get('scenario_template'))}
     return {'backtest': {key: copy.deepcopy(bt.get(key)) for key in
             ('scenarios', 'suite_enabled', 'scenario_aggregation', 'suite_reducer', 'suite_metrics_reducer', 'start_date', 'end_date', 'exchanges',
              'starting_balance', 'coin_sources', 'market_settings_sources', 'maker_fee_override', 'taker_fee_override',
@@ -153,6 +156,10 @@ def windows(config):
 
 def configured_direction(config):
     """Resolve active PB8 optimizer sides from the configured risk search space."""
+    from loop_runtime import native
+    if native(config):
+        from pb9_loop_policy import direction
+        return direction(config)
     optimize = config.get('optimize') or {}
     fixed = {str(path).removeprefix('bot.') for path in optimize.get('fixed_params', [])}
     overrides = optimize.get('fixed_runtime_overrides') or {}
@@ -179,6 +186,10 @@ def configured_direction(config):
 
 def config_defaults(config):
     """Project inherited loop input values without disclosing the entire source config."""
+    from loop_runtime import native
+    if native(config):
+        from pb9_loop_policy import defaults
+        return defaults(config)
     live = config.get('live') or {}
     optimize = config.get('optimize') or {}
     fixed = {str(path).removeprefix('bot.') for path in optimize.get('fixed_params', [])}
@@ -250,6 +261,10 @@ def hsl_policy_sides(settings, config):
 def apply_hsl_policy(settings, config, overrides):
     """Apply an explicit HSL choice to a private initial bundle, including coin patches."""
     config, overrides = copy.deepcopy(config), copy.deepcopy(overrides)
+    from loop_runtime import native
+    if native(config):
+        from pb9_loop_policy import hsl_policy
+        return hsl_policy(settings, config, apply=True), overrides
     for side, enabled in hsl_policy_sides(settings, config).items():
         config['bot'][side].setdefault('hsl', {})['enabled'] = enabled
         optimize = config.setdefault('optimize', {})
@@ -283,6 +298,11 @@ def _hsl_override_values(override, side, replacement=None):
 
 def validate_hsl_policy(record, config, overrides):
     """Reject AI/candidate attempts to bypass a fixed HSL switch at any effective layer."""
+    from loop_runtime import native
+    if native(config):
+        from pb9_loop_policy import hsl_policy
+        hsl_policy(record['settings'], config)
+        return
     for side, enabled in hsl_policy_sides(record['settings'], record['initial_config']).items():
         path = f'bot.{side}.hsl.enabled'
         if config['bot'][side].get('hsl', {}).get('enabled') is not enabled:
@@ -371,8 +391,12 @@ def validate_gpu_drift(config):
         raise ValueError(f'optimize.gpu.drift_window must be at least {required} for the configured validation/probe allocation')
 
 
-def cloud_loop_metric_contract():
+def cloud_loop_metric_contract(runtime='v8'):
     """Expose the pinned worker's metric eligibility, separate from exact goals."""
+    if runtime == 'v9':
+        from api.optimize_v9 import engine
+        metadata = engine.native.metadata()
+        return {'execution': 'vast', 'allowed_metrics': metadata['scoring']['metrics'], 'allowed_reducers': metadata['scoring'].get('reducers', ['mean', 'min', 'max']), 'exact_only_metrics': [], 'applies_to': ['optimize.scoring', 'optimize.limits'], 'rule': 'Use native PB9 metrics without PB8 aliases.'}
     from vast_config_validation import METRICS, REDUCERS, PROFILE_REVISION, _METRIC_CONTRACT
     return {'execution': 'vast', 'worker_revision': PROFILE_REVISION,
             'allowed_metrics': sorted(METRICS),
@@ -389,6 +413,10 @@ def cloud_loop_metric_contract():
 
 def validate_cloud_loop_metrics(config, execution):
     """Reject unsupported cloud objectives before approval or job preparation."""
+    from loop_runtime import native
+    if native(config):
+        from pb9_loop_policy import validate_cloud
+        return validate_cloud(config, execution, metrics_only=True)
     if execution != 'vast':
         return
     from vast_config_validation import METRICS, REDUCERS, cloud_alternatives
@@ -414,6 +442,10 @@ def validate_cloud_loop_metrics(config, execution):
 
 def validate_cloud_loop_config(config, execution):
     """Use the native effective GPU/scenario preflight before approval and execution."""
+    from loop_runtime import native
+    if native(config):
+        from pb9_loop_policy import validate_cloud
+        return validate_cloud(config, execution)
     validate_cloud_loop_metrics(config, execution)
     if execution == 'vast':
         from vast_config_validation import validate_cloud_config
@@ -430,6 +462,10 @@ def validate_cloud_loop_config(config, execution):
 
 def validate_change(record, config, overrides):
     """Permit free optimizer edits while preserving user intent and editor state."""
+    from loop_runtime import native
+    if native(config):
+        from pb9_loop_policy import validate_change as validate_native
+        return validate_native(record, config, overrides)
     bounded_json(config)
     bounded_json(overrides)
     from ai_loop_windows import bound_plan, verify_config
@@ -641,7 +677,9 @@ class LoopStore:
 
     def instructions(self, owner):
         """Read the owner's immutable versions plus the current built-in default."""
-        from pb8_loop_ai import INSTRUCTIONS
+        from pb8_loop_ai import INSTRUCTIONS, native_instructions
+        if getattr(self, 'runtime', 'v8') == 'v9':
+            INSTRUCTIONS = native_instructions()
         path = self._instructions_path(owner)
         catalog = {'owner': owner, 'revision': 0, 'active': 'default', 'versions': []}
         if path.exists() or path.is_symlink():
@@ -1292,7 +1330,8 @@ def authorize_native_job(root, data, loop_id):
         fields = {'status', 'deadline'}
         if data.get('loop_observer'):
             fields.add('observer_jobs')
-        current = LoopStore(Path(root) / 'data/loop_optimizer').read(data['loop_owner'], loop_id, fields=fields)
+        from loop_runtime import store_for_job
+        current = store_for_job(root, data).read(data['loop_owner'], loop_id, fields=fields)
         observer = next((job for job in current.get('observer_jobs', [])
                          if job.get('observer_only') and job['operation'] == data.get('operation_id')
                          and (job.get('backend') or {}).get('id') == data.get('filename')), None) if data.get('loop_observer') else None
@@ -1302,7 +1341,7 @@ def authorize_native_job(root, data, loop_id):
         if current['status'] not in allowed or (not observer and time.time() >= current['deadline'] - 60):
             raise ValueError('Loop is paused, stopped or expired')
     except (ValueError, KeyError, OSError, TypeError):
-        raise HTTPException(status_code=409, detail='This job can only be started by its active PB8 loop') from None
+        raise HTTPException(status_code=409, detail='This job can only be started by its active owning loop') from None
 
 
 def config_changes(before, after, limit=80):

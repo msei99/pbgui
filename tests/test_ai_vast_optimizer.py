@@ -1,6 +1,7 @@
 """Offline approval and rental isolation for normal AI-requested Vast optimizers."""
 import asyncio
 import copy
+from pathlib import Path
 
 import pytest
 
@@ -13,9 +14,10 @@ from vast_queue import CloudQueue
 
 
 @pytest.fixture
-def cloud(tmp_path, monkeypatch):
+def cloud(tmp_path, monkeypatch, request):
     """Use native durable proposals and job state with inert preparation/provider boundaries."""
     from api import optimize_v8
+    version = getattr(request, 'param', 'v8')
     import vast_pool
     from vast_direction_fixtures import direction_config
     service = AICapabilityService(tmp_path / 'ai')
@@ -23,6 +25,9 @@ def cloud(tmp_path, monkeypatch):
     settings = RentalPreferences(gpu_name='RTX 3060', max_price=.3, budget=5, hours=24).model_dump()
     queue.update(gpu_preferences=settings)
     source = direction_config()
+    if version == 'v9':
+        import json
+        source = json.loads((Path(__file__).parent / 'fixtures/pb9_optimize_metadata.json').read_text())['template']
     source['optimize'].update(iters=20_000_000, backend='gpu', n_cpus=21)
     source['optimize']['scoring'][0]['reducer'] = 'mean'
     source['backtest'].update(start_date='2024-12-05', end_date='2026-10-30')
@@ -36,6 +41,16 @@ def cloud(tmp_path, monkeypatch):
         copy.deepcopy(current['source']), current['overrides'], current['digest']))
     monkeypatch.setattr(service, '_validate_pb8_config', lambda name, config: copy.deepcopy(config))
     monkeypatch.setattr(optimize_v8, '_results_root', lambda: tmp_path / 'results')
+    if version == 'v9':
+        import vast_pb9
+        monkeypatch.setattr(vast_pb9, 'validate', lambda *args, **kwargs: [])
+        monkeypatch.setattr(service, '_current_pb8_bundle', lambda *_: pytest.fail('PB8 source used for PB9'))
+        monkeypatch.setattr(service, '_current_optimizer_bundle', lambda selected, name: (
+            copy.deepcopy(current['source']), current['overrides'], current['digest']) if selected == 'v9' else pytest.fail('Wrong source generation'))
+        monkeypatch.setattr(service, '_validate_optimizer_config', lambda selected, name, config:
+            copy.deepcopy(config) if selected == 'v9' else pytest.fail('PB8 validator used for PB9'))
+        from api.optimize_v9 import engine
+        monkeypatch.setattr(engine, '_results_root', lambda: tmp_path / 'results-v9')
 
     def prepare(name, source, digest, market, mappings, results, iterations, workers, adg, *, identifier):
         """Capture only isolated native input preparation, never read market runtime data."""
@@ -56,6 +71,8 @@ def cloud(tmp_path, monkeypatch):
         calls.append(('rent', hours, budget, copy.deepcopy(job_authorization)))
         worker = {'id': single_job_worker_id(job_authorization['id']), 'kind': 'worker',
                   'rental_state': 'creation_pending', 'status': 'provisioning'}
+        if version == 'v9':
+            worker['runtime'] = 'pb9'
         queue.store.publish(worker, intent={'job_authorization': job_authorization})
         return worker
 
@@ -66,16 +83,18 @@ def cloud(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('paused', [False, True])
+@pytest.mark.parametrize('cloud', ['v8', 'v9'], indirect=True)
 def test_normal_vast_run_approval_and_recovery_are_scoped_and_idempotent(cloud, paused):
     """20M iterations survive; no local process, AI Loop or global Auto rent is needed."""
     service, queue, current, calls = cloud
+    version = 'v9' if str(current['source'].get('config_version', '')).startswith('v9.') else 'v8'
 
     async def scenario():
         """Exercise the common provider dispatch and human approval boundary."""
         queue.update(paused=paused)
         before = queue.read()
         created = await service.dispatch('a' * 32, 'b' * 32, 'propose_vast_optimizer_run', {
-            'name': 'hype', 'stop_when_no_improvement': True})
+            'name': 'hype', 'version': version, 'stop_when_no_improvement': True})
         assert calls == [] and queue.store.list() == []
         preview = created['preview']
         assert preview['execution'] == 'vast' and preview['iterations'] == 20_000_000
@@ -89,6 +108,20 @@ def test_normal_vast_run_approval_and_recovery_are_scoped_and_idempotent(cloud, 
         result = await service.approve('a' * 32, proposal.id, proposal.payload_digest, 'b' * 32)
         assert result['execution'] == 'vast' and result['ai_loop'] is False
         assert result['rental_state'] == 'creation_pending'
+        assert result['version'] == version
+        stored = queue.store.read(result['job_id'])
+        assert stored.get('runtime', 'pb8') == ('pb9' if version == 'v9' else 'pb8')
+        shown = await service.dispatch('a'*32, 'b'*32, 'get_vast_optimizer_job', {
+            'version': version, 'job_id': result['job_id'], 'open_log': True})
+        assert shown['ui_action']['target']['page_key'] == version + '_optimize'
+        assert shown['ui_action']['payload']['entity']['name'] == 'vast:' + result['job_id']
+        with pytest.raises(AICapabilityError, match='selected generation'):
+            await service.dispatch('a'*32, 'b'*32, 'get_vast_optimizer_job', {
+                'version': 'v9' if version == 'v8' else 'v8', 'job_id': result['job_id']})
+        observed = await service.dispatch('a'*32, 'b'*32, 'get_vast_optimizer_job', {
+            'version': version, 'job_id': result['job_id'], 'open_log': True})
+        assert observed['version'] == version
+        assert observed['ui_action']['target']['page_key'] == version + '_optimize'
         assert [row[0] for row in calls] == ['prepare', 'offer', 'rent']
         assert calls[0][2:] == (20_000_000, 21)
         assert calls[0][1]['backtest'] == current['source']['backtest']
@@ -111,7 +144,7 @@ def test_changed_review_inputs_never_prepare_or_rent(cloud, changed):
     async def scenario():
         """Modify one approved dependency before the native execution boundary."""
         created = await capability.propose(service, 'a' * 32, 'b' * 32, {
-            'name': 'hype', 'stop_when_no_improvement': True})
+            'name': 'hype', 'version': 'v8', 'stop_when_no_improvement': True})
         if changed == 'source':
             current['digest'] = 'e' * 64
         elif changed == 'account':
@@ -140,11 +173,13 @@ def test_cloud_proposal_requires_explicit_stop_and_blocks_analysis_context(cloud
     async def scenario():
         """Invalid intent and research-only turns never reach preparation."""
         with pytest.raises(AICapabilityError, match='explicitly'):
-            await capability.propose(service, 'a' * 32, 'b' * 32, {'name': 'hype'})
+            await capability.propose(service, 'a' * 32, 'b' * 32, {'name': 'hype', 'version': 'v8'})
+        with pytest.raises(AICapabilityError, match='PB8 or PB9'):
+            await capability.propose(service, 'a' * 32, 'b' * 32, {'name': 'hype', 'stop_when_no_improvement': True})
         service.restrict_to_analysis('a' * 32, 'b' * 32)
         with pytest.raises(AICapabilityError):
             await service.dispatch('a' * 32, 'b' * 32, 'propose_vast_optimizer_run', {
-                'name': 'hype', 'stop_when_no_improvement': True})
+                'name': 'hype', 'version': 'v8', 'stop_when_no_improvement': True})
         assert calls == []
         await service.shutdown()
 

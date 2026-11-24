@@ -978,7 +978,7 @@ class OptimizeEngine:
         self.rmtree(backup, ignore_errors=True)
         return None
 
-    def _save_config_bundle(self, name: str, config: dict, *, create_only: bool=False, override_payloads: object=None, source_dir: Path | None=None, migration_report: dict | None=None, preserve_hsl_runtime_overrides: bool=False) -> dict:
+    def _save_config_bundle(self, name: str, config: dict, *, create_only: bool=False, override_payloads: object=None, source_dir: Path | None=None, migration_report: dict | None=None, preserve_hsl_runtime_overrides: bool=False, expected_config: dict | None=None) -> dict:
         root = self.ensure_private_directory(self._configs_dir())
         target = self._config_dir(name)
         if create_only and target.exists():
@@ -997,6 +997,8 @@ class OptimizeEngine:
             if self._override_filenames(prepared) != set(resolved_overrides):
                 raise self.HTTPException(status_code=422, detail='PB8 preparation changed override-file references')
             self._validate_forager_optimize_search_space(prepared)
+            if expected_config is not None and prepared != expected_config:
+                raise self.HTTPException(409, 'Optimizer preparation changed after review; nothing was saved')
             self._write_json(stage / self._CONFIG_FILENAME, prepared)
             if migration_report is not None:
                 self._write_json(stage / 'migration_report.json', migration_report)
@@ -3807,14 +3809,18 @@ class OptimizeEngine:
         """Allow native profiles to clear inherited systemd-manager environment variables."""
         return command
 
-    def _create_queue_record(self, name: str, prepared: dict, options: dict, override_payloads: dict[str, dict] | None=None, operation_id: str | None=None) -> dict:
+    def _create_queue_record(self, name: str, prepared: dict, options: dict, override_payloads: dict[str, dict] | None=None, operation_id: str | None=None, *, loop_identity: dict | None=None) -> dict:
         """Publish one queue record and remove partial artifacts if persistence fails."""
         self._validate_options_for_config(options, prepared)
+        from loop_runtime import queue_identity
+        loop_runtime = 'v9' if str(prepared.get('config_version', '')).startswith('v9.') else 'v8'
+        ownership = queue_identity(loop_identity, loop_runtime)
         if operation_id is not None:
             operation_id = self._validate_name(operation_id)
             with self._queue_lock():
                 existing = self._queue_record_for_operation_unlocked(operation_id)
                 if existing is not None:
+                    queue_identity(loop_identity, loop_runtime, self._read_json(self._queue_file(existing['filename'])))
                     return existing
         filename = str(self.uuid.uuid4())
         stage = None
@@ -3827,6 +3833,7 @@ class OptimizeEngine:
                 if operation_id:
                     existing = self._queue_record_for_operation_unlocked(operation_id)
                     if existing is not None:
+                        queue_identity(loop_identity, loop_runtime, self._read_json(self._queue_file(existing['filename'])))
                         self.rmtree(stage, ignore_errors=True)
                         stage = None
                         return existing
@@ -3839,6 +3846,7 @@ class OptimizeEngine:
                 if operation_id:
                     data['operation_id'] = operation_id
                 data.update(self._queue_identity(prepared, filename))
+                data.update(ownership)
                 self._write_json(self._queue_file(filename), data)
         except Exception:
             if stage is not None:

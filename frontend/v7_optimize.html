@@ -27,10 +27,10 @@
 <script src="/app/js/floating_window.js?v=1"></script>
 <link rel="stylesheet" href="/app/css/ai_loop_templates.css?v=6">
 <script src="/app/js/ai_loop_windows.js?v=1"></script>
-<script src="/app/js/ai_loop_templates.js?v=18"></script>
+<script src="/app/js/ai_loop_templates.js?v=21"></script>
 <script src="/app/js/pb8_loop_instructions.js?v=2"></script>
 <script src="/app/js/loop_gpu_replacement.js?v=1"></script>
-<script src="/app/js/pb8_loop_optimizer.js?v=99"></script>
+<script src="/app/js/pb8_loop_optimizer.js?v=102"></script>
 <link rel="stylesheet" href="/app/css/pb8_loop_optimizer.css?v=18">
 <style>
 :root {
@@ -16704,13 +16704,14 @@ window.PBGUI_AI_PAGE_CONTEXT = function () {
   var names = editorName && editorName !== '__new__'
     ? [editorName]
     : Array.from(state.selectedConfigs || []).slice(0, 8);
+  var aiQueueItems = (state.queue || []).concat(window.PBGuiVast ? window.PBGuiVast.queueItems() : []);
   var showConfigEntities = !!editorName || ['queue', 'results', 'paretos'].indexOf(state.panel) < 0;
   var entities = (showConfigEntities ? names : []).map(function (name) {
     return { kind: 'optimizer_config', version: optimizeEditorAdapter.version, name: name };
   });
   if (!editorName && state.panel === 'queue' && state.selectedQueue && state.selectedQueue.size) {
     Array.from(state.selectedQueue).slice(0, 8).forEach(function (filename) {
-      var queueItem = (state.queue || []).find(function (item) { return item.filename === filename; });
+      var queueItem = aiQueueItems.find(function (item) { return item.filename === filename; });
       if (!queueItem) return;
       entities.push({ kind: 'optimizer_queue_item', version: optimizeEditorAdapter.version, name: String(queueItem.filename) });
     });
@@ -16733,8 +16734,8 @@ window.PBGUI_AI_PAGE_CONTEXT = function () {
     });
   }
   if (!editorName && entities.length < 8) {
-    (state.queue || []).filter(function(item) {
-      return item.status === 'running' || item.status === 'optimizing';
+    aiQueueItems.filter(function(item) {
+      return ['running', 'optimizing', 'provisioning', 'preparing', 'queued'].includes(item.status);
     }).slice(0, 8 - entities.length).forEach(function(item) {
       var exists = entities.some(function(entity) {
         return entity.kind === 'optimizer_queue_item' && entity.name === String(item.filename);
@@ -16756,7 +16757,11 @@ window.PBGUI_AI_PAGE_CONTEXT = function () {
 window.PBGUI_AI_PAGE_ACTIONS = [{
   id: 'show_log',
   entity_kind: 'optimizer_queue_item',
-  run: function(filename) {
+  run: async function(filename) {
+    if (/^vast:[0-9a-f]{32}$/.test(filename) && window.PBGuiVast) {
+      await window.PBGuiVast.openJobLog(filename.slice(5));
+      return;
+    }
     var queueItem = state.queue.find(function(item) { return item.filename === filename; });
     if (!queueItem) {
       toast('The selected Optimize queue item is no longer available.', 'warn');

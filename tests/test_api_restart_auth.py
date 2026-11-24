@@ -325,7 +325,7 @@ def isolated_monitor_lifespan(monkeypatch, tmp_path):
         "run_credential_migration", "persist_credential_migration_error", "db_tools_init",
         "bt7_startup", "bt8_startup", "bt9_startup", "opt7_startup", "opt8_startup", "coin_data_startup",
         "ohlcv_preload_startup", "vps_manager_startup", "vast_startup", "market_data_startup",
-        "strategy_explorer_v8_startup", "profit_sweep_startup", "loop8_startup",
+        "strategy_explorer_v8_startup", "profit_sweep_startup", "loop8_startup", "loop9_startup",
     ):
         monkeypatch.setattr(PBApiServer, name, Mock())
     monkeypatch.setattr(PBApiServer, "load_ini", Mock(return_value=None))
@@ -333,7 +333,7 @@ def isolated_monitor_lifespan(monkeypatch, tmp_path):
     monkeypatch.setattr(PBApiServer, "reconcile_pending_credentials", Mock(return_value={}))
     for name in (
         "ai_capabilities_startup", "ai_capabilities_prepare_startup", "_worker_watchdog_loop", "_serial_watcher_loop",
-        "loop8_shutdown", "auth_shutdown", "ai_chat_shutdown", "live_shutdown",
+        "loop8_shutdown", "loop9_shutdown", "auth_shutdown", "ai_chat_shutdown", "live_shutdown",
         "dashboard_shutdown", "heatmap_shutdown", "pareto_explorer_shutdown",
         "strategy_explorer_v8_shutdown", "coin_data_shutdown", "market_data_shutdown",
         "profit_sweep_shutdown", "vps_manager_shutdown", "vast_shutdown", "cluster_shutdown",
@@ -416,6 +416,8 @@ def test_lifespan_only_requests_actionable_monitor_migration(
             )
 
     asyncio.run(scenario())
+    PBApiServer.loop9_startup.assert_called_once()
+    PBApiServer.loop9_shutdown.assert_awaited_once()
     state.monitor.stop.assert_awaited_once()
     state.heartbeat.close.assert_called_once()
     if mode == "proxy":

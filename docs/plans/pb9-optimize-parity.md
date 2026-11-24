@@ -14,7 +14,7 @@ Vast worker profiles. No PB7/PB8 bot source was modified.
 | Vast | Shared account, marketplace, calibration, pool, transfer, requeue, cleanup and performance history; explicit runtime ownership |
 | Worker candidate | Built locally: `pbgui-pb9-worker:1b85ea6-native-launch-candidate`; source/Rust/worker entry and native CPU CLI contract verified |
 | Paid cloud execution | Blocked until a published immutable native image digest is configured and a separately authorized physical GPU smoke succeeds |
-| AI Loops | Separate PB8 protocol is deliberately not exposed as native PB9; native adaptation remains outstanding |
+| AI Loops | Shared controller, routes, Template and UI; separate PB9 state and native policy/metric/backtest bindings. Offline and browser-fixture verification; no paid end-to-end AI/GPU run |
 | Strategy Explorer | Deferred as requested |
 | Pareto Explorer | PB9 result root, `v9` generation, native result reader for handoffs, global/portfolio parameters, native-metric presets |
 | Sweep Cycles | Window gain derived from per-window `cagr_fraction_strategy_equity`; PB9 Sweep preset and Long/Global position bounds |
@@ -33,10 +33,11 @@ These are intentionally separate and not part of the parity fixes:
    browser draft limits stay unchanged. Queue options freeze their bytes and hashes; native PB9 verifies the
    actual prepared-input identity. Seed options require Pareto seed mode.
    Local checkpoints remain local; cloud Requeue starts a new job.
-2. **AI integration.** PBGui AI proposals and reviewed changes
-   (`ai_capabilities.py`, `ai_reviewed_changes.py`) and AI Loops support PB8 only.
-   A native PB9 adaptation needs PB9 metric/bound vocabularies and the PB9
-   config gateway.
+2. **AI integration implemented (2026-11-24).** Native PB9 optimizer proposals
+   use the existing explicit review flow. AI Loops share PB8 supervision and UI,
+   with native metadata, sparse policy inheritance, independent CPU validation,
+   runtime-bound queues and isolated history. Paid AI/GPU execution has not been
+   exercised by the offline integration checks.
 
 ## Verification evidence
 

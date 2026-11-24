@@ -227,7 +227,7 @@ def test_published_worker_and_installers_share_the_same_reviewed_source():
     from vast_image_layers import IMAGE_LAYERS
     from vast_calibration import calibration_worker_available
     root = Path(__file__).resolve().parents[1]
-    receipt = json.loads((root/'setup/vast_gpu_benchmark/pb9_worker_release_7e3f6d4e.json').read_text())
+    receipt = json.loads((root/'setup/vast_gpu_benchmark/pb9_worker_release_9004fcd.json').read_text())
     contract = json.loads((root/'setup/vast_gpu_benchmark/pb9_worker_contract.json').read_text())
     profile = worker_profile('pb9')
     assert profile.revision == receipt['source'] == contract['commit'] == passivbot_runtime.pb9_release_commit()

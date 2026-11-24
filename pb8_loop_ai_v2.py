@@ -220,7 +220,9 @@ def decision_instructions(record):
     from pb8_loop_ai import instructions_for_run
     from pb8_loop_research import enabled, PROTOCOL as RESEARCH_PROTOCOL
     from pb8_loop_native import enabled as native_training, PROTOCOL as NATIVE_PROTOCOL
-    return (instructions_for_run(record)['text'] + PROTOCOL + (RESEARCH_PROTOCOL if enabled(record) else '')
+    from loop_runtime import native
+    protocol = PROTOCOL.replace('PB8', 'PB9').replace('live.strategy_kind', 'bot.portfolio.strategy_kind').replace('n_positions', 'max_positions').replace('total_wallet_exposure_limit', 'total_wallet_exposure_limit_ratio') if native(record.get('initial_config')) else PROTOCOL
+    return (instructions_for_run(record)['text'] + protocol + (RESEARCH_PROTOCOL if enabled(record) else '')
             + (NATIVE_PROTOCOL if native_training(record) else ''))
 
 
@@ -320,7 +322,8 @@ async def run_decision(ai, record, stage, evidence):
     if profile is None:
         raise LoopAIPause('context_budget', 'Model context settings are unavailable')
     from ai_loop_manual import installed_manual, manual_summary
-    manual = await owned_thread(installed_manual)
+    from loop_runtime import native
+    manual = await owned_thread(installed_manual, 'v9') if native(record.get('initial_config')) else await owned_thread(installed_manual)
     from pb8_loop_metrics import annotate_observations
     evidence = annotate_observations(record, evidence)
     if stage == 'bootstrap':
@@ -379,6 +382,11 @@ async def run_decision(ai, record, stage, evidence):
                     'Side metrics require that side controller and cannot be used with unified HSL. '
                     'Each enabled scoring objective or limit must be available in every scenario it consumes. '
                     'Preserve the reviewed HSL policy; choose compatible metrics rather than enabling HSL.'}
+        from loop_runtime import native
+        if native(record.get('initial_config')):
+            from pb9_loop_policy import metric_catalog
+            metrics, reducers = await owned_thread(metric_catalog)
+            content['native_runtime'] = {'version': 'v9', 'metrics': sorted(metrics), 'reducers': sorted(reducers), 'policy_scopes': ['global', 'portfolio', 'long', 'short'], 'missing_metrics_are_not_zero': True}
         if stage in {'bootstrap', 'evaluate'}:
             content['variant_config_schema'] = variant_config_schema(record)
             if research_enabled(record):
@@ -389,7 +397,7 @@ async def run_decision(ai, record, stage, evidence):
                 history.extend(archives)
 
         if settings['execution'] in {'gpu', 'vast'}:
-            content['optimizer_metric_policy'] = cloud_loop_metric_contract()
+            content['optimizer_metric_policy'] = cloud_loop_metric_contract('v9' if str(record.get('initial_config', {}).get('config_version', '')).startswith('v9.') else 'v8')
         if stage == 'bootstrap':
             from pb8_loop_archive import select_sources
             sources = content['evidence'].get('existing_results') or []

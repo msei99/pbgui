@@ -390,13 +390,27 @@ Native Cloud-Pakete enthalten dieselben Startoptionen und verwalteten Seeds.
 Lokale Pfade werden durch geprüfte Paketpfade ersetzt. Exportiert werden die
 Trainingseingaben der ausgewählten Szenarien. Lokale Checkpoints verwenden
 lokales Resume; Cloud Requeue startet einen neuen Job. Der Worker ist auf den
-öffentlichen Stand `7e3f6d4e` gepinnt. Vor der Vorbereitung muss die lokale PB9-Quelle
+öffentlichen Stand `9004fcd7` gepinnt. Vor der Vorbereitung muss die lokale PB9-Quelle
 dazu passen. Validate prüft dies vor der Konfigurationsvorbereitung; Queue lehnt Abweichungen vor dem Anlegen eines Jobs und vor dem Zugriff auf Vast-Zugangsdaten ab. Install PB9 / Update PB9 installiert standardmäßig denselben Release-Commit. Eine ausdrücklich gewählte andere Branch-Version bleibt lokal nutzbar, für Vast muss die Quelle übereinstimmen. Die bestehende Installation wird nicht automatisch aktualisiert.
 Ein lokaler Vorbereitungsbericht kann Cloud-Eingaben mit abweichender
 Datensatzidentität ablehnen. Die native Prüfung wird nicht umgangen.
 
-Das separate AI-Loops-System ist für PB9 noch nicht aktiviert. Strategy Explorer
-bleibt ein eigener Integrationsschritt.
+KI-Vorschläge und **AI Loop Template**, **AI Loops Config**, **AI Loops Queue**
+sowie **AI Loops Results** verwenden denselben Ablauf wie PB8 mit eigener
+PB9-Runtime. Die KI erhält die installierte PB9-Dokumentation und den nativen
+Metrikkatalog. Global-/Portfolio-Regeln und sparsame Long-/Short-Overrides bleiben
+im nativen Format. Vorschläge werden erst nach ausdrücklicher Prüfung gespeichert;
+dabei startet kein Job und es wird keine GPU gemietet.
+
+Loops verlangen feste Modell-, Runden-, Versuchs-, Zeit-, Validierungs- und bei
+Vast Mietbudgets. Definitionen, Verlauf und Freigaben bleiben nach Version getrennt;
+CPU-/GPU-Kapazität und Mietgrenzen werden gemeinsam geprüft. Native PB9-Backtests
+liefern unabhängige Vergleichswerte. Fehlende Metriken sind nicht verfügbar, niemals
+Null oder erfundene PB8-ADG-/Gain-Ersatzwerte. Pause, Stop und API-Neustart erhalten
+eigene Jobs und stellen deren Überwachung aus dem gespeicherten Zustand wieder her.
+PB9-GPU-Zähler messen native Auswertungen, keine PB8-Proxy-Auswertungen.
+Strategy Explorer folgt später. Geprüft wird offline mit temporären Daten und
+Browser-Fixtures; ein kostenpflichtiger KI-/GPU-Loop gehört nicht zu dieser Prüfung.
 
 Die native Performance History aktualisiert sich automatisch und bleibt nach dem Aufräumen der Cloud-Jobs lesbar. Konto, Marktplatz, Kalibrierung und Mietautomatik verwenden die gemeinsamen Vast-Komponenten.
 
@@ -406,7 +420,7 @@ Max kann die CPU-Vorbereitung beschleunigen, verändert aber den Suchablauf.
 PB8-GPU-Vorbewertungen sind nicht direkt mit vollständigen PB9-GPU-Auswertungen
 vergleichbar.
 
-Der aktuelle Worker ist auf den offiziellen v9-Stand `7e3f6d4e` (mit dem aktuellen Risikolayout nach PR #2318) gepinnt und enthält die
+Der aktuelle Worker ist auf den offiziellen v9-Stand `9004fcd7` (mit dem aktuellen Risikolayout nach PR #2318) gepinnt und enthält die
 Altersauflösung numerischer Hyperliquid-Markt-IDs. Offline-Alterstests und native
 CLI/Cohort-Prüfungen sind bestanden. Für diese Revision gibt es keine neue
 Leistungsmessung auf einer echten GPU.
@@ -442,3 +456,7 @@ Entwurf und konvertiert keine bestehenden PB9-Entwicklungsconfigs. Aktualisiere 
 separate PB9-Installation, wenn der Editor ein zu altes natives Template meldet.
 
 Der Link **Update PB9** in der Laufzeitwarnung öffnet **VPS Manager → Master (lokal)** mit der bestehenden Update-PB9-Aktion. Er öffnet weder Run noch führt er automatisch ein Update aus.
+
+Auch ein normaler KI-Vorschlag für Vast verwendet die PB9-Config, den nativen Worker und die PB9-Cloud-Queue. Die Freigabe nennt PB9 ausdrücklich. Nach der Freigabe dient die zurückgegebene Cloud-Job-ID zum Anzeigen von Status und Log; die lokale Optimizer-Queue ist davon getrennt. KI-Aktionen in PB9 Optimize dürfen keine PB8-Optimizer-Config erstellen oder zu PB8 wechseln.
+
+PB9-KI-Vorschläge unterstützen dieselben Training-/Holdout-Fenster wie PB8. Die Freigabe zeigt die native Validierung und die Fensteranzahl. Holdout-Zeiten bleiben vom Training ausgeschlossen und werden für spätere Kandidatenprüfungen gespeichert. Speichern und Freigabe eines kostenpflichtigen Vast-Laufs sind getrennte Schritte.

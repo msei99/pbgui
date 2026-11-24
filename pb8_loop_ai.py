@@ -102,12 +102,17 @@ When strategy_enabled is false, preserve live.strategy_kind and every strategy_k
 Keep reasons concise and emit compact JSON so complete configurations fit the model output budget.'''
 
 
+
+def native_instructions():
+    """Bind the shared decision protocol to native fields instead of PB8 aliases."""
+    return INSTRUCTIONS.replace('Native optimize.iters is the exact-validation budget for GPU jobs; run_proxy is a separate proxy-work stop threshold.', 'Native optimize.iters is the PB9 evaluation budget; run_proxy is a separate controller quota of completed PB9 evaluations.').replace('PB8', 'PB9').replace('live.strategy_kind', 'bot.portfolio.strategy_kind').replace('n_positions', 'max_positions').replace('total_wallet_exposure_limit', 'total_wallet_exposure_limit_ratio') + "\nPB9 uses sparse bot.global defaults inherited by bot.long/bot.short and portfolio-wide bot.portfolio policy. Keep inheritance sparse. Universe is under bot.<scope>.universe, never live.approved_coins. Bounds support global, portfolio, long and short. Use only native metrics supplied in the runtime catalog and observations; never invent ADG, gain or USD/BTC aliases. Independent native backtests provide CPU comparison evidence; do not assume PB8 proxy/exact artifacts exist. Native GPU budgets count completed PB9 evaluations; the shared run_proxy setting is a controller quota, not the PB8 proxy-work unit. HSL settings are under bot.<scope>.risk.hsl; portfolio risk.hsl.scope chooses the applicable controller scope."
+
 def instructions_for_run(record):
     """Return the frozen run prompt, with an explicit fallback for legacy runs."""
     snapshot = record.get('ai_instructions')
     if snapshot is None:
-        return {'id': 'default', 'name': 'PBGui default (legacy fallback)', 'text': INSTRUCTIONS,
-                'digest': digest(INSTRUCTIONS), 'created_at': None, 'legacy': True}
+        return {'id': 'default', 'name': 'PBGui default (legacy fallback)', 'text': native_instructions() if str(record.get('initial_config', {}).get('config_version', '')).startswith('v9.') else INSTRUCTIONS,
+                'digest': digest(native_instructions() if str(record.get('initial_config', {}).get('config_version', '')).startswith('v9.') else INSTRUCTIONS), 'created_at': None, 'legacy': True}
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get('text'), str) or not snapshot['text'].strip():
         raise ValueError('The saved Loop instruction snapshot is invalid')
     return {**snapshot, 'legacy': False}

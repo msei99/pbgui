@@ -17,6 +17,10 @@ SERVICE = 'PB8Loop'
 
 def migrate_loop_bundle(bundle):
     """Normalize a captured input through native PB8 without writing its source."""
+    from loop_runtime import native
+    if native(bundle.get('config')):
+        from pb9_loop_policy import bundle as native_bundle
+        return native_bundle(bundle)
     from tempfile import TemporaryDirectory
     from api import optimize_v8 as opt
     from pb8_config import PB8ConfigurationError, preview_pb8_hsl_migration, save_prepared_pb8_config
@@ -64,13 +68,15 @@ def normalize_suite_coins(config):
 
 class LoopBackend:
     """Use existing managed PB8 APIs without modifying a user's source configuration."""
-    def __init__(self, root, store):
+    def __init__(self, root, store, *, runtime="v8"):
+        from loop_runtime import LoopRuntime
+        self.profile = LoopRuntime(runtime)
         self.root = Path(root)
         self.store = store
 
     def initial(self, name, settings, bundle=None):
         """Resolve a managed input bundle and apply explicit user goal selections."""
-        from api import optimize_v8 as opt
+        opt = self.profile.api()
         opt._validate_name(name)
         path = opt._config_file(name)
         if bundle is None:
@@ -92,40 +98,45 @@ class LoopBackend:
         config.setdefault('optimize', {})['backend'] = 'pymoo' if settings['execution'] == 'cpu' else 'gpu'
         config.setdefault('pbgui', {})['execution'] = 'vast' if settings['execution'] == 'vast' else 'local'
         config = fresh_optimizer_config(config)
-        goals = settings['goals']
-        use_config = goals['direction'] == 'config'
-        direction = configured_direction(config) if use_config else goals['direction']
-        total = goals.get('positions')
-        counts = goals.get('positions_by_side') or {}
-        if counts and direction != 'both' and counts.get('short' if direction == 'long' else 'long'):
-            raise ValueError('Position split conflicts with the direction of the starting config')
-        if total is not None and not counts:
-            counts = {'long': total, 'short': 0} if direction == 'long' else (
-                     {'long': 0, 'short': total} if direction == 'short' else {'long': (total + 1) // 2, 'short': total // 2})
-        for side in ('long', 'short'):
-            active = direction in {'both', side}
-            risk = config['bot'][side].setdefault('risk', {})
-            if (not active and not use_config) or side in counts:
-                capacity = counts.get(side, 0) if active else 0
-                risk['n_positions'] = capacity
-                config['optimize'].setdefault('bounds', {}).setdefault(side, {}).setdefault('risk', {})['n_positions'] = [capacity, capacity]
-                config['optimize'].setdefault('fixed_runtime_overrides', {}).pop(f'bot.{side}.risk.n_positions', None)
-            if not active and not use_config:
-                risk['total_wallet_exposure_limit'] = 0
-                config['optimize'].setdefault('bounds', {}).setdefault(side, {}).setdefault('risk', {})['total_wallet_exposure_limit'] = [0, 0]
-            if goals.get('coins'):
-                if not isinstance(config['live'].get('approved_coins'), dict):
-                    config['live']['approved_coins'] = {}
-                config['live'].setdefault('approved_coins', {})[side] = goals['coins'] if active else []
+        if self.profile.native:
+            from pb9_loop_policy import initial_goals
+            initial_goals(config, settings)
+        else:
+            goals = settings['goals']
+            use_config = goals['direction'] == 'config'
+            direction = configured_direction(config) if use_config else goals['direction']
+            total = goals.get('positions')
+            counts = goals.get('positions_by_side') or {}
+            if counts and direction != 'both' and counts.get('short' if direction == 'long' else 'long'):
+                raise ValueError('Position split conflicts with the direction of the starting config')
+            if total is not None and not counts:
+                counts = {'long': total, 'short': 0} if direction == 'long' else (
+                         {'long': 0, 'short': total} if direction == 'short' else {'long': (total + 1) // 2, 'short': total // 2})
+            for side in ('long', 'short'):
+                active = direction in {'both', side}
+                risk = config['bot'][side].setdefault('risk', {})
+                if (not active and not use_config) or side in counts:
+                    capacity = counts.get(side, 0) if active else 0
+                    risk['n_positions'] = capacity
+                    config['optimize'].setdefault('bounds', {}).setdefault(side, {}).setdefault('risk', {})['n_positions'] = [capacity, capacity]
+                    config['optimize'].setdefault('fixed_runtime_overrides', {}).pop(f'bot.{side}.risk.n_positions', None)
+                if not active and not use_config:
+                    risk['total_wallet_exposure_limit'] = 0
+                    config['optimize'].setdefault('bounds', {}).setdefault(side, {}).setdefault('risk', {})['total_wallet_exposure_limit'] = [0, 0]
+                if goals.get('coins'):
+                    if not isinstance(config['live'].get('approved_coins'), dict):
+                        config['live']['approved_coins'] = {}
+                    config['live'].setdefault('approved_coins', {})[side] = goals['coins'] if active else []
         config, overrides = apply_hsl_policy(settings, config, overrides)
-        normalize_suite_coins(config)
+        if not self.profile.native:
+            normalize_suite_coins(config)
         from pb8_loop_store import validate_cloud_loop_config
         validate_cloud_loop_config(config, settings['execution'])
         from ai_loop_search_limits import exposure_ceiling, validate_exposure_ceiling
         validate_exposure_ceiling(config, exposure_ceiling(settings))
         runtime = opt.pb8_runtime_status()
         if not runtime.get('ready'):
-            raise ValueError('PB8 runtime is not ready')
+            raise ValueError(self.profile.label + ' runtime is not ready')
         if settings['execution'] == 'gpu':
             if bundle is None:
                 opt._validate_optimize_backend(config, base_config_path=str(path))
@@ -136,7 +147,10 @@ class LoopBackend:
                 with TemporaryDirectory(prefix='pbgui-loop-preflight-') as temporary:
                     destination = Path(temporary) / 'optimize.json'
                     opt._write_override_payloads(destination.parent, overrides)
-                    save_prepared_pb8_config(config, destination)
+                    if self.profile.native:
+                        opt.native.write(destination, config)
+                    else:
+                        save_prepared_pb8_config(config, destination)
                     opt._validate_optimize_backend(config, base_config_path=str(destination))
         from scenario_windows import build_validation_plan
         plan = build_validation_plan(config)
@@ -149,13 +163,21 @@ class LoopBackend:
 
     def fingerprint(self, config):
         """Track the actual PB8 checkout and relevant available market-data shards."""
-        from api import optimize_v8 as opt
+        opt = self.profile.api()
         runtime = opt.pb8_runtime_status()
-        version = opt._runtime_commit(Path(runtime['pb8dir'])) if runtime.get('ready') else ''
+        version = opt._runtime_commit(Path(runtime['pb9dir' if self.profile.native else 'pb8dir'])) if runtime.get('ready') else ''
         from market_data import get_market_data_root_dir
         from setup.vast_gpu_benchmark.prepare import select_shards
         try:
-            shards = select_shards(config, Path(get_market_data_root_dir()), self.root / 'data/coindata')
+            if self.profile.native:
+                from pb9_config import get_pb9_optimize_cloud_plan
+                plans = get_pb9_optimize_cloud_plan(config, *opt.native.options(), cancel_event=opt.native.stop_flag())['data_plans']
+                shards = []
+                for plan in plans:
+                    shards.extend(select_shards(plan, Path(get_market_data_root_dir()), self.root / 'data/coindata', warmup_minutes=plan['warmup_minutes']))
+                shards = list({str(path): (path, relative) for path, relative in shards}.values())
+            else:
+                shards = select_shards(config, Path(get_market_data_root_dir()), self.root / 'data/coindata')
             files = shards
         except (ValueError, OSError, KeyError) as exc:
             from logging_helpers import human_log
@@ -175,12 +197,12 @@ class LoopBackend:
             signatures.append((str(relative), content))
             metadata.append((str(relative), before.st_size, before.st_mtime_ns))
         dataset = digest(signatures) if signatures else None
-        return {'pb8': version, 'data': dataset, 'data_status': 'verified_files' if dataset else 'unavailable',
+        return {'pb8': version, 'runtime': self.profile.version, 'data': dataset, 'data_status': 'verified_files' if dataset else 'unavailable',
                 'data_signature_version': 2, 'metadata_data': digest(metadata) if metadata else None}
 
     def capacity(self, record):
         """Include other local jobs and every unconfirmed Vast rental in slot use."""
-        from api import optimize_v8 as opt, backtest_v8 as bt
+        opt, bt = self.profile.api(), self.profile.api("backtest")
         execution = record['settings']['execution']
         if execution == 'vast':
             from vast_queue import CloudQueue
@@ -192,6 +214,17 @@ class LoopBackend:
             return max(0, min(record['settings']['parallel'], limits['max_rentals'] - len(active) + idle_owned))
         import psutil
         busy = sum(row['status'] == 'running' for row in opt._load_queue()) + sum(row['status'] == 'running' for row in bt._load_queue())
+        from loop_runtime import LoopRuntime
+        other = LoopRuntime('v8' if self.profile.native else 'v9')
+        try:
+            other_opt, other_bt = other.api(), other.api('backtest')
+            if Path(other_opt.PBGDIR).resolve() == self.root.resolve():
+                busy += sum(row['status'] == 'running' for row in other_opt._load_queue())
+                busy += sum(row['status'] == 'running' for row in other_bt._load_queue())
+        except (FileNotFoundError, RuntimeError, ValueError, OSError):
+            # No second runtime is required, but configured unreadable queues must fail closed.
+            if other.directory(self.root).exists():
+                return 0
         if psutil.virtual_memory().available < 512 * 1024 * 1024:
             return 0
         if execution == 'gpu':
@@ -237,7 +270,7 @@ class LoopBackend:
 
     def prepare(self, record, job):
         """Create an idempotent owned job, then leave launching to the controller."""
-        from api import optimize_v8 as opt, backtest_v8 as bt
+        opt, bt = self.profile.api(), self.profile.api("backtest")
         config, overrides, name = copy.deepcopy(job['config']), job['overrides'], job['name']
         self.authorized(record, observer=bool(job.get('observer_only')), replacement=job.get('gpu_replacement_successor'))
         if job.get('gpu_replacement_successor'):
@@ -262,15 +295,16 @@ class LoopBackend:
             if record['settings']['execution'] == 'vast':
                 from vast_jobs import JobStore, digest as file_digest
                 cloud = JobStore()
-                existing = next((row for row in cloud.list() if row.get('loop_operation') == job['operation']), None)
+                existing = next((row for row in cloud.list() if row.get('loop_operation') == job['operation'] and row.get('loop_id') == record['id'] and row.get('loop_owner') == record['owner'] and row.get('loop_runtime', 'v8') == self.profile.version), None)
                 if existing:
                     if existing['status'] == 'preparing':
                         cloud.update(existing['id'], status='failed', error='Preparation was interrupted; this attempt was not launched')
                     return {'id': existing['id'], 'execution': 'vast'}
                 with advisory_file_lock(cloud.root / '.queue-lock'):
                     entry = cloud.create_preparation(name, int(prepared['optimize'].get('iters') or 512),
-                                                     int((prepared['optimize'].get('gpu') or {}).get('exact_workers') or prepared['optimize'].get('n_cpus') or 1), False)
-                    cloud.update(entry['id'], loop_id=record['id'], loop_owner=record['owner'], loop_operation=job['operation'])
+                                                     int((prepared['optimize'].get('gpu') or {}).get('exact_workers') or prepared['optimize'].get('n_cpus') or 1), False, operation_id=job['operation'],
+                                                     loop_identity={'loop_id': record['id'], 'loop_owner': record['owner']},
+                                                     **({'runtime': 'pb9'} if self.profile.native else {}))
                 from market_data import get_market_data_root_dir
                 cloud.prepare(name, prepared, file_digest(opt._config_file(name)), Path(get_market_data_root_dir()),
                               self.root / 'data/coindata', opt._results_root(), entry['iterations'], entry['workers'], False,
@@ -278,18 +312,20 @@ class LoopBackend:
                 return {'id': entry['id'], 'execution': 'vast'}
             options = opt._runtime_options_from_config(prepared)
             with opt._queue_lock():
-                result = opt._create_queue_record(name, prepared, opt._validate_launch_options(options), overrides, job['operation'])
-                path = opt._queue_file(result['filename'])
-                data = opt._read_json(path)
-                data.update(loop_id=record['id'], loop_owner=record['owner'])
-                opt._write_json(path, data)
+                result = opt._create_queue_record(name, prepared, opt._validate_launch_options(options), overrides, job['operation'],
+                    loop_identity={'loop_id': record['id'], 'loop_owner': record['owner']})
             return {'id': result['filename'], 'execution': record['settings']['execution']}
+        if self.profile.native:
+            result = bt.add_to_queue({'name': name, 'config': config, 'override_configs': overrides,
+                'operation_id': job['operation'], 'loop_identity': {'loop_id': record['id'],
+                'loop_owner': record['owner'], 'loop_observer': bool(job.get('observer_only'))}}, session=None)
+            return {'id': result['filename'], 'execution': 'validation'}
         with bt._queue_lock():
             result = bt.add_to_queue({'name': name, 'config': config, 'override_configs': overrides,
-                                      'operation_id': job['operation']}, session=None)
+                                      'operation_id': job['operation'], **({'loop_identity': {'loop_id': record['id'], 'loop_owner': record['owner'], 'loop_observer': bool(job.get('observer_only'))}} if self.profile.native else {})}, session=None)
             path = bt._queue_file(result['filename'])
             data = bt._read_json(path)
-            data.update(loop_id=record['id'], loop_owner=record['owner'])
+            data.update(loop_id=record['id'], loop_owner=record['owner'], loop_runtime=self.profile.version)
             if job.get('observer_only'):
                 data['loop_observer'] = True
             bt.atomic_write_json(path, data)
@@ -298,7 +334,7 @@ class LoopBackend:
     def start(self, record, job):
         """Serialize final authorization with pause/stop and the native launch."""
         with advisory_file_lock(self.store.path(record['owner'], record['id'])):
-            with advisory_file_lock(self.store.root / '.execution'):
+            with advisory_file_lock(self.root / 'data' / '.loop-execution'):
                 current = self.authorized(record, observer=bool(job.get('observer_only')))
                 resource_check = {**current, 'settings': copy.deepcopy(current['settings'])}
                 resource_check['initial_config'] = copy.deepcopy(job['config'])
@@ -345,7 +381,7 @@ class LoopBackend:
                 return self.poll(record, job)
             self._rent(record)
             return self.poll(record, job)
-        from api import optimize_v8 as opt, backtest_v8 as bt
+        opt, bt = self.profile.api(), self.profile.api("backtest")
         if job['kind'] == 'optimizer':
             opt._worker.launch(job['backend']['id'], None, False, loop_id=record['id'])
         else:
@@ -375,11 +411,11 @@ class LoopBackend:
         offer = select_offer(scoped, settings)
         self.authorized(record)
         scoped.start(offer, settings['hours'], settings['budget'], settings['idle_seconds'],
-                     loop_id=record['id'], loop_owner=record['owner'], loop_limits=settings)
+                     loop_id=record['id'], loop_owner=record['owner'], loop_limits=settings, **({'runtime': 'pb9'} if self.profile.native else {}))
 
     def native_target(self, record, job):
         """Read only the native identity and ownership; never reconcile runner state."""
-        from api import optimize_v8 as opt, backtest_v8 as bt
+        opt, bt = self.profile.api(), self.profile.api("backtest")
         from vast_provider import VastError
         backend = job.get('backend') or {}
         identifier = backend.get('id')
@@ -405,18 +441,18 @@ class LoopBackend:
             if not path.is_file() or path.is_symlink():
                 raise HTTPException(404, 'The native job is no longer available.')
             source = api._read_json(path)
-        if source.get('loop_id') != record['id'] or source.get('loop_owner') != record['owner']:
+        if source.get('loop_id') != record['id'] or source.get('loop_owner') != record['owner'] or source.get('loop_runtime', 'v8') != self.profile.version:
             raise ValueError('Cloud job ownership mismatch' if cloud else 'Queue job ownership mismatch')
         return {'id': identifier, 'cloud': cloud, 'name': job['name'], 'kind': job['kind']}
 
     def poll(self, record, job):
         """Read authoritative owned runner state and reconcile persistent launch intent."""
-        from api import optimize_v8 as opt, backtest_v8 as bt
+        opt, bt = self.profile.api(), self.profile.api("backtest")
         backend = job['backend']
         if backend['execution'] == 'vast':
             from vast_jobs import JobStore
             row = JobStore().read(backend['id'])
-            if row.get('loop_id') != record['id'] or row.get('loop_owner') != record['owner']:
+            if row.get('loop_id') != record['id'] or row.get('loop_owner') != record['owner'] or row.get('loop_runtime', 'v8') != self.profile.version:
                 raise ValueError('Cloud job ownership mismatch')
             status = 'queued' if row['status'] == 'ready' else row['status']
             input_path = JobStore().directory(backend['id']) / 'input/optimize.json'
@@ -425,13 +461,13 @@ class LoopBackend:
             if record['settings'].get('run_limit_mode') == 'proxy' or job.get('research'):
                 log_path = opt._safe_path(opt._log_dir() / ('vast_' + backend['id'] + '.log'), opt._log_dir())
                 progress = opt._parse_optimize_log_status(opt._read_optimize_log_excerpt(log_path))
-                proxy = progress.get('proxy_evaluations')
+                proxy = progress.get('evaluations') if self.profile.native else progress.get('proxy_evaluations')
             return {'status': status, 'started': bool(row.get('dispatch_at')), 'source': row, 'executed_config': executed,
                     'proxy_evaluations': proxy, 'search_progress': progress}
 
         api = opt if job['kind'] == 'optimizer' else bt
         data = api._read_json(api._queue_file(backend['id']))
-        if data.get('loop_id') != record['id'] or data.get('loop_owner') != record['owner']:
+        if data.get('loop_id') != record['id'] or data.get('loop_owner') != record['owner'] or data.get('loop_runtime', 'v8') != self.profile.version:
             raise ValueError('Queue job ownership mismatch')
         status, pid = api._queue_status(data)
         executed_path = opt._launch_config_file(backend['id']) if job['kind'] == 'optimizer' else bt._snapshot_file(backend['id'])
@@ -440,7 +476,7 @@ class LoopBackend:
         if job['kind'] == 'optimizer' and (record['settings'].get('run_limit_mode') == 'proxy' or job.get('research')):
             log_path = opt._safe_path(opt._log_dir() / (backend['id'] + '.log'), opt._log_dir())
             progress = opt._parse_optimize_log_status(opt._read_optimize_log_excerpt(log_path))
-            proxy = progress.get('proxy_evaluations')
+            proxy = progress.get('evaluations') if self.profile.native else progress.get('proxy_evaluations')
         runner = api._read_runner_state(backend['id']) or {}
         source = dict(data, started_at=data.get('started_at') or runner.get('started_at'),
                       completed_at=runner.get('completed_at'), error=runner.get('error') or data.get('error'))
@@ -450,7 +486,7 @@ class LoopBackend:
 
     def _result_origin(self, source):
         """Resolve cloud provenance through the exact persisted job, never a label."""
-        from api import optimize_v8 as opt
+        opt = self.profile.api()
         from vast_jobs import JobStore
         from vast_provider import VastError
         directory = opt._resolve_result_path(source['path'])
@@ -473,7 +509,7 @@ class LoopBackend:
 
     def candidates(self, record, job):
         """Read evidence belonging to exactly this native optimizer job."""
-        from api import optimize_v8 as opt
+        opt = self.profile.api()
         backend = job.get('backend') or {}
         rows = []
         for source in opt._list_results():
@@ -488,7 +524,7 @@ class LoopBackend:
 
     def existing_candidates(self, record):
         """Read bounded saved evidence attributed to the chosen starting config."""
-        from api import optimize_v8 as opt
+        opt = self.profile.api()
         sources = []
         preferred = (record['settings'].get('source') or {}).get('result_path')
         available = opt._list_results()
@@ -522,7 +558,7 @@ class LoopBackend:
 
     def _result_candidates(self, record, source, job, *, historical=False):
         """Load native Pareto metrics/configs without mutating source results."""
-        from api import optimize_v8 as opt
+        opt = self.profile.api()
         from ai_loop_windows import protected_holdout_plan, historical_training_windows
         protected = historical and protected_holdout_plan(record) is not None
         directory = opt._resolve_result_path(source['path'])
@@ -536,7 +572,7 @@ class LoopBackend:
                 human_log(SERVICE, f'Optimizer candidate unavailable: {type(exc).__name__}', level='WARNING')
         native_loaded = len(artifacts)
         coverage = None
-        if not historical:
+        if not historical and not self.profile.native:
             from pb8_loop_candidates import supplemental_candidates
             artifacts, coverage = supplemental_candidates(record, job, directory, artifacts, opt._pareto_summary)
         if not artifacts:
@@ -556,7 +592,7 @@ class LoopBackend:
             from pb8_loop_metrics import native_metric_evidence
             suite_metrics, labels = opt._suite_metric_payload(data)
             metric_evidence = native_metric_evidence(record, data, suite_metrics, labels, summary, job['config'])
-            config = {key: copy.deepcopy(data.get(key, job['config'].get(key))) for key in job['config']}
+            config = opt.native.result_config(data) if self.profile.native else {key: copy.deepcopy(data.get(key, job['config'].get(key))) for key in job['config']}
             candidate_id = 'c_' + digest([job['operation'], artifact])[:24]
             result.append({'id': candidate_id, 'optimizer_job': job['operation'], 'config': config,
                            'overrides': job['overrides'], **metric_evidence,
@@ -604,8 +640,15 @@ class LoopBackend:
             config['backtest']['start_date'] = min(row['start_date'] for row in record['holdouts'])
             config['backtest']['end_date'] = max(row['end_date'] for row in record['holdouts'])
         # Validate all requested coins/directions on the fixed reference conditions.
-        config['live']['approved_coins'] = copy.deepcopy(record['initial_config']['live'].get('approved_coins'))
-        normalize_suite_coins(config)
+        from loop_runtime import native
+        if native(config):
+            for scope in ('global', 'long', 'short'):
+                if 'universe' in (record['initial_config']['bot'].get(scope) or {}):
+                    config['bot'].setdefault(scope, {})['universe'] = copy.deepcopy(record['initial_config']['bot'][scope]['universe'])
+        else:
+            config['live']['approved_coins'] = copy.deepcopy(record['initial_config']['live'].get('approved_coins'))
+        if not native(config):
+            normalize_suite_coins(config)
         return config
 
     def observer_config(self, record, candidate, kind):
@@ -630,7 +673,7 @@ class LoopBackend:
             if result.get('training_source', {}).get('kind') != 'vast_cpu_exact' or not result.get('exact'):
                 raise ValueError('Native CPU checkpoint is incomplete')
             return copy.deepcopy(result)
-        from api import backtest_v8 as bt
+        bt = self.profile.api("backtest")
         paths = bt._result_analysis_paths(job['name'])
         if not paths:
             raise ValueError('Exact validation results are not yet available')
@@ -674,7 +717,7 @@ class LoopBackend:
         assessment['achieved'] = all(evaluate(item, record['rubric'])['achieved'] for item in per_report)
         scenarios = job.get('config', {}).get('backtest', {}).get('scenarios') or []
         expected = len(scenarios) if job.get('config', {}).get('backtest', {}).get('suite_enabled') and scenarios else 1
-        complete = len(per_report) >= expected and all(item.get('backtest_completion_ratio', 0) >= .999999 for item in per_report)
+        complete = len(per_report) >= expected and all(item.get('backtest_completion_fraction' if self.profile.native else 'backtest_completion_ratio', 0) >= .999999 for item in per_report)
         assessment['simulation_complete'] = complete
         assessment['comparable'] = assessment['comparable'] and complete
         assessment['achieved'] = assessment['achieved'] and complete
@@ -689,12 +732,12 @@ class LoopBackend:
             return False
         state = self.poll(record, job)
         error = str((state.get('source') or {}).get('error') or '')
-        from api import backtest_v8 as bt
+        bt = self.profile.api("backtest")
         return state['status'] in {'error', 'failed'} and 'config.backtest.scenarios' in error and 'unknown key(s)' in error and not bt._result_analysis_paths(job['name'])
 
     def stop(self, record, job):
         """Cancel only this loop's jobs; rental ownership remains with native supervisors."""
-        from api import optimize_v8 as opt, backtest_v8 as bt
+        opt, bt = self.profile.api(), self.profile.api("backtest")
         if not job.get('backend'):
             return
         self.poll(record, job)

@@ -30,7 +30,7 @@ class WorkerProfile:
 
 
 PB9 = WorkerProfile('pb9',pb9_release_commit(),
-                    'ghcr.io/msei99/pbgui-pb9-worker@sha256:2570575aa0cc7c9745b5e86382a2dfdf162279bb42850a981e57eaffb342f258','v9.0.0',
+                    'ghcr.io/msei99/pbgui-pb9-worker@sha256:e3459cbbf12b23bfc66854f5f1a03640cf301a2b25272a296bbc39cb0efc54ec','v9.0.0',
                     'https://github.com/enarjord/passivbot')
 
 

@@ -1,4 +1,4 @@
-/* Autonomous PB8 loops; mounted only by the PB8 optimizer adapter. */
+/* Shared autonomous PB8/PB9 optimizer loops with version-bound endpoints. */
 (function () {
   'use strict';
   var root, timer, generation = 0, optionsGeneration = 0, rows = [], selected = '', options = {}, hoursEdited = false;
@@ -83,10 +83,10 @@
     var work=recoveryActions.get(id);if(work&&!work.pending){work.preview=null;work.message='AI limits changed. Prepare a new preview.';work.error=false;updateRecoveryFeedback(id);}
     recoveryDrafts.set(id,safe);workflow.recovery_drafts=Object.fromEntries(Array.from(recoveryDrafts.entries()).slice(-20));persistWorkflow();
   }
-  function savedWorkflow() { try { return JSON.parse(localStorage.getItem('pbgui.pb8.loops.workflow') || '{}') || {}; } catch (_) { return {}; } }
+  function savedWorkflow() { try { return JSON.parse(localStorage.getItem('pbgui.pb' + (/\/optimize-v9(?:\/|$)/.test(location.pathname) ? '9' : '8') + '.loops.workflow') || '{}') || {}; } catch (_) { return {}; } }
   function persistWorkflow() {
     workflow.selected = selected; workflow.config_selection = Array.from(selectedDefinitions); workflow.run_selection = Array.from(selectedRuns); workflow.expanded = Array.from(expanded);
-    try { localStorage.setItem('pbgui.pb8.loops.workflow', JSON.stringify(workflow)); } catch (_) {}
+    try { localStorage.setItem('pbgui.pb' + (/\/optimize-v9(?:\/|$)/.test(location.pathname) ? '9' : '8') + '.loops.workflow', JSON.stringify(workflow)); } catch (_) {}
   }
   function isLoopPanel() { return window.state && ['loops-config','loops-queue','loops-results','loops-knowledge','loops-instructions'].includes(state.panel); }
   function saveDraft() {
@@ -96,11 +96,11 @@
   }
 
   function savedNavigation() {
-    try { var value = JSON.parse(localStorage.getItem('pbgui.pb8.loops.setup') || '{}'); return value && typeof value === 'object' ? value : {}; }
+    try { var value = JSON.parse(localStorage.getItem('pbgui.pb' + (/\/optimize-v9(?:\/|$)/.test(location.pathname) ? '9' : '8') + '.loops.setup') || '{}'); return value && typeof value === 'object' ? value : {}; }
     catch (_) { return {}; }
   }
   function saveNavigation() {
-    try { localStorage.setItem('pbgui.pb8.loops.setup', JSON.stringify({config_name: byId('config').value, execution: byId('execution').value})); }
+    try { localStorage.setItem('pbgui.pb' + (/\/optimize-v9(?:\/|$)/.test(location.pathname) ? '9' : '8') + '.loops.setup', JSON.stringify({config_name: byId('config').value, execution: byId('execution').value})); }
     catch (_) {}
   }
   function executionAvailable() {
@@ -449,7 +449,7 @@
     reportDialog.setAttribute('role','dialog');reportDialog.setAttribute('aria-modal','true');
     reportDialog.setAttribute('aria-labelledby','loop-report-title');
     var header=element('div',undefined,'pbg-modal-head'); reportTitle=element('h3');reportTitle.id='loop-report-title';header.appendChild(reportTitle);
-    var debug=button(header,'Debug export',function(){var target=new URL(String(API_BASE).replace(/\/$/,'').replace(/\/api\/optimize-v8$/,'')+'/api/debug/main_page',location.origin);if(/^[a-f0-9]{32}$/.test(selected))target.searchParams.set('loop_id',selected);location.href=target.href;});debug.id='loop-debug-export';
+    var debug=button(header,'Debug export',function(){var target=new URL(String(API_BASE).replace(/\/$/,'').replace(/\/api\/optimize-v[89]$/,'')+'/api/debug/main_page',location.origin);if(/^[a-f0-9]{32}$/.test(selected))target.searchParams.set('loop_id',selected);location.href=target.href;});debug.id='loop-debug-export';
     var reportProblem=button(header,'Report this problem',function(){var row=rows.find(function(item){return item.id===selected;});if(row&&window.PBGuiSupport)window.PBGuiSupport.reportError({area:'v8_optimize_ai_loop',loop_id:row.id,message:row.reason||'AI Loop failed',detail:((row.failure||{}).detail)||''},reportProblem);});reportProblem.id='loop-report-problem';reportProblem.hidden=true;
     var close=button(header,'×',function(){closeReport();});close.id='loop-report-close';close.className='pbg-modal-close';close.setAttribute('aria-label','Close');close.title='Close';reportDialog.appendChild(header);
     reportTabs=element('div',undefined,'pbg-modal-tabs');reportTabs.setAttribute('role','tablist');
@@ -457,7 +457,7 @@
     reportTabs.addEventListener('keydown',function(event){var tabs=Object.keys(tabNames).filter(function(tab){return !document.getElementById('loop-report-tab-'+tab).hidden;}),index=tabs.indexOf(reportTab);if(event.key==='ArrowRight')index=(index+1)%tabs.length;else if(event.key==='ArrowLeft')index=(index+tabs.length-1)%tabs.length;else if(event.key==='Home')index=0;else if(event.key==='End')index=tabs.length-1;else return;event.preventDefault();document.getElementById('loop-report-tab-'+tabs[index]).click();document.getElementById('loop-report-tab-'+tabs[index]).focus();});
     reportDialog.appendChild(reportTabs);reportBody=element('div',undefined,'pbg-modal-body');reportBody.id='loop-report-body';reportBody.setAttribute('role','tabpanel');reportDialog.appendChild(reportBody);
     reportOverlay.appendChild(reportDialog);document.body.appendChild(reportOverlay);
-    reportWindow=window.PBGuiFloatingWindow.attach(reportDialog,header,{storage_key:'pbgui.pb8.loops.report_window'});
+    reportWindow=window.PBGuiFloatingWindow.attach(reportDialog,header,{storage_key:'pbgui.pb' + (/\/optimize-v9(?:\/|$)/.test(location.pathname) ? '9' : '8') + '.loops.report_window'});
     reportOverlay.addEventListener('keydown',function(event){
       if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeReport();return;}
       if(event.key!=='Tab')return;
@@ -640,8 +640,8 @@
       deepSearch.disabled=true;
       try{
         var bundle=await request('/'+run.id+'/deep-search-config',{operation:Array.from(chosen)[0]});
-        var root=String(API_BASE).replace(/\/$/,'').replace(/\/api\/optimize-v8$/,'');
-        var response=await fetch(root+'/api/backtest-v8/optimize-draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:bundle.config,override_configs:bundle.override_configs})});
+        var root=String(API_BASE).replace(/\/$/,'').replace(/\/api\/optimize-v[89]$/,'');
+        var response=await fetch(root+'/api/backtest-'+/\/optimize-(v[89])(?:\/|$)/.exec(API_BASE)[1]+'/optimize-draft',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:bundle.config,override_configs:bundle.override_configs})});
         if(!response.ok)throw new Error('Could not prepare deep search ('+response.status+')');
         var draft=await response.json(),url=new URL(location.href);url.search='';url.hash='';
         url.searchParams.set('opt_draft_id',draft.draft_id);url.searchParams.set('draft_name',bundle.name);
@@ -791,7 +791,7 @@
         if(!latest) reportBody.appendChild(element('p','No confirmed exact-backtest comparison yet.'));
         else reportTable(reportBody,['Goal / metric'].concat(measured.map(function(cycle){return 'Loop '+(cycle.round+1);})), latest.goals.map(function(goal){return [goal.goal+' · '+goal.metrics.join(', ')].concat(measured.map(function(cycle){var item=(cycle.goals||[]).find(function(value){return value.goal===goal.goal&&value.metrics.join(',')===goal.metrics.join(',');});return item?metricValue(item.value,item)+(item.delta==null?'':item.improved?' ↑':item.delta!==0?' ↓':' ='):'—';}));}));
       }
-      else {if(row.best)button(reportBody,'Download best comparison config',async function(){try{var payload=await request('/'+row.id+'/best-config'),url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,4)],{type:'application/json'})),link=element('a');link.href=url;link.download='pb8-loop-'+row.id+'.json';link.click();setTimeout(function(){URL.revokeObjectURL(url);},1000);}catch(exc){error(exc);}});reportTable(reportBody,['Field','Value'],[['Status',row.status],['Execution',({cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai'}[row.settings.execution]||row.settings.execution)],['AI calls',row.ai_calls],['Token reserve',row.ai_tokens_reserved],['JEV',row.jev_status||'Not recorded'],['JEV reserved cost','$'+Number(row.jev_usd_reserved||0).toFixed(4)],['Deadline',dateText(row.deadline)],['Final holdout',row.holdout_used?'Used':row.holdout_available?'Available':'Unavailable'],['PB8 revision',(row.fingerprint||{}).pb8||'Unknown'],['Data status',(row.fingerprint||{}).data_status||'Unknown'],['AI USD reserve',row.usd_status==='subscription'?'Subscription / unavailable':row.usd_status==='provider_billed'?'DeepSeek API / unavailable':'$'+Number(row.ai_usd_reserved||0).toFixed(4)]]);}
+      else {if(row.best)button(reportBody,'Download best comparison config',async function(){try{var payload=await request('/'+row.id+'/best-config'),url=URL.createObjectURL(new Blob([JSON.stringify(payload,null,4)],{type:'application/json'})),link=element('a');link.href=url;link.download='pb'+optimizeEditorAdapter.version.slice(1)+'-loop-'+row.id+'.json';link.click();setTimeout(function(){URL.revokeObjectURL(url);},1000);}catch(exc){error(exc);}});reportTable(reportBody,['Field','Value'],[['Status',row.status],['Execution',({cpu:'Local CPU',gpu:'Local GPU',vast:'Vast.ai'}[row.settings.execution]||row.settings.execution)],['AI calls',row.ai_calls],['Token reserve',row.ai_tokens_reserved],['JEV',row.jev_status||'Not recorded'],['JEV reserved cost','$'+Number(row.jev_usd_reserved||0).toFixed(4)],['Deadline',dateText(row.deadline)],['Final holdout',row.holdout_used?'Used':row.holdout_available?'Available':'Unavailable'],['Passivbot revision',(row.fingerprint||{}).pb8||'Unknown'],['Data status',(row.fingerprint||{}).data_status||'Unknown'],['AI USD reserve',row.usd_status==='subscription'?'Subscription / unavailable':row.usd_status==='provider_billed'?'DeepSeek API / unavailable':'$'+Number(row.ai_usd_reserved||0).toFixed(4)]]);}
     }
     if(reportView==='run'&&reportTab==='overview')renderAIRecovery(reportBody,row);
     document.getElementById('loop-report-problem').hidden=row.status!=='failed';
@@ -818,7 +818,7 @@
     try{sessionStorage.removeItem('pbgui.loopEvaluationComparison');}catch(_){}
     select(run.id);
     var origin=new URL(location.href),url=new URL(origin);
-    url.pathname=url.pathname.replace(/\/optimize-v8\/main_page$/, '/backtest-v8/main_page');url.search='';url.hash='';
+    url.pathname=url.pathname.replace(/\/optimize-(v[89])\/main_page$/, '/backtest-$1/main_page');url.search='';url.hash='';
     url.searchParams.set('panel','results');url.searchParams.set('result_loop',run.id);url.searchParams.set('result_evaluation',kind);
     if(kind==='selected'){
       try{
@@ -852,7 +852,7 @@
         navigationTiming('target',started);
         if(!current())return;
         var origin=new URL(location.href),url=new URL(origin);
-        url.pathname=url.pathname.replace(/\/optimize-v8\/main_page$/, '/backtest-v8/main_page');url.search='';url.hash='';
+        url.pathname=url.pathname.replace(/\/optimize-(v[89])\/main_page$/, '/backtest-$1/main_page');url.search='';url.hash='';
         url.searchParams.set('panel','results');url.searchParams.set('result_filter',target.name);url.searchParams.set('result_compare','1');
         var back=new URL(origin);back.search='';
         ['loop_id','loop_view','loop_cycle','loop_tab','loop_variant','loop_compare','loop_log_run','loop_log'].forEach(function(key){if(origin.searchParams.has(key))back.searchParams.set(key,origin.searchParams.get(key));});
@@ -1165,7 +1165,7 @@
         if(run)button(source,'Open run',function(){select(run.id);selectPanel(run.ended?'loops-results':'loops-queue');openReport('run',0,'overview');});
         evidence.appendChild(source);
         if(item.hypothesis)evidence.appendChild(element('p',item.hypothesis,'loop-analysis'));
-        reportTable(evidence,['Field','Value'],[['Evidence ID',key],['Coins',(item.coins||[]).join(', ')||'Inherited from config'],['PB8 revision',(item.fingerprint||{}).pb8||'Not recorded'],['Comparison period',[(item.comparison||{}).start_date,(item.comparison||{}).end_date].filter(Boolean).join(' → ')||'Not recorded'],['Uncertainty',item.uncertainty||'Not recorded'],['Superseded by',item.superseded_by||'—']]);
+        reportTable(evidence,['Field','Value'],[['Evidence ID',key],['Coins',(item.coins||[]).join(', ')||'Inherited from config'],['Passivbot revision',(item.fingerprint||{}).pb8||'Not recorded'],['Comparison period',[(item.comparison||{}).start_date,(item.comparison||{}).end_date].filter(Boolean).join(' → ')||'Not recorded'],['Uncertainty',item.uncertainty||'Not recorded'],['Superseded by',item.superseded_by||'—']]);
         var observations=item.observations||[];
         if(observations.length)reportTable(evidence,['Backtest','Score','Numeric targets'],observations.map(function(obs){var assessment=obs.assessment||{};return [obs.operation||'Not recorded',numeric(assessment.score),assessment.hard_targets_met===true?'Met':assessment.hard_targets_met===false?'Violated':'Not recorded'];}));
         var raw=element('details',undefined,'loop-advanced');raw.appendChild(element('summary','Raw evidence'));raw.appendChild(element('pre',JSON.stringify(item,null,2)));evidence.appendChild(raw);node.appendChild(evidence);
@@ -1520,13 +1520,13 @@
     if (!stopped && token === watchGeneration) timer = setTimeout(watch, 3000);
   }
   function mount() {
-    if (!window.optimizeEditorAdapter || !optimizeEditorAdapter.isV8 || optimizeEditorAdapter.isV9 || root) return;
+    if (!window.optimizeEditorAdapter || !optimizeEditorAdapter.isV8 || root) return;
     base = String(API_BASE).replace(/\/$/, '') + '/loops';
     PBGuiLoopInstructions.mount(base);
     var template = element('button', 'AI Loop Template', 'sb-btn accent'); template.id = 'btn-ai-loop-template'; template.type = 'button';
     template.addEventListener('click', function () { window.PBGuiAILoopTemplates.open(template); });
     document.getElementById('sidebar-inner').insertBefore(template, document.getElementById('ctx-configs'));
-    try { if (sessionStorage.getItem('pbgui.ai.loop-template.open') === '1') window.PBGuiAILoopTemplates.open(template); } catch (_) {}
+    try { if (sessionStorage.getItem(optimizeEditorAdapter.isV9 ? 'pbgui.ai.v9.loop-template.open' : 'pbgui.ai.loop-template.open') === '1') window.PBGuiAILoopTemplates.open(template); } catch (_) {}
     ['config','queue','results'].forEach(function(kind){var panel='loops-'+kind;PANEL_META[panel]={title:'AI Loops '+({config:'Config',queue:'Queue',results:'Results'}[kind]),subtitle:''};var view=element('div',undefined,'view-panel loop-panel');view.id='panel-'+panel;document.getElementById('panel-configs').parentNode.appendChild(view);if(kind==='config')root=view;
       var nav=element('button','AI Loops '+({config:'Config',queue:'Queue',results:'Results'}[kind]),'sb-section');nav.dataset.panel=panel;nav.addEventListener('click',function(){selectPanel(panel);watch();});var count=element('span','0','sb-count');count.id='loop-nav-count-'+kind;count.style.marginLeft='auto';nav.appendChild(count);document.getElementById('sidebar-inner').insertBefore(nav,document.querySelector('#sidebar-inner .sb-sep'));
       var context=element('div',undefined,'ctx-actions');context.id='ctx-'+panel;context.hidden=true;document.getElementById('sidebar-inner').appendChild(context);
@@ -1577,7 +1577,7 @@
     setup.appendChild(element('p', 'New loop setup', 'muted-line')).id = 'loop-setup-source';
     var row=grid(setup);field(row,'name','Name','text','',{required:'',maxlength:120},8);
     row = grid(setup);
-    field(row, 'config', 'PB8 configuration', 'select', undefined, undefined, 4);
+    field(row, 'config', 'PB' + optimizeEditorAdapter.version.slice(1) + ' configuration', 'select', undefined, undefined, 4);
     field(row, 'execution', 'Execution', 'select', undefined, undefined, 4);
     setup.appendChild(element('p', '', 'muted-line loop-resources')).id = 'loop-resources';
 
@@ -1611,9 +1611,9 @@
 
     var limits = section(form, 'Run limits'); row = grid(limits);
     var runMode = field(row, 'run-mode', 'Limit per optimizer run', 'select', undefined, undefined, 4);
-    choices(runMode, [{id:'config', label:'Use config'}, {id:'iters', label:'Iterations (iters)'}, {id:'proxy', label:'GPU proxy evaluations'}, {id:'hours', label:'Hours'}]);
+    choices(runMode, [{id:'config', label:'Use config'}, {id:'iters', label:'Iterations (iters)'}, {id:'proxy', label:optimizeEditorAdapter.isV9 ? 'GPU evaluations' : 'GPU proxy evaluations'}, {id:'hours', label:'Hours'}]);
     field(row, 'run-iters', 'Iterations per run', 'number', 100000, {min:1, max:10000000, step:1}, 4);
-    field(row, 'run-proxy', 'Proxy evaluations per run', 'number', 100000, {min:1, max:1000000000, step:1}, 4);
+    field(row, 'run-proxy', optimizeEditorAdapter.isV9 ? 'GPU evaluations per run' : 'Proxy evaluations per run', 'number', 100000, {min:1, max:1000000000, step:1}, 4);
     field(row, 'run-hours', 'Hours per run', 'number', 1, {min:.001, max:168, step:'any'}, 4);
     row = grid(limits);
     field(row, 'rounds', 'Maximum completed rounds', 'number', '', {min:1, max:200, step:1, required:true});

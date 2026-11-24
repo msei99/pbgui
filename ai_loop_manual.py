@@ -13,11 +13,13 @@ MAX_MANUAL_BYTES = 4 * 1024 * 1024
 MAX_DOCUMENTS = 64
 
 
-def installed_manual():
+def installed_manual(runtime='v8'):
     """Read only current top-level Markdown manuals from the configured checkout."""
     from pbgui_purefunc import pb8dir
     from pb8_loop_evidence import LoopAIPause, sha
-    raw_root = pb8dir()
+    from loop_runtime import LoopRuntime
+    profile = LoopRuntime(runtime)
+    raw_root = profile.api().native.options()[0] if profile.native else pb8dir()
     if not raw_root:
         raise LoopAIPause('manual_unavailable', 'Configure the installed PB8 documentation before starting this Loop')
     root = Path(raw_root).expanduser().absolute()
@@ -48,7 +50,7 @@ def installed_manual():
         _log(SERVICE, 'Installed PB8 manual could not be read safely', level='ERROR',
              meta={'error_type': type(exc).__name__})
         raise LoopAIPause('manual_unavailable', 'The installed PB8 manual could not be read safely') from exc
-    required = {'docs/optimizing.md', 'docs/metrics.md', 'docs/config.bot.md'}
+    required = ({'docs/optimizing.md', 'docs/metrics.md', 'docs/configuration.md'} if profile.native else {'docs/optimizing.md', 'docs/metrics.md', 'docs/config.bot.md'})
     if not required <= {doc['path'] for doc in documents}:
         raise LoopAIPause('manual_unavailable', 'Installed PB8 optimizing, metrics and bot manuals are required')
     identity = [{'path': doc['path'], 'sha256': doc['sha256']} for doc in documents]
@@ -56,7 +58,7 @@ def installed_manual():
     for number, doc in enumerate(documents):
         index.append({**identity[number], 'evidence_path': '/data/passivbot_manual/documents/' + str(number) + '/text',
                       'headings': [line[:180] for line in doc['text'].splitlines() if line.startswith('#')][:100]})
-    return {'source': 'installed_pb8_checkout', 'digest': sha(identity), 'index': index,
+    return {'source': 'installed_pb9_checkout' if profile.native else 'installed_pb8_checkout', 'digest': sha(identity), 'index': index,
             'documents': documents, 'omitted': omitted}
 
 

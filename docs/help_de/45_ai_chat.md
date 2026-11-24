@@ -1,5 +1,14 @@
 # AI Setup und Chat
 
+PB9 Optimize unterstützt native Config-, Ergebnis-, Pareto-, Quellcode- und
+Metrik-Abfragen sowie geprüfte Optimizer-Vorschläge. Unter **PBv9 → Optimize**
+stehen die gemeinsamen Ansichten **AI Loop Template**, **AI Loops Config**,
+**AI Loops Queue** und **AI Loops Results** bereit. PB9 verwendet eigene
+Definitionen und Verläufe, den installierten Metrik-Katalog und native
+Global-/Portfolio-/Long-/Short-Policies. Die Freigabe eines Optimizer-Vorschlags
+speichert ihn. Ein Loop benötigt eine eigene ausdrückliche Lauf- und
+Budgetfreigabe. Prüfgrenzen: [PB9 Optimize](55_pbv9_optimize.md).
+
 Mit **Include page context** werden bis zu acht markierte PB7/PB8-Backtestergebnisse einschließlich AI-Loop-Vergleichen als eindeutige Ergebnisreferenzen übergeben. Die Auswahl wird bei jeder Nachricht neu erfasst. So kann der Assistent „das markierte Ergebnis“ auch bei gleichen Namen zuordnen. Die Referenzen enthalten keine Hostpfade; bestehende Leseprüfungen und Änderungsfreigaben gelten weiterhin.
 
 Für ein markiertes **PB8**-Ergebnis kannst du einen erneuten Backtest mit Zeitraum und Börsen oder über den vollständig lokal verfügbaren Zeitraum anfordern. Der Assistent kann den Kerzenbestand lesen und eine gemeinsame Freigabe mit einem separaten Job pro Börse vorbereiten. Ausgeführte Strategie, Risikoeinstellungen, Coins und Coin-Override-Dateien bleiben erhalten. Die Vorschau zeigt Quelle, Zeitraum, Börsen, Jobanzahl und einen möglichen Autostart nach Freigabe. Die Freigabe legt private Snapshots in der normalen Backtest-Queue an; Quellergebnis, Quellconfig und AI Loop bleiben unverändert. Vorhandene Suite-Fenster werden aus diesen unabhängigen Backtests über einen durchgehenden Zeitraum entfernt. Eine wiederholte Freigabe erzeugt keine doppelten Jobs. Ein Optimizer- oder Pareto-Kandidat muss dafür nicht gesucht werden.
@@ -496,3 +505,9 @@ Die Kerzenanalyse erhält ausgewählte lokale Daten als JSON über stdin. Dafür
 `propose_ohlcv_python_analysis` erwartet Basis-Coins, `start_time`, das exklusive `end_time` und `code`; reine Datumsangaben bedeuten UTC-Mitternacht. stdin enthält `columns`, `series[].candles` und die Abdeckung je Markt in `coverage`. Fehlende Minuten bleiben ausgewiesen und werden nicht interpoliert. EMA-Vorlauf ausdrücklich einschliessen. Über 250.000 Coin-Minuten oder 32 MiB wird nach Coin/Zeitraum mit überlappendem Vorlauf aufgeteilt; Daten werden nie stillschweigend gekürzt. Die Vorschau zeigt Märkte, Zeitraum, Abdeckung und Daten-Digest, statt alle Kerzen an die AI zu senden. Die bestehende Workspace-Dateianalyse bleibt ein separater Bubblewrap-abhängiger Weg.
 
 Browser-Aktionsbestätigungen tolerieren ungültige Unicode-Reste aus gekürzten Seitenbeschriftungen; Kontextschema, Redaktion und Größenlimits bleiben bestehen. Erfolgreiche Klicks werden bei einem Fehler ihrer Bestätigung nicht erneut ausgeführt; der Drawer wiederholt nur die Bestätigung mit Wartezeit. Eine neue angenommene Nutzeranfrage verwirft alte unbestätigte Seitenaktionen, damit sie nicht auf einem späteren Seitenzustand erneut ausgeführt werden. Andere typisierte Auswahlübergaben bleiben verfügbar.
+
+In PB9 Optimize bleiben Config-Vorschläge und normale Vast-Läufe auf PB9. Die Cloud-Freigabe zeigt die Generation; die Ausführungsbestätigung liefert die tatsächliche Cloud-Job-ID für Status und Log. Fehlender Kontext wählt niemals stillschweigend PB8 aus. Rein lesende Vergleiche mit älteren Generationen bleiben möglich.
+
+Native PB9-Metadaten sind als kompakte Template-/Metrikübersicht verfügbar; Details lassen sich nach Abschnitt und Wörterbuchpfad seitenweise lesen. Gemeinsame Fenstervorschau und scenario_template-Eingabe erhalten Training-/Holdout-Pläne. Ein vertrauenswürdiger Speichervorschlag verhindert die anschließende separate Cloud-Freigabe nicht. Reine Recherche-Chats behalten ihre ursprünglichen Sperren.
+
+Normale PB9-Optimizer-Vorschläge ohne Recherchebeschränkung setzen den angefragten Ablauf nach dem freigegebenen Speichern automatisch fort. Derselbe Chat erhält den Namen der gespeicherten PB9-Config; ein gewünschter Vast-Start wird zur separaten Freigabe vorbereitet. Die Config-Freigabe erlaubt keinen Jobstart und keine Miete. Die unten beschriebenen Rechercheänderungen erhalten weiterhin nur eine Abschlussbestätigung und schalten keine Aktionsrechte frei.

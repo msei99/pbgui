@@ -12,7 +12,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.mark.parametrize('width,prefix', [(1400, ''), (700, '/mounted')])
-def test_loop_template_sidebar_window_and_send(width, prefix):
+@pytest.mark.parametrize('runtime', ['v8', 'v9'])
+def test_loop_template_sidebar_window_and_send(width, prefix, runtime):
     """Use real menus, resize/drag/focus behavior and exactly one explicit chat send."""
     __tracebackhide__ = True
     errors, mutations, turns, conversations = [], [], [], []
@@ -23,10 +24,10 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
     choices = {'configs': [{'name': 'Saved HYPE', 'start_date': '2025-01-01', 'end_date': '2025-12-31'}],
                'markets': {'binance': ['BTC', 'ETH'], 'hyperliquid': ['BTC', 'HYPE', 'xyz:TSLA']} }
     source = (ROOT / 'frontend/v7_optimize.html').read_text()
-    values = {'API_BASE': prefix + '/api/optimize-v8', 'OPTIMIZE_VERSION': 'v8',
+    values = {'API_BASE': prefix + '/api/optimize-v8'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'), 'OPTIMIZE_VERSION': 'v8'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'),
               'VERSION': 'test', 'SERIAL': '1', 'NAV_HASH': 'test', 'BASE_PREFIX': prefix,
-              'LIMITS_META': '{}', 'BACKTEST_VERSION': 'v8', 'OPTIMIZE_NAV_TITLE': 'PB8 Optimize',
-              'OPTIMIZE_NAV_CURRENT': 'v8_optimize'}
+              'LIMITS_META': '{}', 'BACKTEST_VERSION': 'v8'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'), 'OPTIMIZE_NAV_TITLE': 'PB8 Optimize'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'),
+              'OPTIMIZE_NAV_CURRENT': 'v8_optimize'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop')}
     for key, value in values.items():
         source = source.replace('%%' + key + '%%', value)
     source = source.replace('src="/app/', 'src="' + prefix + '/app/').replace('href="/app/', 'href="' + prefix + '/app/')
@@ -46,7 +47,7 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
                 route.fulfill(content_type='text/html; charset=utf-8', body=f'''<nav id="topnav"></nav>
                 <script>window.PBGUI_BASE_PREFIX={prefix!r};window.PBGUI_NAV_CONFIG={{current:'welcome',authenticated:true}};</script>
                 <script src="{prefix}/app/pbgui_nav.js?v=test"></script>''')
-            elif path == '/api/optimize-v8/main_page':
+            elif path == '/api/optimize-v8/main_page'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 route.fulfill(content_type='text/html; charset=utf-8', body=source)
             elif path.startswith('/app/'):
                 asset = ROOT / 'frontend' / path.removeprefix('/app/')
@@ -55,18 +56,18 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
             elif path == '/api/ai/loop-template-options':
                 assert raw.startswith(prefix + '/api/')
                 route.fulfill(json=choices)
-            elif path == '/api/optimize-v8/configs/new-config':
+            elif path == '/api/optimize-v8/configs/new-config'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 route.fulfill(json={'config':{'live':{},'backtest':{},'optimize':{}}})
-            elif path.startswith('/api/optimize-v8/configs/'):
+            elif path.startswith('/api/optimize-v8/configs/'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop')):
                 route.fulfill(json={'config':{'backtest':{'start_date':'2025-01-01','end_date':'2025-12-31','suite_enabled':True,
                     'scenarios':[{'label':'train_1','start_date':'2025-01-01','end_date':'2025-04-30'},
                                  {'label':'train_2','start_date':'2025-05-01','end_date':'2025-08-31'}]},
                     'pbgui':{'scenario_template':{'holdout_scenarios':[{'label':'holdout_1','start_date':'2025-09-01','end_date':'2025-12-31'}]}}}})
-            elif path == '/api/optimize-v8/ohlcv-start-dates':
+            elif path == '/api/optimize-v8/ohlcv-start-dates'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 assert raw == prefix + path
                 date_requests.append(route.request.post_data_json)
                 route.fulfill(json={'job_id':format(len(date_requests),'012x'),'status':'queued'})
-            elif path.startswith('/api/optimize-v8/ohlcv-start-dates/'):
+            elif path.startswith('/api/optimize-v8/ohlcv-start-dates/'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop')):
                 if route.request.method=='DELETE':
                     route.fulfill(json={'status':'stopping'})
                 elif delayed_dates['enabled']:
@@ -104,35 +105,35 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
                 identifier = path.split('/')[4]
                 route.fulfill(json={'conversation_id': identifier, 'provider': 'opencode-go', 'model': 'test',
                                     'messages': [{'role': 'user', 'content': t['message']} for t in turns], 'busy': False})
-            elif path == '/api/optimize-v8/loops/options':
+            elif path == '/api/optimize-v8/loops/options'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 route.fulfill(json={'configs': [], 'providers': {}, 'presets': [], 'vast': {}})
-            elif path == '/api/optimize-v8/loops':
+            elif path == '/api/optimize-v8/loops'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 route.fulfill(json={'loops': []})
-            elif path == '/api/optimize-v8/loops/configs':
+            elif path == '/api/optimize-v8/loops/configs'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 route.fulfill(json={'configs': []})
-            elif path == '/api/optimize-v8/loops/instructions':
+            elif path == '/api/optimize-v8/loops/instructions'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 route.fulfill(json={'active': 'default', 'revision': 0, 'versions': [{'id': 'default', 'name': 'PBGui default'}]})
             elif path.endswith('/instructions/default'):
                 route.fulfill(json={'id': 'default', 'text': 'Defaults', 'digest': '0'})
-            elif path == '/api/optimize-v8/metadata':
+            elif path == '/api/optimize-v8/metadata'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 route.fulfill(json={'runtime_ready': False, 'runtime_message': 'Fixture', 'optimize_defaults': {},
                                     'bot_defaults': {}, 'backtest_defaults': {}, 'live_defaults': {}, 'optimize_bounds_defaults': {}})
-            elif path == '/api/optimize-v8/configs':
+            elif path == '/api/optimize-v8/configs'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 route.fulfill(json={'configs': []})
-            elif path == '/api/optimize-v8/queue':
+            elif path == '/api/optimize-v8/queue'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 route.fulfill(json={'queue': []})
-            elif path == '/api/optimize-v8/results':
+            elif path == '/api/optimize-v8/results'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'):
                 route.fulfill(json={'results': []})
             elif path == '/api/help/index':
-                route.fulfill(json=[{'file': '43_pbv8_optimize', 'title': 'PB8 Optimize'}])
+                route.fulfill(json=[{'file': '43_pbv8_optimize'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop'), 'title': 'PB8 Optimize'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop')}])
             elif path == '/api/help/content':
-                route.fulfill(json={'content': '# PB8 Optimize\n\nTemplate help.'})
+                route.fulfill(json={'content': '# PB8 Optimize\n\nTemplate help.'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop')})
             else:
                 route.fulfill(json={})
         page.route('**/*', respond)
         page.goto('http://templates.test' + prefix + '/app/start.html')
-        page.locator('.nav-group-btn').filter(has_text='PBv8').click()
-        page.locator('[data-page="v8_optimize"]').click()
+        page.locator('.nav-group-btn').filter(has_text='PBv8'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop')).click()
+        page.locator('[data-page="v8_optimize"]'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop')).click()
         destination = page.url
         page.locator('#pbgui-guide-btn').click()
         expect(page.locator('#pbgui-shared-help-ovl')).to_be_visible()
@@ -325,7 +326,7 @@ def test_loop_template_sidebar_window_and_send(width, prefix):
         for route in delayed_dates['routes']:
             route.fulfill(json={'status':'completed','result':{'start_date_options':{'all_markets':{'available':True,'start_date':'2024-06-01'}}}})
         expect(page.locator('#pai-template-start')).to_have_value('2025-01-01')
-        assert any(path.startswith('/api/optimize-v8/ohlcv-start-dates/') for path in mutations)
+        assert any(path.startswith('/api/optimize-v8/ohlcv-start-dates/'.replace('v8', runtime).replace('PB8', 'PB' + runtime[1:]).replace('propose_ai_loop', 'propose_pb9_ai_loop' if runtime == 'v9' else 'propose_ai_loop').replace('get_ai_loop', 'get_pb9_ai_loop' if runtime == 'v9' else 'get_ai_loop')) for path in mutations)
         page.locator('#pai-template-holdout').uncheck()
         page.locator('#pai-template-timeframes').fill('49')
         expect(page.get_by_role('button',name='Send to AI Chat',exact=True)).to_be_disabled()

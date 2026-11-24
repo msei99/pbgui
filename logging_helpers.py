@@ -42,6 +42,8 @@ LOG_GROUPS: dict[str, str] = {
     "BacktestV9": "PBGui",
     "OptimizeV9": "PBGui",
     "PB8Loop": "PBGui",
+    "PB9Loop": "PBGui",
+    "AILoop": "PBGui",
     'PB7Bridge':       'PBGui',
     'TaskQueue':       'PBGui',
     'ScenarioChart':   'PBGui',

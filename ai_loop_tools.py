@@ -53,9 +53,18 @@ def _log_chunk(path, root, before):
 class AILoopTools:
     """Reuse native validation and persistence without browser-context dependencies."""
 
-    def __init__(self, capabilities):
+    def __init__(self, capabilities, runtime='v8'):
         """Bind the existing durable proposal and approval service."""
         self.caps = capabilities
+        from loop_runtime import LoopRuntime
+        self.profile = LoopRuntime(runtime)
+
+    async def _proposal(self, owner, conversation_id, action, name, payload, preview):
+        """Bind loop approvals to their generation before computing the durable digest."""
+        if action in {LOOP_ACTION, RUN_ACTION, GPU_ACTION}:
+            payload['loop_runtime'] = self.profile.version
+            preview['version'] = self.profile.version
+        return await self.caps._create_custom_proposal(owner, conversation_id, action, name, payload, preview)
 
     def checked(self, operation, *args):
         """Return actionable validation failures without exposing source paths."""
@@ -67,11 +76,10 @@ class AILoopTools:
             human_log(SERVICE, f'AI Loop/Vast settings rejected: {type(exc).__name__}', level='WARNING')
             raise AICapabilityError(self.caps._path_free_error(str(exc))) from exc
 
-    @staticmethod
-    def _runtime():
+    def _runtime(self):
         """Resolve lazy imports after API startup, not during chat module import."""
-        from api import loop_optimizer_v8
-        return loop_optimizer_v8
+        from api import loop_optimizer_v8, loop_optimizer_v9
+        return loop_optimizer_v9 if self.profile.native else loop_optimizer_v8
 
     @staticmethod
     def _rental():
@@ -136,7 +144,7 @@ class AILoopTools:
         schema['properties'] = {k: v for k, v in schema['properties'].items() if k not in excluded}
         schema['required'] = [key for key in schema.get('required', []) if key not in excluded]
         from pb8_loop_store import cloud_loop_metric_contract
-        metric_policies = {'vast': cloud_loop_metric_contract()}
+        metric_policies = {'vast': cloud_loop_metric_contract(self.profile.version)}
         if args.get('name'):
             row = runtime._controller.store.definition(owner, self.caps._name(args['name']))
             return {'name': row['name'], 'revision': row['revision'], 'settings': row['settings'],
@@ -150,7 +158,7 @@ class AILoopTools:
                 'semantics': {'max_runs': 'Maximum optimizer attempts, not a guarantee of completed rounds',
                               'max_rounds': 'Required explicit hard upper bound on completed rounds; set from the user request, never infer a default. No next round starts at this bound.',
                               'parallel': 'Optimizer variants; independent of Vast.ai max_rentals',
-                              'source': 'A saved PB8 optimizer config supplies strategy, exchanges, training scenarios and holdout',
+                              'source': 'A saved ' + self.profile.label + ' optimizer config supplies strategy, exchanges, training scenarios and holdout',
                               'save': 'Saves a definition only; does not queue or start a run'}}
 
     async def read_runs(self, owner, conversation_id, args):
@@ -199,7 +207,7 @@ class AILoopTools:
         preview = {'action': HOST_ACTION, 'name': 'Machine ' + str(payload['machine_id']),
                    **payload, 'effect': ('Block' if payload['blocked'] else 'Unblock')
                    + ' this machine for future rentals. Existing rentals and optimizer processes continue.'}
-        return await self.caps._create_custom_proposal(owner, conversation_id, HOST_ACTION, preview['name'], payload, preview)
+        return await self._proposal(owner, conversation_id, HOST_ACTION, preview['name'], payload, preview)
 
     @staticmethod
     def _run_summary(row, detailed=False):
@@ -239,7 +247,7 @@ class AILoopTools:
     def _read_log(self, owner, args):
         """Validate both Loop and native ownership before opening a fixed log path."""
         from ai_chat import AIChatService
-        from api import optimize_v8 as opt, backtest_v8 as bt
+        opt, bt = self.profile.api(), self.profile.api("backtest")
         loop_id = self.caps._opaque_id(args.get('loop_id'), 'loop')
         operation = self.caps._opaque_id(args.get('operation'), 'operation')
         row = self._runtime()._controller.store.read(owner, loop_id)
@@ -294,7 +302,7 @@ class AILoopTools:
             selection = {key: conversation[key] for key in ('provider', 'model', 'effort', 'service_tier')}
             selection['profile'] = conversation['chatgpt_profile']
         payload, preview = await self.caps._to_thread_uncancellable(self.checked, self._prepare_run, owner, args, selection, request)
-        return await self.caps._create_custom_proposal(owner, conversation_id, RUN_ACTION,
+        return await self._proposal(owner, conversation_id, RUN_ACTION,
                                                       payload['name'], payload, preview)
 
     async def propose_gpu_replacement(self, owner, conversation_id, args):
@@ -321,7 +329,7 @@ class AILoopTools:
             + '; original deadline (UTC epoch): ' + str(preview['deadline'])
             + '; used/reserved attempts: ' + str(preview['attempts_used']) + '/' + str(preview['max_runs'])
             + '; excluded machines in this Loop chain only: ' + ', '.join(map(str, preview['excluded_machine_ids'])))
-        return await self.caps._create_custom_proposal(owner, conversation_id, GPU_ACTION, preview['name'], payload, preview)
+        return await self._proposal(owner, conversation_id, GPU_ACTION, preview['name'], payload, preview)
 
     async def execute_gpu_replacement(self, proposal):
         """The proposal's persistent identity makes execution/approval replay idempotent."""
@@ -329,6 +337,7 @@ class AILoopTools:
         from ai_capabilities import AICapabilityError
         runtime = self._runtime()
         data = dict(proposal.config)
+        data.pop('loop_runtime', None)
         loop_id = data.pop('loop_id')
         try:
             await runtime._replace_loop_gpu_owned(proposal.owner, loop_id, runtime.LoopGPUReplacement(**data))
@@ -550,7 +559,7 @@ class AILoopTools:
             return copy.deepcopy(previous['bundle']), previous['source'], previous['settings']
         if store.definition_path(owner, name).exists():
             raise ValueError('Loop definition already exists; read its revision before editing')
-        from api import optimize_v8
+        optimize_v8 = self.profile.api()
         with optimize_v8._config_lock():
             bundle = optimize_v8.get_config(config_name, session=object())
         return {'config': bundle['config'], 'override_configs': bundle.get('override_configs') or {}}, {'kind': 'config', 'id': config_name}, {}
@@ -559,7 +568,7 @@ class AILoopTools:
         """Prepare an immutable, migrated definition for explicit user review."""
         request = await self._request(owner, conversation_id)
         payload, preview = await self.caps._to_thread_uncancellable(self.checked, self._prepare_loop, owner, args, request)
-        return await self.caps._create_custom_proposal(owner, conversation_id, LOOP_ACTION,
+        return await self._proposal(owner, conversation_id, LOOP_ACTION,
                                                       payload['name'], payload, preview)
 
     async def _request(self, owner, conversation_id):
@@ -659,7 +668,7 @@ class AILoopTools:
     async def propose_vast(self, owner, conversation_id, args):
         """Bind a sparse preferences patch to the exact settings already reviewed."""
         payload, preview = await self.caps._to_thread_uncancellable(self.checked, self._prepare_vast, args)
-        return await self.caps._create_custom_proposal(owner, conversation_id, VAST_ACTION,
+        return await self._proposal(owner, conversation_id, VAST_ACTION,
                                                       'Vast.ai rental preferences', payload, preview)
 
     def _prepare_vast(self, args):

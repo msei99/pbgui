@@ -205,7 +205,8 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
             from pb8_loop_store import LoopStore
             from pb8_loop_gpu_replacement import validate_rental_authorization
             from vast_queue import CloudQueue
-            loops = LoopStore(PROJECT / 'data/loop_optimizer')
+            from loop_runtime import store_for_job
+            loops = store_for_job(PROJECT, state)
             queue = CloudQueue(store)
             def authorize():
                 """Retain a visible reason while the same unsent reservation waits for permission."""
@@ -224,7 +225,7 @@ def guard_step(store: JobStore, identifier: str, client: VastClient, intent: dic
             operation = record['gpu_replacements'][operation_id]
             successor = next(job for job in record['jobs'] if job['operation'] == operation['successor'])
             try:
-                LoopBackend(PROJECT, loops).verify_replacement_input(record, successor)
+                LoopBackend(PROJECT, loops, runtime=state.get('loop_runtime', 'v8')).verify_replacement_input(record, successor)
             except (ValueError, VastError) as exc:
                 store.update(identifier, authorization_wait_reason=str(exc))
                 return False

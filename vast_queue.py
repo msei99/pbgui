@@ -480,7 +480,8 @@ class CloudQueue:
             if loop_id is not None:
                 from pb8_loop_store import LoopStore, identifier, ACTIVE
                 from api.vast import RentalPreferences
-                loop = LoopStore(PROJECT / 'data/loop_optimizer').read(identifier(loop_owner), identifier(loop_id))
+                from loop_runtime import store_for_job
+                loop = store_for_job(PROJECT, {'loop_runtime': 'v9' if selected_runtime == 'pb9' else 'v8'}).read(identifier(loop_owner), identifier(loop_id))
                 frozen = loop['settings'].get('vast') or {}
                 current_limits = RentalPreferences.model_validate(self.read().get('gpu_preferences') or {}).model_dump()
                 if replacement_authorization is not None:
@@ -555,7 +556,7 @@ class CloudQueue:
                        **({'queue_pause_generation': scope['queue_pause_generation']}
                           if scope and 'queue_pause_generation' in scope else {}),
                        **({'calibration_job_id': calibration_id} if calibration_id else {}),
-                       **({'loop_id': loop_id, 'loop_owner': loop_owner} if loop_id else {}),
+                       **({'loop_id': loop_id, 'loop_owner': loop_owner, 'loop_runtime': 'v9' if selected_runtime == 'pb9' else 'v8'} if loop_id else {}),
                        **({'gpu_replacement_id': replacement_authorization['operation_id'],
                            'gpu_replacement_job': replacement_authorization['job_id']} if replacement_authorization else {})},
                 intent={'id': identifier, 'image': worker_image, 'pb8_revision': worker_revision, 'runtime':selected_runtime,
@@ -886,10 +887,11 @@ def worker_step(queue: CloudQueue, identifier: str, *, now: float | None = None)
         return pending
     from pb8_loop_backend import LoopBackend
     from pb8_loop_store import LoopStore
-    loops = LoopStore(PROJECT / 'data/loop_optimizer')
+    from loop_runtime import store_for_job
+    loops = store_for_job(PROJECT, {'loop_runtime': pending.record.get('runtime', 'v9' if str(pending.record.get('initial_config', {}).get('config_version', '')).startswith('v9.') else 'v8')})
     # Data scans must allow Pause/Stop, storage pauses and the independent
     # provider guard to progress. They do not authorize a subsequent claim.
-    LoopBackend(PROJECT, loops).verify_replacement_input(pending.record, pending.job)
+    LoopBackend(PROJECT, loops, runtime='v9' if str(pending.record.get('initial_config', {}).get('config_version', '')).startswith('v9.') else 'v8').verify_replacement_input(pending.record, pending.job)
     # Match the paid Create guard: Loop before Queue. Never acquire the Loop
     # transaction lock while retaining the first pass's Queue lock.
     with advisory_file_lock(loops.path(pending.record['owner'], pending.record['id'])):
@@ -990,7 +992,8 @@ def _worker_step_locked(queue: CloudQueue, identifier: str, *, now: float | None
             if worker.get('loop_id'):
                 from pb8_loop_store import LoopStore, ACTIVE
                 try:
-                    loop = LoopStore(PROJECT / 'data/loop_optimizer').read(worker['loop_owner'], worker['loop_id'])
+                    from loop_runtime import store_for_job
+                    loop = store_for_job(PROJECT, worker).read(worker['loop_owner'], worker['loop_id'])
                     allowed = loop['status'] in ACTIVE and now < loop['deadline'] - 60
                     # Validation and AI decisions are part of the same rental workflow.
                     from pb8_loop_gpu_replacement import open_replacement

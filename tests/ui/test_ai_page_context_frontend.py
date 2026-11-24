@@ -201,7 +201,8 @@ def test_optimize_context_prefers_the_live_open_editor_config() -> None:
     assert "name: String(queueItem.filename)" in adapter
     assert "id: 'show_log'" in adapter
     assert "openLogPanel(queueItem.filename, queueItem.name || queueItem.filename)" in adapter
-    assert "item.status === 'running' || item.status === 'optimizing'" in adapter
+    assert "['running', 'optimizing', 'provisioning', 'preparing', 'queued'].includes(item.status)" in adapter
+    assert "(state.queue || []).concat(window.PBGuiVast ? window.PBGuiVast.queueItems() : [])" in adapter
     assert "state.selectedParetos" in adapter
     assert "8 - entities.length" in adapter
     assert "kind: 'pareto_candidate'" in adapter
